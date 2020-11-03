@@ -91,8 +91,6 @@ app.get('/dataset/:datasetId', async (req, res) => {
         dataset.datingToPeriod = fetchDatingToPeriodData(dataset.dataset_id);
     }
 
-    //let analysisEntities = await query("SELECT * FROM tbl_analysis_entities WHERE dataset_id=$1", [req.params.datasetId]);
-
     console.log(dataset);
     res.send(dataset);
 });
