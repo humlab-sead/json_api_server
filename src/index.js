@@ -68,10 +68,38 @@ app.get('/site/:siteId/analysis/geological_period', async (req, res) => {
 });
 
 app.get('/dataset/:datasetId', async (req, res) => {
-    pgClient.query('SELECT * FROM tbl_sites WHERE site_id=$1', [req.params.siteId]).then((rows) => {
-        return res.send(rows);
+    /*
+    await query('SELECT * FROM tbl_datasets WHERE dataset_id=$1', [req.params.datasetId]).then((data) => {
+        //return res.send(data.rows);
     });
+    */
+
+    let dataset = {
+        dataset_id: req.params.datasetId
+    };
+
+    let data = await query('SELECT * FROM tbl_datasets WHERE dataset_id=$1', [req.params.datasetId]);
+    dataset = data.rows[0];
+
+    let method = await query('SELECT * FROM tbl_methods WHERE method_id=$1', [data.rows[0].method_id]);
+    dataset.method = method.rows[0];
+
+    if(dataset.method.method_id) {
+    }
+
+    if(dataset.method.method_group_id == 19 || dataset.method.method_group_id == 20) {
+        dataset.datingToPeriod = fetchDatingToPeriodData(dataset.dataset_id);
+    }
+
+    //let analysisEntities = await query("SELECT * FROM tbl_analysis_entities WHERE dataset_id=$1", [req.params.datasetId]);
+
+    console.log(dataset);
+    res.send(dataset);
 });
+
+async function fetchDatingToPeriodData() {
+
+}
 
 
 async function getSampleGroupsBySiteId(siteId) {
