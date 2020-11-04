@@ -1,6 +1,10 @@
 require('dotenv/config');
 const express = require('express');
+const cors = require('cors')
 const { Client, Pool } = require('pg')
+
+
+const datingMethodGroups = [3, 19, 20];
 
 console.log("Starting up SEAD Data Server");
 
@@ -16,8 +20,9 @@ const pgPool = new Pool({
 });
 
 const app = express();
+app.use(cors());
 
-async function query(sql, params) {
+async function query(sql, params = []) {
     let pgClient = await pgPool.connect();
     let resultData = await pgClient.query(sql, params);
     pgClient.release();
@@ -63,16 +68,7 @@ app.get('/site/:siteId/analyses', async (req, res) => {
     res.send(output);
 });
 
-app.get('/site/:siteId/analysis/geological_period', async (req, res) => {
-    
-});
-
 app.get('/dataset/:datasetId', async (req, res) => {
-    /*
-    await query('SELECT * FROM tbl_datasets WHERE dataset_id=$1', [req.params.datasetId]).then((data) => {
-        //return res.send(data.rows);
-    });
-    */
 
     let dataset = {
         dataset_id: req.params.datasetId
@@ -84,19 +80,83 @@ app.get('/dataset/:datasetId', async (req, res) => {
     let method = await query('SELECT * FROM tbl_methods WHERE method_id=$1', [data.rows[0].method_id]);
     dataset.method = method.rows[0];
 
-    if(dataset.method.method_id) {
+    let ae = await query('SELECT * FROM tbl_analysis_entities WHERE dataset_id=$1', [dataset.dataset_id]);
+    dataset.analysis_entities = ae.rows;
+    
+
+    if(dataset.biblio_id != null) {
+        dataset.biblio = await fetchBiblioByDatasetId(dataset.dataset_id);
     }
 
-    if(dataset.method.method_group_id == 19 || dataset.method.method_group_id == 20) {
-        dataset.datingToPeriod = fetchDatingToPeriodData(dataset.dataset_id);
+    //If dataset belongs to certain methods, it might include dating data, so fetch it
+    if(datingMethodGroups.includes(dataset.method.method_group_id)) {
+        if(dataset.analysis_entities.length > 0) {
+            await fetchDatingToPeriodData(dataset.analysis_entities);
+        }
     }
+    
+    await fetchPhysicalSamplesByAnalysisEntities(dataset.analysis_entities);
 
-    console.log(dataset);
     res.send(dataset);
 });
 
-async function fetchDatingToPeriodData() {
 
+async function fetchPhysicalSamplesByAnalysisEntities(analysisEntities) {
+
+    if(analysisEntities.length < 1) {
+        return false;
+    }
+
+    let sampleIdsExploded = "";
+    for(let key in analysisEntities) {
+        sampleIdsExploded += analysisEntities[key].physical_sample_id+",";
+    }
+    sampleIdsExploded = sampleIdsExploded.substring(0, sampleIdsExploded.length-1);
+
+    let physicalSamplesResult = await query('SELECT * FROM tbl_physical_samples WHERE physical_sample_id IN ('+sampleIdsExploded+')');
+
+    for(let key in physicalSamplesResult.rows) {
+        let sample = physicalSamplesResult.rows[key];
+        for(let aeKey in analysisEntities) {
+            if(analysisEntities[aeKey].physical_sample_id == sample.physical_sample_id) {
+                analysisEntities[aeKey].physical_sample = sample;
+            }
+        }
+    }
+
+    return physicalSamplesResult.rows;
+}
+
+async function fetchBiblioByDatasetId(datasetId) {
+    let biblio = await query('SELECT * FROM tbl_biblio WHERE dataset_id=$1', [datasetId]);
+    return biblio.rows;
+}
+
+async function fetchDatingToPeriodData(analysisEntities = []) {
+    if(analysisEntities.length < 1) {
+        return false;
+    }
+
+    let aeIdsExploded = "";
+    for(let key in analysisEntities) {
+        aeIdsExploded += analysisEntities[key].analysis_entity_id+",";
+    }
+    aeIdsExploded = aeIdsExploded.substring(0, aeIdsExploded.length-1);
+
+    let sql = 'SELECT * FROM tbl_relative_dates INNER JOIN tbl_relative_ages ON tbl_relative_ages.relative_age_id=tbl_relative_dates.relative_age_id WHERE tbl_relative_dates.analysis_entity_id IN ('+aeIdsExploded+')';
+
+    let ageData = await query(sql);
+
+    //Inserting age data into respective analysis entity - this assumes a 1:1 relationship between the two
+    for(let rowKey in ageData.rows) {
+        for(let aeKey in analysisEntities) {
+            if(analysisEntities[aeKey].analysis_entity_id == ageData.rows[rowKey].analysis_entity_id){
+                analysisEntities[aeKey].age_data = ageData.rows[rowKey];
+            }
+        }
+    }
+
+    return ageData.rows;
 }
 
 
