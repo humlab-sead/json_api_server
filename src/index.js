@@ -1,13 +1,26 @@
 require('dotenv/config');
-const express = require('express');
-const cors = require('cors')
-const { Client, Pool } = require('pg')
+const SeadDataServer = require('./SeadDataServer.class')
 
+if(typeof process.env.POSTGRES_HOST == "undefined") {
+    throw new Error("Didn't find any .env file! Please copy .env-example to .env and fill it out.");
+}
 
 const datingMethodGroups = [3, 19, 20];
 
-console.log("Starting up SEAD Data Server");
+const seadDataServer = new SeadDataServer();
 
+process.on('SIGTERM', function (code) {
+    console.log('SIGTERM received...', code);
+});
+
+process.on('SIGINT', function (code) {
+    console.log(code, 'received', );
+    seadDataServer.shutdown();
+});
+
+
+
+/*
 const pgPool = new Pool({
     user: process.env.POSTGRES_USER,
     host: process.env.POSTGRES_HOST,
@@ -22,12 +35,6 @@ const pgPool = new Pool({
 const app = express();
 app.use(cors());
 
-async function query(sql, params = []) {
-    let pgClient = await pgPool.connect();
-    let resultData = await pgClient.query(sql, params);
-    pgClient.release();
-    return resultData;
-}
 
 app.get('/*', (req, res, next) => {
     console.log("REQ:", req.url);
@@ -192,21 +199,5 @@ async function getAnalysisEntitiesByPhysicalSamples(physicalSamples) {
         console.log("Done!");
     });
 }
+*/
 
-process.on('SIGTERM', function (code) {
-    console.log('SIGTERM received...', code);
-});
-
-
-const server = app.listen(process.env.API_PORT, () =>
-  console.log("Webserver started, listening at port", process.env.API_PORT),
-);
-
-process.on('SIGINT', function (code) {
-    console.log(code, 'received', );
-    pgPool.end();
-    server.close(() => {
-        console.log('Server shutdown');
-        process.exit(0);
-    });
-});
