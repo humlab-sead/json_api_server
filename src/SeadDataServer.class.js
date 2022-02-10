@@ -125,7 +125,7 @@ class SeadDataServer {
             siteIds.push(siteData.rows[key].site_id);
         }
 
-        let maxConcurrentFetches = 5;
+        let maxConcurrentFetches = 10;
         let pendingFetches = 0;
         
         const fetchCheckInterval = setInterval(() => {
@@ -188,29 +188,29 @@ class SeadDataServer {
         if(!pgClient) {
             return false;
         }
-
         if(verbose) console.time("Fetched basic site data");
         let siteData = await pgClient.query('SELECT * FROM tbl_sites WHERE site_id=$1', [siteId]);
-        if(verbose) console.timeEnd("Fetched basic site data");
-
         site = siteData.rows[0];
-
-        //fetch sample groups
-        if(verbose) console.time("Fetched sample groups");
-        site.sample_groups = [];
-        let sampleGroups = await pgClient.query('SELECT * FROM tbl_sample_groups WHERE site_id=$1', [siteId]);
-        site.sample_groups = sampleGroups.rows;
-        if(verbose) console.timeEnd("Fetched sample groups");
+        if(verbose) console.timeEnd("Fetched basic site data");
         this.releaseDbConnection(pgClient);
-        
 
+        if(verbose) console.time("Fetched sample groups");
+        this.fetchSampleGroups(site);
+        if(verbose) console.timeEnd("Fetched sample groups");
+
+        if(verbose) console.time("Fetched site location data");
+        await this.fetchSiteLocation(site);
+        if(verbose) console.timeEnd("Fetched site location data");
+
+        /*
         if(verbose) console.time("Fetched sample group descriptions");
         await this.fetchSampleGroupDescriptions(site);
         if(verbose) console.timeEnd("Fetched sample group descriptions");
+        */
 
-        if(verbose) console.time("Fetched sample groups methods");
-        await this.fetchMethodsFromSampleGroups(site);
-        if(verbose) console.timeEnd("Fetched sample groups methods");
+        if(verbose) console.time("Fetched sample group sampling methods");
+        await this.fetchSampleGroupsSamplingMethods(site);
+        if(verbose) console.timeEnd("Fetched sample group sampling methods");
         
         if(verbose) console.time("Fetched physical samples");
         await this.fetchPhysicalSamples(site);
@@ -220,10 +220,11 @@ class SeadDataServer {
         await this.fetchAnalysisEntities(site);
         if(verbose) console.timeEnd("Fetched analysis entities");
 
+        /* THIS IS NOW DONE IN fetchPhysicalSamples()
         if(verbose) console.time("Fetched feature types");
         await this.fetchFeatureTypes(site);
         if(verbose) console.timeEnd("Fetched feature types");
-
+        */
         
         console.time("Fetched datasets");
         await this.fetchDatasets(site);
@@ -247,6 +248,68 @@ class SeadDataServer {
             this.saveSiteToCache(site);
         }
 
+        return site;
+    }
+
+    async fetchSampleGroups(site) {
+        let pgClient = await this.getDbConnection();
+        if(!pgClient) {
+            return false;
+        }
+
+        let sampleGroups = await pgClient.query('SELECT * FROM tbl_sample_groups WHERE site_id=$1', [site.site_id]);
+        site.sample_groups = sampleGroups.rows;
+
+        for(let key in site.sample_groups) {
+            let sampleGroupsCoords = await pgClient.query('SELECT * FROM tbl_sample_group_coordinates WHERE sample_group_id=$1', [site.sample_groups[key].sample_group_id]);
+            site.sample_groups[key].coordinates = sampleGroupsCoords.rows;
+        }
+        
+        for(let key in site.sample_groups) {
+            let sampleGroupsDesc = await pgClient.query('SELECT * FROM tbl_sample_group_descriptions WHERE sample_group_id=$1', [site.sample_groups[key].sample_group_id]);
+            site.sample_groups[key].descriptions = sampleGroupsDesc.rows;
+
+            for(let key2 in site.sample_groups[key].descriptions) {
+                let sql = `
+                SELECT *
+                FROM tbl_sample_group_descriptions 
+                LEFT JOIN tbl_sample_group_description_types ON tbl_sample_group_descriptions.sample_group_description_type_id = tbl_sample_group_description_types.sample_group_description_type_id
+                WHERE sample_group_description_id=$1
+                `;
+
+                let sampleGroupsDescType = await pgClient.query(sql, [site.sample_groups[key].descriptions[key2].sample_group_description_id]);
+                site.sample_groups[key].descriptions[key2].description_type = sampleGroupsDescType.rows;
+            }
+
+            let sampleGroupSamplingContext = await pgClient.query('SELECT * FROM tbl_sample_group_sampling_contexts WHERE sampling_context_id=$1', [site.sample_groups[key].sampling_context_id]);
+            site.sample_groups[key].sampling_context = sampleGroupSamplingContext.rows;
+
+            let sampleGroupNotes = await pgClient.query('SELECT * FROM tbl_sample_group_notes WHERE sample_group_id=$1', [site.sample_groups[key].sample_group_id]);
+            site.sample_groups[key].notes = sampleGroupNotes.rows;
+        }
+
+        
+        
+        this.releaseDbConnection(pgClient);
+        
+        return site;
+    }
+
+    async fetchSiteLocation(site) {
+        let pgClient = await this.getDbConnection();
+        if(!pgClient) {
+            return false;
+        }
+        let sql = `
+        SELECT * FROM tbl_site_locations
+        LEFT JOIN tbl_locations ON tbl_site_locations.location_id = tbl_locations.location_id
+        WHERE site_id=$1
+        `;
+        let siteLocData = await pgClient.query(sql, [site.site_id]);
+        site.location = siteLocData.rows;
+        
+        this.releaseDbConnection(pgClient);
+        
         return site;
     }
 
@@ -292,7 +355,7 @@ class SeadDataServer {
             this.releaseDbConnection(pgClient);
         });
         
-        site.analysisMethods = methods;
+        site.analysis_methods = methods;
 
         return site;
     }
@@ -333,7 +396,7 @@ class SeadDataServer {
         return site;
     }
 
-    async fetchMethodsFromSampleGroups(site) {
+    async fetchSampleGroupsSamplingMethods(site) {
         let pgClient = await this.getDbConnection();
         if(!pgClient) {
             return false;
@@ -343,7 +406,7 @@ class SeadDataServer {
         site.sample_groups.forEach(sampleGroup => {
             
             let promise = pgClient.query('SELECT * FROM tbl_methods WHERE method_id=$1', [sampleGroup.method_id]).then(method => {
-                sampleGroup.method = method.rows[0];
+                sampleGroup.sampling_method = method.rows[0];
             });
             queryPromises.push(promise);
         });
@@ -423,19 +486,61 @@ class SeadDataServer {
         if(!pgClient) {
             return false;
         }
+        
+        for(let key in site.sample_groups) {
+            let sampleGroup = site.sample_groups[key];
+            let physicalSamples = await pgClient.query('SELECT * FROM tbl_physical_samples WHERE sample_group_id=$1', [sampleGroup.sample_group_id]);
+            sampleGroup.physical_samples = physicalSamples.rows;
 
-        let queryPromises = [];
-        site.sample_groups.forEach(sampleGroup => {
-            let promise = pgClient.query('SELECT * FROM tbl_physical_samples WHERE sample_group_id=$1', [sampleGroup.sample_group_id]).then(physicalSamples => {
-                sampleGroup.physical_samples = physicalSamples.rows;
-            });
+            for(let sampleKey in sampleGroup.physical_samples) {
+                let sample = sampleGroup.physical_samples[sampleKey];
+                
+                let sql = `SELECT * 
+                FROM tbl_physical_sample_features
+                LEFT JOIN tbl_features ON tbl_physical_sample_features.feature_id = tbl_features.feature_id
+                LEFT JOIN tbl_feature_types ON tbl_features.feature_type_id = tbl_feature_types.feature_type_id
+                WHERE physical_sample_id=$1
+                `;
+                let sampleFeatures = await pgClient.query(sql, [sample.physical_sample_id]);
+                sample.features = sampleFeatures.rows;
+            
+                sql = `SELECT * 
+                FROM tbl_sample_descriptions
+                LEFT JOIN tbl_sample_description_types ON tbl_sample_descriptions.sample_description_type_id = tbl_sample_description_types.sample_description_type_id
+                WHERE tbl_sample_descriptions.physical_sample_id=$1
+                `;
+                let sampleDescriptions = await pgClient.query(sql, [sample.physical_sample_id]);
+                sample.descriptions = sampleDescriptions.rows;
 
-            queryPromises.push(promise);
-        });
+                sql = `SELECT *
+                FROM tbl_sample_locations
+                LEFT JOIN tbl_sample_location_types ON tbl_sample_locations.sample_location_type_id = tbl_sample_location_types.sample_location_type_id
+                WHERE tbl_sample_locations.physical_sample_id=$1
+                `;
+                let sampleLocations = await pgClient.query(sql, [sample.physical_sample_id]);
+                sample.locations = sampleLocations.rows;
 
-        await Promise.all(queryPromises).then(() => {
-            this.releaseDbConnection(pgClient);
-        });
+                sql = `SELECT *
+                FROM tbl_sample_alt_refs
+                LEFT JOIN tbl_alt_ref_types ON tbl_sample_alt_refs.alt_ref_type_id = tbl_alt_ref_types.alt_ref_type_id
+                WHERE tbl_sample_alt_refs.physical_sample_id=$1
+                `;
+                let altRefs = await pgClient.query(sql, [sample.physical_sample_id]);
+                sample.alt_refs = altRefs.rows;
+
+                sql = `SELECT *
+                FROM tbl_sample_dimensions
+                LEFT JOIN tbl_methods ON tbl_sample_dimensions.method_id = tbl_methods.method_id
+                WHERE tbl_sample_dimensions.physical_sample_id=$1
+                `;
+                let sampleDimensions = await pgClient.query(sql, [sample.physical_sample_id]);
+                sample.dimensions = sampleDimensions.rows;
+                
+            }
+
+        }
+        
+        this.releaseDbConnection(pgClient);
 
         return site;
     }
@@ -519,9 +624,9 @@ class SeadDataServer {
                 database: process.env.POSTGRES_DATABASE,
                 password:process.env.POSTGRES_PASS,
                 port: process.env.POSTGRES_PORT,
-                max: 50,
+                max: 100,
                 idleTimeoutMillis: 30000,
-                connectionTimeoutMillis: 30000,
+                connectionTimeoutMillis: 60000,
             });
 
             if(this.useStaticDbConnection) {

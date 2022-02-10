@@ -72,8 +72,8 @@ class DendrochronologyModule {
     }
 
     siteHasModuleMethods(site) {
-        for(let key in site.methods) {
-            if(this.moduleMethods.includes(site.methods[key].method_id)) {
+        for(let key in site.analysis_methods) {
+            if(this.moduleMethods.includes(site.analysis_methods[key].method_id)) {
                 return true;
             }
         }
