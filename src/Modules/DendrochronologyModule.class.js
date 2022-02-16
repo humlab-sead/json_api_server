@@ -100,7 +100,7 @@ class DendrochronologyModule {
         let site = {
             siteId: siteId
         };
-        let pgClient = await this.getDbConnection();
+        let pgClient = await this.app.getDbConnection();
         if(!pgClient) {
             return false;
         }
@@ -121,7 +121,7 @@ class DendrochronologyModule {
     }
 
     async getMeasurementsForAllSites() {
-        let pgClient = await this.getDbConnection();
+        let pgClient = await this.app.getDbConnection();
         if(!pgClient) {
             return false;
         }
