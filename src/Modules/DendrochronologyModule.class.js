@@ -150,7 +150,7 @@ class DendrochronologyModule {
         LEFT JOIN tbl_dendro_lookup dl ON dd.dendro_lookup_id = dl.dendro_lookup_id
         LEFT JOIN tbl_sample_groups sg ON sg.sample_group_id = ps.sample_group_id
         LEFT JOIN tbl_sites ON tbl_sites.site_id = sg.site_id
-        WHERE site_id=$1
+        WHERE tbl_sites.site_id=$1
         `;
         //data = await pgClient.query('SELECT * FROM postgrest_api.qse_dendro_dating2 WHERE site_id=$1', [siteId]);
         data = await pgClient.query(sql, [siteId]);
