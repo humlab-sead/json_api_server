@@ -177,7 +177,7 @@ class SeadDataServer {
         this.releaseDbConnection(pgClient);
 
         if(verbose) console.time("Fetched sample groups for site "+siteId);
-        this.fetchSampleGroups(site);
+        await this.fetchSampleGroups(site);
         if(verbose) console.timeEnd("Fetched sample groups for site "+siteId);
 
         if(verbose) console.time("Fetched site location data for site "+siteId);
