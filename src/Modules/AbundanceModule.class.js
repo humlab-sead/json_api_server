@@ -21,11 +21,11 @@ class AbundanceModule {
 
     async fetchSiteData(site) {
         if(!this.siteHasModuleMethods(site)) {
-            console.log("No abundance methods for site "+site.site_id);
+            //console.log("No abundance methods for site "+site.site_id);
             return site;
         }
 
-        console.log("Fetching abundance data for site "+site.site_id);
+        //console.log("Fetching abundance data for site "+site.site_id);
 
         let pgClient = await this.app.getDbConnection();
         if(!pgClient) {

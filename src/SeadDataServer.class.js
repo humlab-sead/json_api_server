@@ -136,10 +136,10 @@ class SeadDataServer {
                 if(siteIds.length > 0 && pendingFetches < maxConcurrentFetches) {
                     pendingFetches++;
                     let siteId = siteIds.shift();
-                    //console.time("Site "+siteId+" fetched");
-                    console.log("Fetching site", siteId);
+                    console.time("Fetched site "+siteId);
+                    //console.log("Fetching site", siteId);
                     this.getSite(siteId, false).then(() => {
-                        //console.timeEnd("Site "+siteId+" fetched");
+                        console.timeEnd("Fetched site "+siteId);
                         pendingFetches--;
                     });
                 }
@@ -307,6 +307,13 @@ class SeadDataServer {
 
         let methodIds = [];
         site.datasets.forEach(dataset => {
+            if(typeof(dataset) == "undefined") {
+                console.log("Dataset in site "+site.site_id+" was undefined");
+            }
+            if(typeof(dataset.method_id) == "undefined") {
+                console.log("Method id in dataset "+dataset.dataset_id+" was undefined");
+                console.log(dataset);
+            }
             if(methodIds.indexOf(dataset.method_id) == -1) {
                 methodIds.push(dataset.method_id);
             }
@@ -352,7 +359,9 @@ class SeadDataServer {
         let datasets = [];
         datasetIds.forEach(datasetId => {
             let promise = pgClient.query('SELECT * FROM tbl_datasets WHERE dataset_id=$1', [datasetId]).then(dataset => {
-                datasets.push(dataset.rows[0]);
+                if(dataset.rows.length > 0) {
+                    datasets.push(dataset.rows[0]);
+                }
             });
             queryPromises.push(promise);
         });
