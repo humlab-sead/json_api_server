@@ -9,8 +9,8 @@ const MeasuredValuesModule = require('./Modules/MeasuredValuesModule.class');
 
 class SeadDataServer {
     constructor() {
-        this.useSiteCaching = false;
-        this.useStaticDbConnection = true;
+        this.useSiteCaching = typeof(process.env.USE_SITE_CACHE) != "undefined" ? process.env.USE_SITE_CACHE : true;
+        this.useStaticDbConnection = typeof(process.env.USE_SINGLE_PERSISTANT_DBCON) != "undefined" ? process.env.USE_SINGLE_PERSISTANT_DBCON : false;
         this.staticDbConnection = null;
         console.log("Starting up SEAD Data Server");
         this.expressApp = express();
@@ -51,10 +51,19 @@ class SeadDataServer {
             }
         });
 
-        this.expressApp.get('/preload', async (req, res) => {
+        this.expressApp.get('/preload/:flushSiteCache?', async (req, res) => {
             console.log(req.path);
+            if(req.params.flushSiteCache) {
+                await this.flushSiteCache();
+            }
             await this.preloadAllSites();
             res.send("Preload complete");
+        });
+
+        this.expressApp.get('/flushSiteCache', async (req, res) => {
+            console.log(req.path);
+            await this.flushSiteCache();
+            res.send("Flush of site cache complete");
         });
 
         this.expressApp.get('/dataset/:datasetId', async (req, res) => {
@@ -89,6 +98,14 @@ class SeadDataServer {
         });
     }
 
+    async flushSiteCache() {
+        console.log("Flushing site cache");
+        let files = fs.readdirSync("site_cache");
+        for(let key in files) {
+            fs.unlinkSync("site_cache/"+files[key]);
+        }
+    }
+
     async preloadAllSites() {
         let pgClient = await this.getDbConnection();
         if(!pgClient) {
@@ -113,27 +130,27 @@ class SeadDataServer {
         maxConcurrentFetches = isNaN(maxConcurrentFetches) == false ? maxConcurrentFetches : 10;
 
         let pendingFetches = 0;
-        let fetchPromises = [];
 
-        const fetchCheckInterval = setInterval(() => {
-            if(siteIds.length > 0 && pendingFetches < maxConcurrentFetches) {
-                pendingFetches++;
-                let siteId = siteIds.shift();
-                //console.time("Site "+siteId+" fetched");
-                console.log("Fetching site", siteId);
-                let promise = this.getSite(siteId, false).then(() => {
-                    //console.timeEnd("Site "+siteId+" fetched");
-                    pendingFetches--;
-                });
-                fetchPromises.push(promise);
-            }
-            if(siteIds.length == 0) {
-                clearInterval(fetchCheckInterval);
-                console.timeEnd("Preload of sites complete");
-            }
-        }, 100);
+        await new Promise((resolve, reject) => {
+            const fetchCheckInterval = setInterval(() => {
+                if(siteIds.length > 0 && pendingFetches < maxConcurrentFetches) {
+                    pendingFetches++;
+                    let siteId = siteIds.shift();
+                    //console.time("Site "+siteId+" fetched");
+                    console.log("Fetching site", siteId);
+                    this.getSite(siteId, false).then(() => {
+                        //console.timeEnd("Site "+siteId+" fetched");
+                        pendingFetches--;
+                    });
+                }
+                if(siteIds.length == 0) {
+                    clearInterval(fetchCheckInterval);
+                    console.timeEnd("Preload of sites complete");
+                    resolve();
+                }
+            }, 100);
+        });
 
-        await Promise.all(fetchPromises);
         console.timeEnd("Preload of sites complete");
     }
 
@@ -147,51 +164,51 @@ class SeadDataServer {
             }
         }
 
-        if(verbose) console.time("Done fetching site");
+        if(verbose) console.time("Done fetching site "+siteId);
 
         let pgClient = await this.getDbConnection();
         if(!pgClient) {
             return false;
         }
-        if(verbose) console.time("Fetched basic site data");
+        if(verbose) console.time("Fetched basic site data for site "+siteId);
         let siteData = await pgClient.query('SELECT * FROM tbl_sites WHERE site_id=$1', [siteId]);
         site = siteData.rows[0];
-        if(verbose) console.timeEnd("Fetched basic site data");
+        if(verbose) console.timeEnd("Fetched basic site data for site "+siteId);
         this.releaseDbConnection(pgClient);
 
-        if(verbose) console.time("Fetched sample groups");
+        if(verbose) console.time("Fetched sample groups for site "+siteId);
         this.fetchSampleGroups(site);
-        if(verbose) console.timeEnd("Fetched sample groups");
+        if(verbose) console.timeEnd("Fetched sample groups for site "+siteId);
 
-        if(verbose) console.time("Fetched site location data");
+        if(verbose) console.time("Fetched site location data for site "+siteId);
         await this.fetchSiteLocation(site);
-        if(verbose) console.timeEnd("Fetched site location data");
+        if(verbose) console.timeEnd("Fetched site location data for site "+siteId);
 
-        if(verbose) console.time("Fetched sample group sampling methods");
+        if(verbose) console.time("Fetched sample group sampling methods for site "+siteId);
         await this.fetchSampleGroupsSamplingMethods(site);
-        if(verbose) console.timeEnd("Fetched sample group sampling methods");
+        if(verbose) console.timeEnd("Fetched sample group sampling methods for site "+siteId);
         
-        if(verbose) console.time("Fetched physical samples");
+        if(verbose) console.time("Fetched physical samples for site "+siteId);
         await this.fetchPhysicalSamples(site);
-        if(verbose) console.timeEnd("Fetched physical samples");
+        if(verbose) console.timeEnd("Fetched physical samples for site "+siteId);
 
-        if(verbose) console.time("Fetched analysis entities");
+        if(verbose) console.time("Fetched analysis entities for site "+siteId);
         await this.fetchAnalysisEntities(site);
-        if(verbose) console.timeEnd("Fetched analysis entities");
+        if(verbose) console.timeEnd("Fetched analysis entities for site "+siteId);
         
-        console.time("Fetched datasets");
+        if(verbose) console.time("Fetched datasets for site "+siteId);
         await this.fetchDatasets(site);
-        console.timeEnd("Fetched datasets");
+        if(verbose) console.timeEnd("Fetched datasets for site "+siteId);
         
         
-        if(verbose) console.time("Fetched analysis methods");
+        if(verbose) console.time("Fetched analysis methods for site "+siteId);
         await this.fetchAnalysisMethods(site);
-        if(verbose) console.timeEnd("Fetched analysis methods");
+        if(verbose) console.timeEnd("Fetched analysis methods for site "+siteId);
 
         if(fetchMethodSpecificData) {
-            if(verbose) console.time("Fetched method specific data");
+            if(verbose) console.time("Fetched method specific data for site "+siteId);
             await this.fetchMethodSpecificData(site);
-            if(verbose) console.timeEnd("Fetched method specific data");
+            if(verbose) console.timeEnd("Fetched method specific data for site "+siteId);
         }
         
         if(verbose) console.timeEnd("Done fetching site");
@@ -271,11 +288,11 @@ class SeadDataServer {
         
         for(let key in this.modules) {
             let module = this.modules[key];
-            if(verbose) console.time("Fetched method "+module.name);
+            //if(verbose) console.time("Fetched method "+module.name);
             let promise = module.fetchSiteData(site);
             fetchPromises.push(promise);
             promise.then(() => {
-                if(verbose) console.timeEnd("Fetched method "+module.name);
+                //if(verbose) console.timeEnd("Fetched method "+module.name);
             });
         }
 
