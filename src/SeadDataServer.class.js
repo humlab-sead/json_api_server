@@ -3,7 +3,6 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const { Pool } = require('pg');
-//const GeneralEndpoints = require('./ApiEndpoints/GeneralEndpoints.class')
 const DendrochronologyModule = require('./Modules/DendrochronologyModule.class');
 const AbundanceModule = require('./Modules/AbundanceModule.class');
 const MeasuredValuesModule = require('./Modules/MeasuredValuesModule.class');
@@ -19,15 +18,12 @@ class SeadDataServer {
         this.expressApp.use(bodyParser.json());
         this.setupDatabase().then(() => {
             this.setupEndpoints();
-            //this.generalEndpoints = new GeneralEndpoints(this);
 
             this.modules = [];
             this.modules.push(new AbundanceModule(this));
             this.modules.push(new DendrochronologyModule(this));
             this.modules.push(new MeasuredValuesModule(this));
 
-            //this.abundance = new AbundanceModule(this);
-            //this.dendro = new DendrochronologyModule(this);
             this.run();
         });
     }
@@ -60,18 +56,6 @@ class SeadDataServer {
             await this.preloadAllSites();
             res.send("Preload complete");
         });
-
-        /*
-        this.expressApp.get('/site/:siteId', async (req, res) => {
-            console.log(req.path);
-            const pgClient = await this.pgPool.connect();
-            //Returns general metadata about the site - but NOT the samples or analyses
-            await pgClient.query('SELECT * FROM tbl_sites WHERE site_id=$1', [req.params.siteId]).then((data) => {
-                pgClient.release();
-                return res.send(data);
-            });
-        });
-        */
 
         this.expressApp.get('/dataset/:datasetId', async (req, res) => {
             let dataset = {
@@ -125,51 +109,32 @@ class SeadDataServer {
             siteIds.push(siteData.rows[key].site_id);
         }
 
-        let maxConcurrentFetches = 10;
+        let maxConcurrentFetches = parseInt(process.env.MAX_CONCURRENT_FETCHES);
+        maxConcurrentFetches = isNaN(maxConcurrentFetches) == false ? maxConcurrentFetches : 10;
+
         let pendingFetches = 0;
-        
+        let fetchPromises = [];
+
         const fetchCheckInterval = setInterval(() => {
             if(siteIds.length > 0 && pendingFetches < maxConcurrentFetches) {
                 pendingFetches++;
                 let siteId = siteIds.shift();
-                console.time("Site "+siteId+" fetched");
+                //console.time("Site "+siteId+" fetched");
                 console.log("Fetching site", siteId);
-                this.getSite(siteId, false).then(() => {
-                    console.timeEnd("Site "+siteId+" fetched");
+                let promise = this.getSite(siteId, false).then(() => {
+                    //console.timeEnd("Site "+siteId+" fetched");
                     pendingFetches--;
-                })
+                });
+                fetchPromises.push(promise);
             }
             if(siteIds.length == 0) {
                 clearInterval(fetchCheckInterval);
                 console.timeEnd("Preload of sites complete");
             }
-        }, 100)
+        }, 100);
 
-        /*
-        for(let key in siteData.rows) {
-            let siteId = siteData.rows[key].site_id;
-            console.time("Site "+siteId+" fetched");
-            console.log("Fetching site", siteId);
-            await this.getSite(siteId, false);
-            console.timeEnd("Site "+siteId+" fetched");
-        }
-        */
-
-        /*
-        siteData.rows.forEach(async siteRow => {
-            console.time("Site "+siteRow.site_id+" fetched");
-            console.log("Fetching site", siteRow.site_id);
-            let promise = await this.getSite(siteRow.site_id, false).then(() => {
-                console.timeEnd("Site "+siteRow.site_id+" fetched");
-            });
-
-            queryPromises.push(promise);
-        })
-        */
-
-        //await Promise.all(queryPromises);
-
-        //console.timeEnd("Preload of sites complete");
+        await Promise.all(fetchPromises);
+        console.timeEnd("Preload of sites complete");
     }
 
     async getSite(siteId, verbose = true, fetchMethodSpecificData = true) {
@@ -202,12 +167,6 @@ class SeadDataServer {
         await this.fetchSiteLocation(site);
         if(verbose) console.timeEnd("Fetched site location data");
 
-        /*
-        if(verbose) console.time("Fetched sample group descriptions");
-        await this.fetchSampleGroupDescriptions(site);
-        if(verbose) console.timeEnd("Fetched sample group descriptions");
-        */
-
         if(verbose) console.time("Fetched sample group sampling methods");
         await this.fetchSampleGroupsSamplingMethods(site);
         if(verbose) console.timeEnd("Fetched sample group sampling methods");
@@ -219,12 +178,6 @@ class SeadDataServer {
         if(verbose) console.time("Fetched analysis entities");
         await this.fetchAnalysisEntities(site);
         if(verbose) console.timeEnd("Fetched analysis entities");
-
-        /* THIS IS NOW DONE IN fetchPhysicalSamples()
-        if(verbose) console.time("Fetched feature types");
-        await this.fetchFeatureTypes(site);
-        if(verbose) console.timeEnd("Fetched feature types");
-        */
         
         console.time("Fetched datasets");
         await this.fetchDatasets(site);
@@ -418,46 +371,6 @@ class SeadDataServer {
         return site;
     }
 
-    async fetchFeatureTypes(site) {
-        let pgClient = await this.getDbConnection();
-        if(!pgClient) {
-            return false;
-        }
-
-        /*
-        qse_sample_features is a view and this is the definition:
-
-        SELECT
-        tbl_physical_sample_features.physical_sample_id,
-        tbl_feature_types.feature_type_id,
-        tbl_feature_types.feature_type_name,
-        tbl_feature_types.feature_type_description,
-        tbl_features.feature_id,
-        tbl_features.feature_name,
-        tbl_features.feature_description
-        FROM
-        tbl_physical_sample_features
-        INNER JOIN tbl_features ON tbl_physical_sample_features.feature_id = tbl_features.feature_id
-        INNER JOIN tbl_feature_types ON tbl_features.feature_type_id = tbl_feature_types.feature_type_id
-        */
-
-        let queryPromises = [];
-        site.sample_groups.forEach(sampleGroup => {
-            sampleGroup.physical_samples.forEach(physicalSample => {
-                let promise = pgClient.query('SELECT * FROM postgrest_api.qse_sample_features WHERE physical_sample_id=$1', [physicalSample.physical_sample_id]).then(sampleFeatures => {
-                    physicalSample.features = sampleFeatures.rows;
-                });
-                queryPromises.push(promise);
-            });
-        });
-
-        await Promise.all(queryPromises).then(() => {
-            this.releaseDbConnection(pgClient);
-        });
-
-        return site;
-    }
-
     async fetchAnalysisEntities(site) {
         let pgClient = await this.getDbConnection();
         if(!pgClient) {
@@ -541,28 +454,6 @@ class SeadDataServer {
         }
         
         this.releaseDbConnection(pgClient);
-
-        return site;
-    }
-
-    async fetchSampleGroupDescriptions(site) {
-        let pgClient = await this.getDbConnection();
-        if(!pgClient) {
-            return false;
-        }
-
-        let queryPromises = [];
-        site.sample_groups.forEach(sampleGroup => {
-            let promise = pgClient.query('SELECT * FROM tbl_sample_group_descriptions WHERE sample_group_id=$1', [sampleGroup.sample_group_id]).then(sampleGroupDescriptions => {
-                sampleGroup.descriptions = sampleGroupDescriptions.rows;
-            });
-
-            queryPromises.push(promise);
-        });
-
-        await Promise.all(queryPromises).then(() => {
-            this.releaseDbConnection(pgClient);
-        });
 
         return site;
     }
