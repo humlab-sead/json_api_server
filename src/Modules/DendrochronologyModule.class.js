@@ -105,12 +105,55 @@ class DendrochronologyModule {
             return false;
         }
 
+        let sql = `
+        SELECT ps.physical_sample_id,
+        ae.analysis_entity_id,
+        dl.name AS date_type,
+        ps.sample_name AS sample,
+        dl.dendro_lookup_id,
+        tbl_sites.site_id,
+        tbl_dendro.measurement_value
+        FROM tbl_physical_samples ps
+        JOIN tbl_analysis_entities ae ON ps.physical_sample_id = ae.physical_sample_id
+        JOIN tbl_dendro ON tbl_dendro.analysis_entity_id = ae.analysis_entity_id
+        LEFT JOIN tbl_dendro_lookup dl ON tbl_dendro.dendro_lookup_id = dl.dendro_lookup_id
+        LEFT JOIN tbl_sample_groups sg ON sg.sample_group_id = ps.sample_group_id
+        LEFT JOIN tbl_sites ON tbl_sites.site_id = sg.site_id
+        WHERE tbl_sites.site_id=$1
+        `;
         //SELECT * FROM postgrest_api.qse_dendro_measurements where site_id=2001 order by sample
-        let data = await pgClient.query('SELECT * FROM postgrest_api.qse_dendro_measurements WHERE site_id=$1', [siteId]);
+        //let data = await pgClient.query('SELECT * FROM postgrest_api.qse_dendro_measurements WHERE site_id=$1', [siteId]);
+        let data = await pgClient.query(sql, [siteId]);
         let measurementRows = data.rows;
         site.measurements = data.rows;
 
-        data = await pgClient.query('SELECT * FROM postgrest_api.qse_dendro_dating2 WHERE site_id=$1', [siteId]);
+        sql = `
+        SELECT DISTINCT ps.physical_sample_id,
+        ae.analysis_entity_id,
+        dl.name AS date_type,
+        ps.sample_name AS sample,
+        at.age_type,
+        dd.age_older AS older,
+        dd.age_younger AS younger,
+        dd.error_plus AS plus,
+        dd.error_minus AS minus,
+        eu.error_uncertainty_type AS error_uncertainty,
+        soq.season_or_qualifier_type AS season,
+        dl.dendro_lookup_id,
+        tbl_sites.site_id
+        FROM tbl_physical_samples ps
+        JOIN tbl_analysis_entities ae ON ps.physical_sample_id = ae.physical_sample_id
+        JOIN tbl_dendro_dates dd ON ae.analysis_entity_id = dd.analysis_entity_id
+        LEFT JOIN tbl_season_or_qualifier soq ON soq.season_or_qualifier_id = dd.season_or_qualifier_id
+        LEFT JOIN tbl_age_types at ON at.age_type_id = dd.age_type_id
+        LEFT JOIN tbl_error_uncertainties eu ON eu.error_uncertainty_id = dd.error_uncertainty_id
+        LEFT JOIN tbl_dendro_lookup dl ON dd.dendro_lookup_id = dl.dendro_lookup_id
+        LEFT JOIN tbl_sample_groups sg ON sg.sample_group_id = ps.sample_group_id
+        LEFT JOIN tbl_sites ON tbl_sites.site_id = sg.site_id
+        WHERE site_id=$1
+        `;
+        //data = await pgClient.query('SELECT * FROM postgrest_api.qse_dendro_dating2 WHERE site_id=$1', [siteId]);
+        data = await pgClient.query(sql, [siteId]);
         let datingRows = data.rows;
         site.dating = data.rows;
         this.app.releaseDbConnection(pgClient);
@@ -126,10 +169,52 @@ class DendrochronologyModule {
             return false;
         }
 
-        let data = await pgClient.query('SELECT * FROM postgrest_api.qse_dendro_measurements');
+        let sql = `
+        SELECT ps.physical_sample_id,
+        ae.analysis_entity_id,
+        dl.name AS date_type,
+        ps.sample_name AS sample,
+        dl.dendro_lookup_id,
+        tbl_sites.site_id,
+        tbl_dendro.measurement_value
+        FROM tbl_physical_samples ps
+        JOIN tbl_analysis_entities ae ON ps.physical_sample_id = ae.physical_sample_id
+        JOIN tbl_dendro ON tbl_dendro.analysis_entity_id = ae.analysis_entity_id
+        LEFT JOIN tbl_dendro_lookup dl ON tbl_dendro.dendro_lookup_id = dl.dendro_lookup_id
+        LEFT JOIN tbl_sample_groups sg ON sg.sample_group_id = ps.sample_group_id
+        LEFT JOIN tbl_sites ON tbl_sites.site_id = sg.site_id
+        WHERE tbl_sites.site_id=$1
+        `;
+        //let data = await pgClient.query('SELECT * FROM postgrest_api.qse_dendro_measurements');
+        let data = await pgClient.query(sql);
         let measurementRows = data.rows;
 
-        data = await pgClient.query('SELECT * FROM postgrest_api.qse_dendro_dating2');
+        sql = `
+        SELECT DISTINCT ps.physical_sample_id,
+        ae.analysis_entity_id,
+        dl.name AS date_type,
+        ps.sample_name AS sample,
+        at.age_type,
+        dd.age_older AS older,
+        dd.age_younger AS younger,
+        dd.error_plus AS plus,
+        dd.error_minus AS minus,
+        eu.error_uncertainty_type AS error_uncertainty,
+        soq.season_or_qualifier_type AS season,
+        dl.dendro_lookup_id,
+        tbl_sites.site_id
+        FROM tbl_physical_samples ps
+        JOIN tbl_analysis_entities ae ON ps.physical_sample_id = ae.physical_sample_id
+        JOIN tbl_dendro_dates dd ON ae.analysis_entity_id = dd.analysis_entity_id
+        LEFT JOIN tbl_season_or_qualifier soq ON soq.season_or_qualifier_id = dd.season_or_qualifier_id
+        LEFT JOIN tbl_age_types at ON at.age_type_id = dd.age_type_id
+        LEFT JOIN tbl_error_uncertainties eu ON eu.error_uncertainty_id = dd.error_uncertainty_id
+        LEFT JOIN tbl_dendro_lookup dl ON dd.dendro_lookup_id = dl.dendro_lookup_id
+        LEFT JOIN tbl_sample_groups sg ON sg.sample_group_id = ps.sample_group_id
+        LEFT JOIN tbl_sites ON tbl_sites.site_id = sg.site_id
+        `;
+        //data = await pgClient.query('SELECT * FROM postgrest_api.qse_dendro_dating2');
+        data = await pgClient.query(sql);
         let datingRows = data.rows;
         this.app.releaseDbConnection(pgClient);
 
