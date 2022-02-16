@@ -19,7 +19,7 @@ class SeadDataServer {
         this.useSiteCaching = typeof(process.env.USE_SITE_CACHE) != "undefined" ? process.env.USE_SITE_CACHE : true;
         this.useStaticDbConnection = typeof(process.env.USE_SINGLE_PERSISTANT_DBCON) != "undefined" ? process.env.USE_SINGLE_PERSISTANT_DBCON : false;
         this.staticDbConnection = null;
-        console.log("Starting up SEAD Data Server");
+        console.log("Starting up SEAD Data Server "+appVersion);
         this.expressApp = express();
         this.expressApp.use(cors());
         this.expressApp.use(bodyParser.json());
@@ -56,6 +56,14 @@ class SeadDataServer {
     }
 
     setupEndpoints() {
+        this.expressApp.get('/version', async (req, res) => {
+            let versionInfo = {
+                app: "Sead Data Server",
+                version: appVersion
+            }
+            res.send(JSON.stringify(versionInfo, null, 2));
+        });
+
         this.expressApp.get('/site/:siteId', async (req, res) => {
             let site = await this.getSite(req.params.siteId, true);
             res.send(JSON.stringify(site, null, 2));
