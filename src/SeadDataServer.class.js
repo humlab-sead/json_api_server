@@ -12,7 +12,7 @@ const MeasuredValuesModule = require('./Modules/MeasuredValuesModule.class');
 
 
 const appName = "seaddataserver";
-const appVersion = "1.0.1";
+const appVersion = "1.0.3";
 
 class SeadDataServer {
     constructor() {
@@ -42,7 +42,7 @@ class SeadDataServer {
     async setupMongoDb() {
         const mongoUser = encodeURIComponent(process.env.MONGO_USER);
         const mongoPass = encodeURIComponent(process.env.MONGO_PASS);
-        this.mongoClient = new MongoClient('mongodb://'+mongoUser+':'+mongoPass+'@humlabp1.srv.its.umu.se:27017/?authMechanism=DEFAULT');
+        this.mongoClient = new MongoClient('mongodb://'+mongoUser+':'+mongoPass+'@'+process.env.MONGO_HOST+':27017/');
         await this.mongoClient.connect();
         let db = this.mongoClient.db(process.env.MONGO_DB);
         this.mongoCollection = db.collection('sites');
@@ -537,7 +537,8 @@ class SeadDataServer {
     }
 
     async saveSiteToCache(site) {
-        this.mongoCollection.replaceOne({ site_id: parseInt(site.site_id) }, site, { upsert: true });
+        await this.mongoCollection.deleteOne({ site_id: parseInt(site.site_id) });
+        this.mongoCollection.insertOne(site);
     }
 
 
