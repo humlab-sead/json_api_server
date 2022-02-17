@@ -559,7 +559,7 @@ class SeadDataServer {
             this.mongoCollection.insertOne(site);
         }
         if(this.siteCacheStorage == "file") {
-            fs.writeFile("site_cache/site_"+site.site_id+".json", JSON.stringify(site, null, 2));
+            fs.writeFileSync("site_cache/site_"+site.site_id+".json", JSON.stringify(site, null, 2));
         }
     }
 
