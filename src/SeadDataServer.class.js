@@ -218,6 +218,10 @@ class SeadDataServer {
         if(verbose) console.timeEnd("Fetched basic site data for site "+siteId);
         this.releaseDbConnection(pgClient);
 
+        if(verbose) console.time("Fetched site biblio"+siteId);
+        await this.fetchSiteBiblio(site);
+        if(verbose) console.timeEnd("Fetched site biblio"+siteId);
+
         if(verbose) console.time("Fetched sample groups for site "+siteId);
         await this.fetchSampleGroups(site);
         if(verbose) console.timeEnd("Fetched sample groups for site "+siteId);
@@ -263,6 +267,24 @@ class SeadDataServer {
         return site;
     }
 
+    async fetchSiteBiblio(site) {
+        let pgClient = await this.getDbConnection();
+        if(!pgClient) {
+            return false;
+        }
+        let sql = `
+        SELECT * FROM tbl_site_references
+        LEFT JOIN tbl_biblio ON tbl_site_references.biblio_id = tbl_biblio.biblio_id
+        WHERE site_id=$1
+        `;
+        let siteBiblioRef = await pgClient.query(sql, [site.site_id]);
+        site.biblio = siteBiblioRef.rows;
+        
+        this.releaseDbConnection(pgClient);
+        
+        return site;
+    }
+
     async fetchSampleGroups(site) {
         let pgClient = await this.getDbConnection();
         if(!pgClient) {
@@ -275,6 +297,27 @@ class SeadDataServer {
         for(let key in site.sample_groups) {
             let sampleGroupsCoords = await pgClient.query('SELECT * FROM tbl_sample_group_coordinates WHERE sample_group_id=$1', [site.sample_groups[key].sample_group_id]);
             site.sample_groups[key].coordinates = sampleGroupsCoords.rows;
+        }
+
+        for(let key in site.sample_groups) {
+            let sql = `
+            SELECT 
+            tbl_sample_group_references.biblio_id,
+            tbl_biblio.doi,
+            tbl_biblio.isbn,
+            tbl_biblio.notes,
+            tbl_biblio.title,
+            tbl_biblio.year,
+            tbl_biblio.authors,
+            tbl_biblio.full_reference,
+            tbl_biblio.url
+            FROM tbl_sample_group_references
+            INNER JOIN tbl_biblio ON tbl_biblio.biblio_id = tbl_sample_group_references.biblio_id
+            WHERE tbl_sample_group_references.sample_group_id=$1
+            `;
+
+            let sampleGroupsRefs = await pgClient.query(sql, [site.sample_groups[key].sample_group_id]);
+            site.sample_groups[key].biblio = sampleGroupsRefs.rows;
         }
         
         for(let key in site.sample_groups) {
@@ -470,13 +513,22 @@ class SeadDataServer {
         
         for(let key in site.sample_groups) {
             let sampleGroup = site.sample_groups[key];
-            let physicalSamples = await pgClient.query('SELECT * FROM tbl_physical_samples WHERE sample_group_id=$1', [sampleGroup.sample_group_id]);
+            let sql = `
+            SELECT 
+            tbl_physical_samples.*,
+            tbl_sample_types.type_name AS sample_type_name,
+            tbl_sample_types.description AS sample_type_description
+            FROM tbl_physical_samples
+            LEFT JOIN tbl_sample_types ON tbl_physical_samples.sample_type_id = tbl_sample_types.sample_type_id
+            WHERE sample_group_id=$1
+            `;
+            let physicalSamples = await pgClient.query(sql, [sampleGroup.sample_group_id]);
             sampleGroup.physical_samples = physicalSamples.rows;
 
             for(let sampleKey in sampleGroup.physical_samples) {
                 let sample = sampleGroup.physical_samples[sampleKey];
                 
-                let sql = `SELECT * 
+                sql = `SELECT * 
                 FROM tbl_physical_sample_features
                 LEFT JOIN tbl_features ON tbl_physical_sample_features.feature_id = tbl_features.feature_id
                 LEFT JOIN tbl_feature_types ON tbl_features.feature_type_id = tbl_feature_types.feature_type_id
