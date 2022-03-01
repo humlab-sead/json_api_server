@@ -17,11 +17,14 @@ const appVersion = "1.0.4";
 class SeadDataServer {
     constructor() {
         this.siteCacheStorage = typeof(process.env.SITE_CACHE_STORAGE) != "undefined" ? process.env.SITE_CACHE_STORAGE : "file";
-        this.useSiteCaching = typeof(process.env.USE_SITE_CACHE) != "undefined" ? process.env.USE_SITE_CACHE : true;
-        this.useStaticDbConnection = typeof(process.env.USE_SINGLE_PERSISTANT_DBCON) != "undefined" ? process.env.USE_SINGLE_PERSISTANT_DBCON : false;
+        this.useSiteCaching = typeof(process.env.USE_SITE_CACHE) != "undefined" ? process.env.USE_SITE_CACHE == "true" : true;
+        this.useStaticDbConnection = typeof(process.env.USE_SINGLE_PERSISTANT_DBCON) != "undefined" ? process.env.USE_SINGLE_PERSISTANT_DBCON == "true" : false;
         this.staticDbConnection = null;
         console.log("Starting up SEAD Data Server "+appVersion);
-        console.log("Using "+this.siteCacheStorage+" for site cache storage");
+        if(this.useSiteCaching) {
+            console.log("Site cache is enabled")
+            console.log("Using "+this.siteCacheStorage+" for site cache storage");
+        }
         this.expressApp = express();
         this.expressApp.use(cors());
         this.expressApp.use(bodyParser.json());
@@ -68,6 +71,7 @@ class SeadDataServer {
 
         this.expressApp.get('/site/:siteId', async (req, res) => {
             let site = await this.getSite(req.params.siteId, true);
+            res.header("Content-type", "application/json");
             res.send(JSON.stringify(site, null, 2));
         });
 
@@ -182,7 +186,6 @@ class SeadDataServer {
                 }
                 if(siteIds.length == 0) {
                     clearInterval(fetchCheckInterval);
-                    console.timeEnd("Preload of sites complete");
                     resolve();
                 }
             }, 100);
