@@ -19,6 +19,10 @@ class AbundanceModule {
         return false;
     }
 
+    datasetHasModuleMethods(dataset) {
+        return this.moduleMethods.includes(dataset.method_id);
+    }
+
     async fetchSiteData(site) {
         if(!this.siteHasModuleMethods(site)) {
             //console.log("No abundance methods for site "+site.site_id);
@@ -153,6 +157,39 @@ class AbundanceModule {
         await Promise.all(queryPromises);
         this.app.releaseDbConnection(pgClient);
         
+        return site;
+    }
+    
+    postProcessSiteData(site) {
+        /*
+        for(let dsKey in site.datasets) {
+            let dataset = site.datasets[dsKey];
+            if(this.datasetHasModuleMethods(dataset)) {
+                dataset.values = [];
+                for(let sgKey in site.sample_groups) {
+                    let sampleGroup = site.sample_groups[sgKey];
+                    for(let sampleKey in sampleGroup.physical_samples) {
+                        let sample = sampleGroup.physical_samples[sampleKey];
+                        for(let aeKey in sample.analysis_entities) {
+                            let ae = sample.analysis_entities[aeKey];
+                            if(ae.dataset_id == dataset.dataset_id) {
+                                if(ae.abundances) {
+                                    for(let abundanceKey in ae.abundances) {
+                                        let abundance = ae.abundances[abundanceKey];
+                                        dataset.values.push({
+                                            physical_sample_id: sample.physical_sample_id,
+                                            sample_name: sample.sample_name,
+                                            abundance: abundance
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }  
+        }
+        */
         return site;
     }
 

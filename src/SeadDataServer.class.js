@@ -12,7 +12,7 @@ const MeasuredValuesModule = require('./Modules/MeasuredValuesModule.class');
 
 
 const appName = "seaddataserver";
-const appVersion = "1.0.5";
+const appVersion = "1.1.0";
 
 class SeadDataServer {
     constructor() {
@@ -246,7 +246,6 @@ class SeadDataServer {
         await this.fetchDatasets(site);
         if(verbose) console.timeEnd("Fetched datasets for site "+siteId);
         
-        
         if(verbose) console.time("Fetched analysis methods for site "+siteId);
         await this.fetchAnalysisMethods(site);
         if(verbose) console.timeEnd("Fetched analysis methods for site "+siteId);
@@ -256,14 +255,54 @@ class SeadDataServer {
             await this.fetchMethodSpecificData(site);
             if(verbose) console.timeEnd("Fetched method specific data for site "+siteId);
         }
-        
+
         if(verbose) console.timeEnd("Done fetching site "+siteId);
+
+        if(verbose) console.time("Done processing data for site "+siteId);
+        this.postProcessSiteData(site);
+        if(verbose) console.timeEnd("Done processing data for site "+siteId);
 
         if(this.useSiteCaching) {
             //Store in cache
             this.saveSiteToCache(site);
         }
 
+        return site;
+    }
+
+    postProcessSiteData(site) {
+        //Re-arrange things so that analysis_entities are connected to the datasets instead of the samples
+        let analysisEntities = [];
+        for(let sgKey in site.sample_groups) {
+            let sampleGroup = site.sample_groups[sgKey];
+            for(let sampleKey in sampleGroup.physical_samples) {
+                let sample = sampleGroup.physical_samples[sampleKey];
+                for(let aeKey in sample.analysis_entities) {
+                    analysisEntities.push(sample.analysis_entities[aeKey]);
+                }
+            }
+        }
+        let datasets = this.groupAnalysisEntitiesByDataset(analysisEntities);
+        site.datasets.forEach(dataset => {
+            datasets.forEach(datasetAes => {
+                if(dataset.dataset_id == datasetAes.dataset_id) {
+                    dataset.analysis_entities = datasetAes.analysis_entities;
+                }
+            });
+        });
+
+        //Unlink analysis_entities from samples
+        site.sample_groups.forEach(sg => {
+            sg.physical_samples.forEach(ps => {
+                delete ps.analysis_entities;
+            })
+        })
+
+        //Here we give each module a chance to modify the data structure now that everything is fetched
+        for(let key in this.modules) {
+            let module = this.modules[key];
+            module.postProcessSiteData(site);
+        }
         return site;
     }
 
@@ -442,8 +481,16 @@ class SeadDataServer {
 
         let queryPromises = [];
         let datasets = [];
+        let sql = `
+        SELECT
+        tbl_datasets.*,
+        tbl_methods.method_group_id
+        FROM tbl_datasets 
+        LEFT JOIN tbl_methods ON tbl_datasets.method_id = tbl_methods.method_id
+        WHERE dataset_id=$1
+        `;
         datasetIds.forEach(datasetId => {
-            let promise = pgClient.query('SELECT * FROM tbl_datasets WHERE dataset_id=$1', [datasetId]).then(dataset => {
+            let promise = pgClient.query(sql, [datasetId]).then(dataset => {
                 if(dataset.rows.length > 0) {
                     datasets.push(dataset.rows[0]);
                 }
@@ -632,16 +679,15 @@ class SeadDataServer {
 
         datasetsIds.forEach((datasetId) => {
             datasets.push({
-                datasetId: datasetId,
-                analysisEntities: []
+                dataset_id: datasetId,
+                analysis_entities: []
             });
         })
 
         for(let key in analysisEntities) {
-
             for(let dsKey in datasets) {
-                if(analysisEntities[key].dataset_id == datasets[dsKey].datasetId) {
-                    datasets[dsKey].analysisEntities.push(analysisEntities[key]);
+                if(analysisEntities[key].dataset_id == datasets[dsKey].dataset_id) {
+                    datasets[dsKey].analysis_entities.push(analysisEntities[key]);
                 }
             }
         }

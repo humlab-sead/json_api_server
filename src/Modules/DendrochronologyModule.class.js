@@ -473,6 +473,10 @@ class DendrochronologyModule {
         }
     }
 
+    postProcessSiteData(site) {
+        return site;
+    }
+
 }
 
 module.exports = DendrochronologyModule;
