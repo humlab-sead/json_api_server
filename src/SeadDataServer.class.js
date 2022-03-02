@@ -12,7 +12,7 @@ const MeasuredValuesModule = require('./Modules/MeasuredValuesModule.class');
 
 
 const appName = "seaddataserver";
-const appVersion = "1.1.0";
+const appVersion = "1.1.1";
 
 class SeadDataServer {
     constructor() {
@@ -395,8 +395,17 @@ class SeadDataServer {
             return false;
         }
         let sql = `
-        SELECT * FROM tbl_site_locations
+        SELECT 
+        tbl_locations.location_id,
+        tbl_locations.location_name,
+        tbl_locations.default_lat_dd,
+        tbl_locations.default_long_dd,
+        tbl_locations.location_type_id,
+        tbl_location_types.location_type,
+        tbl_location_types.description AS location_description
+        FROM tbl_site_locations
         LEFT JOIN tbl_locations ON tbl_site_locations.location_id = tbl_locations.location_id
+        LEFT JOIN tbl_location_types ON tbl_locations.location_type_id = tbl_location_types.location_type_id
         WHERE site_id=$1
         `;
         let siteLocData = await pgClient.query(sql, [site.site_id]);
