@@ -86,6 +86,8 @@ class DendrochronologyModule {
         }
         let measurements = await this.getMeasurementsForSite(site.site_id);
         site.dendro = measurements;
+        site.dataGroups = measurements;
+
         return site;
     }
 
@@ -158,9 +160,9 @@ class DendrochronologyModule {
         site.dating = data.rows;
         this.app.releaseDbConnection(pgClient);
 
-        let sampleDataObjects = this.dl.dbRowsToSampleDataObjects(measurementRows, datingRows);
+        let dataGroups = this.dl.dbRowsToDataGroups(measurementRows, datingRows);
 
-        return sampleDataObjects;
+        return dataGroups;
     }
 
     async getMeasurementsForAllSites() {

@@ -213,14 +213,15 @@ class SeadDataServer {
         if(verbose) console.time("Fetched basic site data for site "+siteId);
         let siteData = await pgClient.query('SELECT * FROM tbl_sites WHERE site_id=$1', [siteId]);
         site = siteData.rows[0];
+        site.data_groups = [];
         site.api_source = appName+"-"+appVersion;
 
         if(verbose) console.timeEnd("Fetched basic site data for site "+siteId);
         this.releaseDbConnection(pgClient);
 
-        if(verbose) console.time("Fetched site biblio"+siteId);
+        if(verbose) console.time("Fetched biblio for site "+siteId);
         await this.fetchSiteBiblio(site);
-        if(verbose) console.timeEnd("Fetched site biblio"+siteId);
+        if(verbose) console.timeEnd("Fetched biblio for site "+siteId);
 
         if(verbose) console.time("Fetched sample groups for site "+siteId);
         await this.fetchSampleGroups(site);
@@ -268,6 +269,25 @@ class SeadDataServer {
         }
 
         return site;
+    }
+
+    getAnalysisMethodByMethodId(site, method_id) {
+        for(let key in site.analysis_methods) {
+            if(site.analysis_methods[key].method_id == method_id) {
+                return site.analysis_methods[key];
+            }
+        }
+    }
+
+    getSampleNameBySampleId(site, physical_sample_id) {
+        for(let sgKey in site.sample_groups) {
+            for(let sampleKey in site.sample_groups[sgKey].physical_samples) {
+                if(site.sample_groups[sgKey].physical_samples[sampleKey].physical_sample_id == physical_sample_id) {
+                    return site.sample_groups[sgKey].physical_samples[sampleKey].sample_name;
+                }
+            }
+        }
+        return false;
     }
 
     postProcessSiteData(site) {
@@ -422,6 +442,22 @@ class SeadDataServer {
         for(let key in this.modules) {
             let module = this.modules[key];
             //if(verbose) console.time("Fetched method "+module.name);
+
+            //This should get "data_groups", a data_group has data structured in tabular form, like:
+            /*
+            data_group.id = "dataset 1"; //id/context can be whatever makes sense for the given data type. For abundance and measured_value it's the dataset,
+            but dendro has a separate dataset for each of what we here would call a datapoint, so there it makes more sense to let the id/context be equal to the sample id/name instead
+            data_group.data_points[
+                {
+                    label: "a",
+                    value: 0
+                },
+                {
+                    label: "b",
+                    value: 1
+                }
+            ]
+            */
             let promise = module.fetchSiteData(site);
             fetchPromises.push(promise);
             promise.then(() => {

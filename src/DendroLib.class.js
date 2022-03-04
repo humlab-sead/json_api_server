@@ -108,6 +108,72 @@ class DendroLib {
         ];
     }
 
+    dbRowsToDataGroups(measurementRows, datingRows) {
+        let dataGroups = [];
+
+        //Find unique samples
+        let physicalSampleIds = [];
+        measurementRows.forEach(row => {
+            physicalSampleIds.push(row.physical_sample_id);
+        });
+        physicalSampleIds = physicalSampleIds.filter((value, index, self) => {
+            return self.indexOf(value) === index;
+        });
+
+        physicalSampleIds.forEach(physicalSampleId => {
+            let dataGroup = {
+                id: physicalSampleId,
+                type: "dendro",
+                sampleName: "",
+                sampleTaken: "",
+                physicalSampleId: physicalSampleId,
+                dataPoints: []
+            }
+
+            measurementRows.forEach(m2 => {
+                if(physicalSampleId == m2.physical_sample_id) {
+                    //Convert value to an integer if possible, otherwise leave as string
+                    let value = m2.measurement_value;
+                    let intVal = parseInt(m2.measurement_value);
+                    if(!isNaN(intVal)) {
+                        value = intVal;
+                    }
+
+                    dataGroup.sampleName = m2.sample;
+
+                    dataGroup.dataPoints.push({
+                        id: m2.dendro_lookup_id,
+                        label: m2.date_type,
+                        value: value
+                    });
+                }
+            })
+
+            datingRows.forEach(m2 => {
+                if(physicalSampleId == m2.physical_sample_id) {
+                    dataGroup.dataPoints.push({
+                        id: m2.dendro_lookup_id,
+                        label: m2.date_type,
+                        value: {
+                            age_type: m2.age_type,
+                            older: m2.older,
+                            younger: m2.younger,
+                            plus: m2.plus,
+                            minus: m2.minus,
+                            error_uncertainty: m2.error_uncertainty,
+                            season: m2.season
+                        }
+                    });
+                }
+            });
+            
+            dataGroups.push(dataGroup);
+
+        });
+
+        return dataGroups;
+    }
+
     dbRowsToSampleDataObjects(measurementRows, datingRows) {
         let sampleDataObjects = [];
 
@@ -170,57 +236,6 @@ class DendroLib {
             sampleDataObjects.push(sampleDataObject);
 
         });
-
-        /*
-        measurementRows.map(m => {
-
-            let sampleDataObject = {
-                sampleName: m.sample,
-                sampleTaken: "",
-                physicalSampleId: m.physical_sample_id,
-                datasets: []
-            }
-
-            measurementRows.forEach(m2 => {
-                if(m.physical_sample_id == m2.physical_sample_id) {
-                    //Convert value to an integer if possible, otherwise leave as string
-                    let value = m2.measurement_value;
-                    let intVal = parseInt(m2.measurement_value);
-                    if(!isNaN(intVal)) {
-                        value = intVal;
-                    }
-
-                    sampleDataObject.datasets.push({
-                        id: m2.dendro_lookup_id,
-                        label: m2.date_type,
-                        value: value
-                    });
-                }
-            })
-
-            datingRows.forEach(m2 => {
-                if(m.physical_sample_id == m2.physical_sample_id) {
-
-                    sampleDataObject.datasets.push({
-                        id: m2.dendro_lookup_id,
-                        label: m2.date_type,
-                        value: "complex",
-                        data: {
-                            age_type: m2.age_type,
-                            older: m2.older,
-                            younger: m2.younger,
-                            plus: m2.plus,
-                            minus: m2.minus,
-                            error_uncertainty: m2.error_uncertainty,
-                            season: m2.season
-                        }
-                    });
-                }
-            });
-            
-            sampleDataObjects.push(sampleDataObject);
-        });
-        */
 
         return sampleDataObjects;
     }

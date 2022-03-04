@@ -56,38 +56,55 @@ class MeasuredValuesModule {
 
     postProcessSiteData(site) {
 
-        //Populate datasets with analysis_entities and their measured values
-        /*
+        let dataGroups = [];
+
         for(let dsKey in site.datasets) {
             let dataset = site.datasets[dsKey];
             if(this.datasetHasModuleMethods(dataset)) {
-                dataset.values = [];
-                for(let sgKey in site.sample_groups) {
-                    let sampleGroup = site.sample_groups[sgKey];
-                    for(let sampleKey in sampleGroup.physical_samples) {
-                        let sample = sampleGroup.physical_samples[sampleKey];
-                        for(let aeKey in sample.analysis_entities) {
-                            let ae = sample.analysis_entities[aeKey];
-                            if(ae.dataset_id == dataset.dataset_id) {
-                                if(ae.measured_values) {
-                                    for(let mvKey in ae.measured_values) {
-                                        let measuredValue = ae.measured_values[mvKey];
-                                        let value = measuredValue.measured_value;
-                                        dataset.values.push({
-                                            physical_sample_id: sample.physical_sample_id,
-                                            sample_name: sample.sample_name,
-                                            value: value
-                                        });
-                                    }
+
+                let method = this.app.getAnalysisMethodByMethodId(site, dataset.method_id);
+
+                let dataGroup = {
+                    id: dataset.dataset_id,
+                    dataset_name: dataset.dataset_name,
+                    method_id: dataset.method_id,
+                    method_group_id: dataset.method_group_id,
+                    method_name: method.method_name,
+                    type: "measured_values",
+                    data_points: []
+                }
+
+                for(let aeKey in dataset.analysis_entities) {
+                    let ae = dataset.analysis_entities[aeKey];
+                    if(ae.dataset_id == dataGroup.id) {
+                        if(ae.measured_values) {
+                            for(let mvKey in ae.measured_values) {
+                                let measuredValue = ae.measured_values[mvKey];
+                                let value = measuredValue.measured_value;
+
+                                if(!isNaN(parseFloat(value))) {
+                                    value = parseFloat(value);
                                 }
+                                else if(!isNaN(parseInt(value))) {
+                                    value = parseInt(value);
+                                }
+
+                                dataGroup.data_points.push({
+                                    physical_sample_id: ae.physical_sample_id,
+                                    sample_name: this.app.getSampleNameBySampleId(site, ae.physical_sample_id),
+                                    label: ae.physical_sample_id,
+                                    raw_value: measuredValue.measured_value,
+                                    value: value
+                                });
                             }
                         }
                     }
                 }
-            }
+
+                dataGroups.push(dataGroup);
+            }  
         }
-        */
-        return site;
+        return site.data_groups = dataGroups.concat(site.data_groups);
     }
 
 }

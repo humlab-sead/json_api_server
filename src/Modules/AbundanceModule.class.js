@@ -38,6 +38,14 @@ class AbundanceModule {
         
         let queryPromises = [];
 
+        /*
+        site.datasets.forEach(dataset => {
+            dataset.analysis_entities.forEach(ae => {
+
+            });
+        });
+        */
+
         site.sample_groups.forEach(sampleGroup => {
             sampleGroup.physical_samples.forEach(physicalSample => {
                 physicalSample.analysis_entities.forEach(analysisEntity => {
@@ -161,36 +169,44 @@ class AbundanceModule {
     }
     
     postProcessSiteData(site) {
-        /*
+    
+        let dataGroups = [];
+
         for(let dsKey in site.datasets) {
             let dataset = site.datasets[dsKey];
             if(this.datasetHasModuleMethods(dataset)) {
-                dataset.values = [];
-                for(let sgKey in site.sample_groups) {
-                    let sampleGroup = site.sample_groups[sgKey];
-                    for(let sampleKey in sampleGroup.physical_samples) {
-                        let sample = sampleGroup.physical_samples[sampleKey];
-                        for(let aeKey in sample.analysis_entities) {
-                            let ae = sample.analysis_entities[aeKey];
-                            if(ae.dataset_id == dataset.dataset_id) {
-                                if(ae.abundances) {
-                                    for(let abundanceKey in ae.abundances) {
-                                        let abundance = ae.abundances[abundanceKey];
-                                        dataset.values.push({
-                                            physical_sample_id: sample.physical_sample_id,
-                                            sample_name: sample.sample_name,
-                                            abundance: abundance
-                                        });
-                                    }
-                                }
+
+                let dataGroup = {
+                    id: dataset.dataset_id,
+                    type: "abundance",
+                    data_points: []
+                }
+
+                for(let aeKey in dataset.analysis_entities) {
+                    let ae = dataset.analysis_entities[aeKey];
+                    if(ae.dataset_id == dataGroup.id) {
+                        if(ae.abundances) {
+                            for(let abundanceKey in ae.abundances) {
+                                let abundance = ae.abundances[abundanceKey];
+
+                                let sampleName = this.app.getSampleNameBySampleId(site, ae.physical_sample_id);
+
+                                dataGroup.data_points.push({
+                                    physical_sample_id: ae.physical_sample_id,
+                                    sample_name: sampleName,
+                                    label: ae.physical_sample_id,
+                                    value: abundance
+                                });
                             }
                         }
                     }
                 }
+
+                dataGroups.push(dataGroup);
             }  
         }
-        */
-        return site;
+
+        return site.data_groups = dataGroups.concat(site.data_groups);
     }
 
 }
