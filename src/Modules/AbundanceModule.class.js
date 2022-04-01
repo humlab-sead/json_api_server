@@ -104,6 +104,42 @@ class AbundanceModule {
                             await pgClient.query('SELECT taxon_id,author_id,genus_id,species FROM tbl_taxa_tree_master WHERE taxon_id=$1', [abundance.taxon_id]).then(async taxon => {
                                 abundance.taxon = taxon.rows[0];
 
+                                let family_id = null;
+                                if(abundance.taxon.genus_id) {
+                                    sql = `SELECT family_id, genus_name FROM tbl_taxa_tree_genera WHERE genus_id=$1`;
+                                    await pgClient.query(sql, [abundance.taxon.genus_id]).then(genus => {
+                                        family_id = genus.rows[0].family_id;
+                                        abundance.taxon.genus = {
+                                            genus_id: abundance.taxon.genus_id,
+                                            genus_name: genus.rows[0].genus_name
+                                        };
+                                    });
+                                }
+                                
+                                let order_id = null;
+                                if(family_id) {
+                                    sql = `SELECT family_name, order_id FROM tbl_taxa_tree_families WHERE family_id=$1`;
+                                    await pgClient.query(sql, [family_id]).then(fam => {
+                                        order_id = fam.rows[0].order_id;
+                                        abundance.taxon.family = {
+                                            family_id: family_id,
+                                            family_name: fam.rows[0].family_name
+                                        };
+                                    });
+                                }
+                                
+                                if(order_id) {
+                                    sql = `SELECT order_name, record_type_id FROM tbl_taxa_tree_orders WHERE order_id=$1`;
+                                    await pgClient.query(sql, [order_id]).then(order => {
+                                        abundance.taxon.order = {
+                                            order_id: order_id,
+                                            order_name: order.rows[0].order_name,
+                                            record_type_id: order.rows[0].record_type_id
+                                        };
+                                    });
+                                }
+                                
+
                                 sql = `
                                 SELECT *
                                 FROM tbl_taxa_common_names
