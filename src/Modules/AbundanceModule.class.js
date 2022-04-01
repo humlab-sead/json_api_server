@@ -176,8 +176,14 @@ class AbundanceModule {
             let dataset = site.datasets[dsKey];
             if(this.datasetHasModuleMethods(dataset)) {
 
+                let method = this.app.getAnalysisMethodByMethodId(site, dataset.method_id);
+                
                 let dataGroup = {
                     id: dataset.dataset_id,
+                    dataset_name: dataset.dataset_name,
+                    method_id: dataset.method_id,
+                    method_group_id: dataset.method_group_id,
+                    method_name: method.method_name,
                     type: "abundance",
                     data_points: []
                 }
