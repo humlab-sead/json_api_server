@@ -139,6 +139,13 @@ class AbundanceModule {
                                     });
                                 }
                                 
+                                if(abundance.taxon.author_id) {
+                                    await pgClient.query('SELECT * FROM tbl_taxa_tree_authors WHERE author_id=$1', [abundance.taxon.author_id]).then(taxa_author => {
+                                        abundance.taxon.author = taxa_author.rows[0];
+                                        delete abundance.taxon.author_id;
+                                    });
+                                }
+                                
 
                                 sql = `
                                 SELECT *
