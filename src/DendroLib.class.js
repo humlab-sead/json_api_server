@@ -124,8 +124,8 @@ class DendroLib {
             let dataGroup = {
                 id: physicalSampleId,
                 type: "dendro",
-                sampleName: "",
-                sampleTaken: "",
+                sample_name: "",
+                sample_taken: "",
                 physical_sample_id: physicalSampleId,
                 data_points: []
             }
@@ -139,7 +139,7 @@ class DendroLib {
                         value = intVal;
                     }
 
-                    dataGroup.sampleName = m2.sample;
+                    dataGroup.sample_name = m2.sample;
 
                     dataGroup.data_points.push({
                         id: m2.dendro_lookup_id,
@@ -188,8 +188,8 @@ class DendroLib {
 
         physicalSampleIds.forEach(physicalSampleId => {
             let sampleDataObject = {
-                sampleName: "",
-                sampleTaken: "",
+                sample_name: "",
+                sample_taken: "",
                 physical_sample_id: physicalSampleId,
                 datasets: []
             }
@@ -203,7 +203,7 @@ class DendroLib {
                         value = intVal;
                     }
 
-                    sampleDataObject.sampleName = m2.sample;
+                    sampleDataObject.sample_name = m2.sample;
 
                     sampleDataObject.datasets.push({
                         id: m2.dendro_lookup_id,
@@ -246,8 +246,8 @@ class DendroLib {
             let row = contentItem.data.rows[rowKey];
     
             let sampleDataObject = {
-                sampleName: row[2].value,
-                sampleTaken: row[3].value,
+                sample_name: row[2].value,
+                sample_taken: row[3].value,
                 datasets: []
             };
     
