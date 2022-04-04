@@ -126,8 +126,8 @@ class DendroLib {
                 type: "dendro",
                 sampleName: "",
                 sampleTaken: "",
-                physicalSampleId: physicalSampleId,
-                dataPoints: []
+                physical_sample_id: physicalSampleId,
+                data_points: []
             }
 
             measurementRows.forEach(m2 => {
@@ -141,7 +141,7 @@ class DendroLib {
 
                     dataGroup.sampleName = m2.sample;
 
-                    dataGroup.dataPoints.push({
+                    dataGroup.data_points.push({
                         id: m2.dendro_lookup_id,
                         label: m2.date_type,
                         value: value
@@ -151,7 +151,7 @@ class DendroLib {
 
             datingRows.forEach(m2 => {
                 if(physicalSampleId == m2.physical_sample_id) {
-                    dataGroup.dataPoints.push({
+                    dataGroup.data_points.push({
                         id: m2.dendro_lookup_id,
                         label: m2.date_type,
                         value: {
@@ -190,7 +190,7 @@ class DendroLib {
             let sampleDataObject = {
                 sampleName: "",
                 sampleTaken: "",
-                physicalSampleId: physicalSampleId,
+                physical_sample_id: physicalSampleId,
                 datasets: []
             }
 
