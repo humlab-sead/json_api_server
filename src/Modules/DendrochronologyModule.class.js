@@ -116,6 +116,7 @@ class DendrochronologyModule {
         ps.sample_name AS sample,
         ps.date_sampled,
         dl.dendro_lookup_id,
+        dl.description AS dendro_lookup_description,
         tbl_sites.site_id,
         tbl_dendro.measurement_value
         FROM tbl_physical_samples ps
@@ -145,6 +146,7 @@ class DendrochronologyModule {
         eu.error_uncertainty_type AS error_uncertainty,
         soq.season_or_qualifier_type AS season,
         dl.dendro_lookup_id,
+        dl.description AS dendro_lookup_description,
         tbl_sites.site_id
         FROM tbl_physical_samples ps
         JOIN tbl_analysis_entities ae ON ps.physical_sample_id = ae.physical_sample_id
@@ -180,6 +182,7 @@ class DendrochronologyModule {
         dl.name AS date_type,
         ps.sample_name AS sample,
         dl.dendro_lookup_id,
+        dl.description AS dendro_lookup_description,
         tbl_sites.site_id,
         tbl_dendro.measurement_value
         FROM tbl_physical_samples ps
@@ -207,6 +210,7 @@ class DendrochronologyModule {
         eu.error_uncertainty_type AS error_uncertainty,
         soq.season_or_qualifier_type AS season,
         dl.dendro_lookup_id,
+        dl.description AS dendro_lookup_description,
         tbl_sites.site_id
         FROM tbl_physical_samples ps
         JOIN tbl_analysis_entities ae ON ps.physical_sample_id = ae.physical_sample_id

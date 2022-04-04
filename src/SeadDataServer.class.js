@@ -12,7 +12,7 @@ const MeasuredValuesModule = require('./Modules/MeasuredValuesModule.class');
 
 
 const appName = "seaddataserver";
-const appVersion = "1.5.1";
+const appVersion = "1.5.2";
 
 class SeadDataServer {
     constructor() {
