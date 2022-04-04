@@ -114,6 +114,7 @@ class DendrochronologyModule {
         ae.analysis_entity_id,
         dl.name AS date_type,
         ps.sample_name AS sample,
+        ps.date_sampled,
         dl.dendro_lookup_id,
         tbl_sites.site_id,
         tbl_dendro.measurement_value
