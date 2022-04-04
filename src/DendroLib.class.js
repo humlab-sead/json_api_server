@@ -125,14 +125,13 @@ class DendroLib {
                 id: physicalSampleId,
                 type: "dendro",
                 sample_name: "",
-                sample_taken: "",
+                date_sampled: "",
                 physical_sample_id: physicalSampleId,
                 data_points: []
             }
 
             measurementRows.forEach(m2 => {
                 if(physicalSampleId == m2.physical_sample_id) {
-                    console.log(m2)
                     //Convert value to an integer if possible, otherwise leave as string
                     let value = m2.measurement_value;
                     let intVal = parseInt(m2.measurement_value);
@@ -141,7 +140,7 @@ class DendroLib {
                     }
 
                     dataGroup.sample_name = m2.sample;
-                    dataGroup.sample_taken = m2.date_sampled;
+                    dataGroup.date_sampled = m2.date_sampled;
 
                     dataGroup.data_points.push({
                         id: m2.dendro_lookup_id,
