@@ -85,8 +85,11 @@ class DendrochronologyModule {
             return site;
         }
         let measurements = await this.getMeasurementsForSite(site.site_id);
-        site.dendro = measurements;
-        site.dataGroups = measurements;
+        //site.dendro = measurements;
+        if(!site.data_groups) {
+            site.data_groups = [];
+        }
+        site.data_groups = site.data_groups.concat(measurements)
 
         return site;
     }
