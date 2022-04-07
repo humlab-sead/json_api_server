@@ -80,6 +80,16 @@ class DendrochronologyModule {
         return false;
     }
 
+    async fetchDendroLookup() {
+        let pgClient = await this.app.getDbConnection();
+        if(!pgClient) {
+            return false;
+        }
+        let data = await pgClient.query("SELECT dendro_lookup_id, name, description FROM tbl_dendro_lookup");
+        this.app.releaseDbConnection(pgClient);
+        return data.rows;
+    }
+
     async fetchSiteData(site) {
         if(!this.siteHasModuleMethods(site)) {
             return site;
@@ -88,7 +98,8 @@ class DendrochronologyModule {
         if(!site.data_groups) {
             site.data_groups = [];
         }
-        site.data_groups = site.data_groups.concat(measurements)
+        site.data_groups = site.data_groups.concat(measurements);
+        site.lookup_tables.dendro = await this.fetchDendroLookup();
 
         return site;
     }
@@ -163,10 +174,6 @@ class DendrochronologyModule {
         data = await pgClient.query(sql, [siteId]);
         let datingRows = data.rows;
         site.dating = data.rows;
-
-        data = await pgClient.query("SELECT dendro_lookup_id, name, description FROM tbl_dendro_lookup");
-        site.lookup_tables.dendro = data.rows;
-
         this.app.releaseDbConnection(pgClient);
 
         let dataGroups = this.dl.dbRowsToDataGroups(measurementRows, datingRows);
