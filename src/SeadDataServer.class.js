@@ -12,7 +12,7 @@ const MeasuredValuesModule = require('./Modules/MeasuredValuesModule.class');
 
 
 const appName = "seaddataserver";
-const appVersion = "1.5.2";
+const appVersion = "1.5.3";
 
 class SeadDataServer {
     constructor() {
@@ -215,6 +215,7 @@ class SeadDataServer {
         site = siteData.rows[0];
         site.data_groups = [];
         site.api_source = appName+"-"+appVersion;
+        site.lookup_tables = {};
 
         if(verbose) console.timeEnd("Fetched basic site data for site "+siteId);
         this.releaseDbConnection(pgClient);

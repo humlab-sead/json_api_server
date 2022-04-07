@@ -163,6 +163,10 @@ class DendrochronologyModule {
         data = await pgClient.query(sql, [siteId]);
         let datingRows = data.rows;
         site.dating = data.rows;
+
+        data = await pgClient.query("SELECT dendro_lookup_id, name, description FROM tbl_dendro_lookup");
+        site.lookup_tables.dendro = data.rows;
+
         this.app.releaseDbConnection(pgClient);
 
         let dataGroups = this.dl.dbRowsToDataGroups(measurementRows, datingRows);
