@@ -24,6 +24,9 @@ class AbundanceModule {
     }
 
     getTaxonFromLocalLookup(site, taxon_id) {
+        if(typeof site.lookup_tables.taxa == "undefined") {
+            site.lookup_tables.taxa = [];
+        }
         for(let key in site.lookup_tables.taxa) {
             if(site.lookup_tables.taxa[key].taxon_id == taxon_id) {
                 return site.lookup_tables.taxa[key];
@@ -33,7 +36,48 @@ class AbundanceModule {
     }
 
     addTaxonToLocalLookup(site, taxon) {
+        if(typeof site.lookup_tables.taxa == "undefined") {
+            site.lookup_tables.taxa = [];
+        }
         site.lookup_tables.taxa.push(taxon);
+    }
+
+    getAbundanceElementFromLocalLookup(site, abundance_element_id) {
+        if(typeof site.lookup_tables.abundance_elements == "undefined") {
+            site.lookup_tables.abundance_elements = [];
+        }
+        for(let key in site.lookup_tables.abundance_elements) {
+            if(site.lookup_tables.abundance_elements[key].abundance_element_id == abundance_element_id) {
+                return site.lookup_tables.abundance_elements[key];
+            }
+        }
+        return null;
+    }
+
+    addAbundanceElementToLocalLookup(site, abundance_element) {
+        if(typeof site.lookup_tables.abundance_elements == "undefined") {
+            site.lookup_tables.abundance_elements = [];
+        }
+        site.lookup_tables.abundance_elements.push(abundance_element);
+    }
+
+    getAbundanceModificationFromLocalLookup(site, abundance_modification_id) {
+        if(typeof site.lookup_tables.abundance_modifications == "undefined") {
+            site.lookup_tables.abundance_modifications = [];
+        }
+        for(let key in site.lookup_tables.abundance_modifications) {
+            if(site.lookup_tables.abundance_modifications[key].abundance_modification_id == abundance_modification_id) {
+                return site.lookup_tables.abundance_modifications[key];
+            }
+        }
+        return null;
+    }
+
+    addAbundanceModificationToLocalLookup(site, abundance_element) {
+        if(typeof site.lookup_tables.abundance_modifications == "undefined") {
+            site.lookup_tables.abundance_modifications = [];
+        }
+        site.lookup_tables.abundance_modifications.push(abundance_element);
     }
 
     async fetchSiteData(site) {
@@ -50,10 +94,6 @@ class AbundanceModule {
         }
         
         let queryPromises = [];
-
-        if(typeof site.lookup_tables.taxa == "undefined") {
-            site.lookup_tables.taxa = [];
-        }
 
         site.sample_groups.forEach(sampleGroup => {
             sampleGroup.physical_samples.forEach(physicalSample => {
@@ -79,43 +119,44 @@ class AbundanceModule {
                                 abundance.identification_levels = identLevels.rows;
                             });
 
-                            //Fetch abundance elements
-                            sql = `
-                            SELECT
-                            tbl_abundance_elements.element_name,
-                            tbl_abundance_elements.element_description,
-                            tbl_record_types.record_type_name,
-                            tbl_record_types.record_type_description,
-                            FROM tbl_abundance_elements 
-                            LEFT JOIN tbl_record_types ON tbl_abundance_elements.record_type_id = tbl_record_types.record_type_id
-                            WHERE abundance_element_id=$1
-                            `;
-                            await pgClient.query('SELECT * FROM tbl_abundance_elements WHERE abundance_element_id=$1', [abundance.abundance_element_id]).then(abundanceElements => {
-                                abundance.elements = abundanceElements.rows;
-                            });
+                            let abundanceElement = this.getAbundanceElementFromLocalLookup(site, abundance.abundance_element_id);
+                            if(abundanceElement == null) {
+                                //Fetch abundance elements
+                                sql = `
+                                SELECT
+                                tbl_abundance_elements.element_name,
+                                tbl_abundance_elements.element_description,
+                                tbl_record_types.record_type_name,
+                                tbl_record_types.record_type_description,
+                                FROM tbl_abundance_elements 
+                                LEFT JOIN tbl_record_types ON tbl_abundance_elements.record_type_id = tbl_record_types.record_type_id
+                                WHERE abundance_element_id=$1
+                                `;
+                                await pgClient.query('SELECT * FROM tbl_abundance_elements WHERE abundance_element_id=$1', [abundance.abundance_element_id]).then(abundanceElements => {
+                                    this.addAbundanceElementToLocalLookup(site, abundanceElements.rows[0]);
+                                });
+                            }
 
-                            //Fetch abundance modifications
-                            sql = `
-                            SELECT
-                            tbl_abundance_modifications.modification_type_id,
-                            tbl_modification_types.modification_type_name,
-                            tbl_modification_types.modification_type_description
-                            FROM tbl_abundance_modifications
-                            LEFT JOIN tbl_modification_types ON tbl_abundance_modifications.modification_type_id = tbl_modification_types.modification_type_id
-                            WHERE
-                            abundance_id=$1
-                            `;
-                            await pgClient.query(sql, [abundance.abundance_id]).then(abundanceModifications => {
-                                abundance.modifications = abundanceModifications.rows;
-                            });
+                            sql = "SELECT * FROM tbl_abundance_modifications WHERE abundance_id=$1";
+                            let abundanceModifications = await pgClient.query(sql, [abundance.abundance_id]);
+                            abundance.modifications = abundanceModifications.rows;
 
+                            for(let key in abundance.modifications) {
+                                let am = abundance.modifications[key];
+                                let abundanceModification = this.getAbundanceModificationFromLocalLookup(site, am.abundance_modification_id);
+                                if(abundanceModification == null) {
+                                    sql = "SELECT * FROM tbl_modification_types WHERE modification_type_id=$1";
+                                    abundanceModification = await pgClient.query(sql, [am.modification_type_id]);
+                                    this.addAbundanceModificationToLocalLookup(site, abundanceModification);
+                                }
+                            }
 
                             //Fetch taxon data if we don't already have it
                             let taxon = this.getTaxonFromLocalLookup(site, abundance.taxon_id)
                             if(taxon == null) {
                                 let taxon_id = abundance.taxon_id;
                                 await pgClient.query('SELECT taxon_id,author_id,genus_id,species FROM tbl_taxa_tree_master WHERE taxon_id=$1', [taxon_id]).then(async taxonData => {
-                                    //abundance.taxon = taxonData.rows[0];
+                                    
                                     let taxon = taxonData.rows[0];
 
                                     let family_id = null;
@@ -186,6 +227,7 @@ class AbundanceModule {
                                         taxon.text_distribution = textDist.rows;
                                     });
 
+                                    /* disabling ecocodes fetching for now, it's just a lot of unused data atm
                                     sql = `
                                     SELECT * FROM tbl_ecocodes
                                     LEFT JOIN tbl_ecocode_definitions ON tbl_ecocodes.ecocode_definition_id = tbl_ecocode_definitions.ecocode_definition_id
@@ -194,6 +236,7 @@ class AbundanceModule {
                                     await pgClient.query(sql, [taxon_id]).then(ecoCodes => {
                                         taxon.ecocodes = ecoCodes.rows;
                                     });
+                                    */
 
                                     sql = `
                                     SELECT * FROM tbl_taxa_seasonality
