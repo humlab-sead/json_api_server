@@ -23,6 +23,19 @@ class AbundanceModule {
         return this.moduleMethods.includes(dataset.method_id);
     }
 
+    getTaxonFromLocalLookup(site, taxon_id) {
+        for(let key in site.lookup_tables.taxa) {
+            if(site.lookup_tables.taxa[key].taxon_id == taxon_id) {
+                return site.lookup_tables.taxa[key];
+            }
+        }
+        return null;
+    }
+
+    addTaxonToLocalLookup(site, taxon) {
+        site.lookup_tables.taxa.push(taxon);
+    }
+
     async fetchSiteData(site) {
         if(!this.siteHasModuleMethods(site)) {
             //console.log("No abundance methods for site "+site.site_id);
@@ -38,13 +51,9 @@ class AbundanceModule {
         
         let queryPromises = [];
 
-        /*
-        site.datasets.forEach(dataset => {
-            dataset.analysis_entities.forEach(ae => {
-
-            });
-        });
-        */
+        if(typeof site.lookup_tables.taxa == "undefined") {
+            site.lookup_tables.taxa = [];
+        }
 
         site.sample_groups.forEach(sampleGroup => {
             sampleGroup.physical_samples.forEach(physicalSample => {
@@ -100,100 +109,106 @@ class AbundanceModule {
                                 abundance.modifications = abundanceModifications.rows;
                             });
 
-                            //Fetch taxon data
-                            await pgClient.query('SELECT taxon_id,author_id,genus_id,species FROM tbl_taxa_tree_master WHERE taxon_id=$1', [abundance.taxon_id]).then(async taxon => {
-                                abundance.taxon = taxon.rows[0];
 
-                                let family_id = null;
-                                if(abundance.taxon.genus_id) {
-                                    sql = `SELECT family_id, genus_name FROM tbl_taxa_tree_genera WHERE genus_id=$1`;
-                                    await pgClient.query(sql, [abundance.taxon.genus_id]).then(genus => {
-                                        family_id = genus.rows[0].family_id;
-                                        abundance.taxon.genus = {
-                                            genus_id: abundance.taxon.genus_id,
-                                            genus_name: genus.rows[0].genus_name
-                                        };
+                            //Fetch taxon data if we don't already have it
+                            let taxon = this.getTaxonFromLocalLookup(site, abundance.taxon_id)
+                            if(taxon == null) {
+                                let taxon_id = abundance.taxon_id;
+                                await pgClient.query('SELECT taxon_id,author_id,genus_id,species FROM tbl_taxa_tree_master WHERE taxon_id=$1', [taxon_id]).then(async taxonData => {
+                                    //abundance.taxon = taxonData.rows[0];
+                                    let taxon = taxonData.rows[0];
+
+                                    let family_id = null;
+                                    if(taxon.genus_id) {
+                                        sql = `SELECT family_id, genus_name FROM tbl_taxa_tree_genera WHERE genus_id=$1`;
+                                        await pgClient.query(sql, [taxon.genus_id]).then(genus => {
+                                            family_id = genus.rows[0].family_id;
+                                            taxon.genus = {
+                                                genus_id: taxon.genus_id,
+                                                genus_name: genus.rows[0].genus_name
+                                            };
+                                        });
+                                    }
+                                    
+                                    let order_id = null;
+                                    if(family_id) {
+                                        sql = `SELECT family_name, order_id FROM tbl_taxa_tree_families WHERE family_id=$1`;
+                                        await pgClient.query(sql, [family_id]).then(fam => {
+                                            order_id = fam.rows[0].order_id;
+                                            taxon.family = {
+                                                family_id: family_id,
+                                                family_name: fam.rows[0].family_name
+                                            };
+                                        });
+                                    }
+                                    
+                                    if(order_id) {
+                                        sql = `SELECT order_name, record_type_id FROM tbl_taxa_tree_orders WHERE order_id=$1`;
+                                        await pgClient.query(sql, [order_id]).then(order => {
+                                            taxon.order = {
+                                                order_id: order_id,
+                                                order_name: order.rows[0].order_name,
+                                                record_type_id: order.rows[0].record_type_id
+                                            };
+                                        });
+                                    }
+                                    
+                                    if(taxon.author_id) {
+                                        await pgClient.query('SELECT * FROM tbl_taxa_tree_authors WHERE author_id=$1', [taxon.author_id]).then(taxa_author => {
+                                            taxon.author = taxa_author.rows[0];
+                                            delete taxon.author_id;
+                                        });
+                                    }
+                                    
+                                    sql = `
+                                    SELECT *
+                                    FROM tbl_taxa_common_names
+                                    LEFT JOIN tbl_languages ON tbl_taxa_common_names.language_id = tbl_languages.language_id
+                                    WHERE taxon_id=$1
+                                    `;
+                                    await pgClient.query(sql, [taxon_id]).then(commonNames => {
+                                        taxon.common_names = commonNames.rows;
                                     });
-                                }
-                                
-                                let order_id = null;
-                                if(family_id) {
-                                    sql = `SELECT family_name, order_id FROM tbl_taxa_tree_families WHERE family_id=$1`;
-                                    await pgClient.query(sql, [family_id]).then(fam => {
-                                        order_id = fam.rows[0].order_id;
-                                        abundance.taxon.family = {
-                                            family_id: family_id,
-                                            family_name: fam.rows[0].family_name
-                                        };
+
+                                    await pgClient.query('SELECT measured_attribute_id,attribute_measure,attribute_type,attribute_units,data FROM tbl_taxa_measured_attributes WHERE taxon_id=$1', [abundance.taxon_id]).then(measuredAttr => {
+                                        taxon.measured_attributes = measuredAttr.rows;
                                     });
-                                }
-                                
-                                if(order_id) {
-                                    sql = `SELECT order_name, record_type_id FROM tbl_taxa_tree_orders WHERE order_id=$1`;
-                                    await pgClient.query(sql, [order_id]).then(order => {
-                                        abundance.taxon.order = {
-                                            order_id: order_id,
-                                            order_name: order.rows[0].order_name,
-                                            record_type_id: order.rows[0].record_type_id
-                                        };
+
+                                    await pgClient.query('SELECT * FROM tbl_taxonomy_notes WHERE taxon_id=$1', [taxon_id]).then(taxNotes => {
+                                        taxon.taxonomy_notes = taxNotes.rows;
                                     });
-                                }
-                                
-                                if(abundance.taxon.author_id) {
-                                    await pgClient.query('SELECT * FROM tbl_taxa_tree_authors WHERE author_id=$1', [abundance.taxon.author_id]).then(taxa_author => {
-                                        abundance.taxon.author = taxa_author.rows[0];
-                                        delete abundance.taxon.author_id;
+
+                                    await pgClient.query('SELECT * FROM tbl_text_biology WHERE taxon_id=$1', [taxon_id]).then(textBio => {
+                                        taxon.text_biology = textBio.rows;
                                     });
-                                }
+                                    
+                                    await pgClient.query('SELECT * FROM tbl_text_distribution WHERE taxon_id=$1', [taxon_id]).then(textDist => {
+                                        taxon.text_distribution = textDist.rows;
+                                    });
+
+                                    sql = `
+                                    SELECT * FROM tbl_ecocodes
+                                    LEFT JOIN tbl_ecocode_definitions ON tbl_ecocodes.ecocode_definition_id = tbl_ecocode_definitions.ecocode_definition_id
+                                    WHERE tbl_ecocodes.taxon_id=$1
+                                    `;
+                                    await pgClient.query(sql, [taxon_id]).then(ecoCodes => {
+                                        taxon.ecocodes = ecoCodes.rows;
+                                    });
+
+                                    sql = `
+                                    SELECT * FROM tbl_taxa_seasonality
+                                    LEFT JOIN tbl_seasons ON tbl_taxa_seasonality.season_id = tbl_seasons.season_id
+                                    LEFT JOIN tbl_activity_types ON tbl_taxa_seasonality.activity_type_id = tbl_activity_types.activity_type_id
+                                    WHERE tbl_taxa_seasonality.taxon_id=$1
+                                    `;
+                                    await pgClient.query(sql, [taxon_id]).then(seasonality => {
+                                        taxon.seasonality = seasonality.rows;
+                                    });
                                 
-
-                                sql = `
-                                SELECT *
-                                FROM tbl_taxa_common_names
-                                LEFT JOIN tbl_languages ON tbl_taxa_common_names.language_id = tbl_languages.language_id
-                                WHERE taxon_id=$1
-                                `;
-                                await pgClient.query(sql, [abundance.taxon_id]).then(commonNames => {
-                                    abundance.taxon.common_names = commonNames.rows;
+                                    this.addTaxonToLocalLookup(site, taxon);
                                 });
 
-                                await pgClient.query('SELECT measured_attribute_id,attribute_measure,attribute_type,attribute_units,data FROM tbl_taxa_measured_attributes WHERE taxon_id=$1', [abundance.taxon_id]).then(measuredAttr => {
-                                    abundance.taxon.measured_attributes = measuredAttr.rows;
-                                });
-
-                                await pgClient.query('SELECT * FROM tbl_taxonomy_notes WHERE taxon_id=$1', [abundance.taxon_id]).then(taxNotes => {
-                                    abundance.taxon.taxonomy_notes = taxNotes.rows;
-                                });
-
-                                await pgClient.query('SELECT * FROM tbl_text_biology WHERE taxon_id=$1', [abundance.taxon_id]).then(textBio => {
-                                    abundance.taxon.text_biology = textBio.rows;
-                                });
-                                
-                                await pgClient.query('SELECT * FROM tbl_text_distribution WHERE taxon_id=$1', [abundance.taxon_id]).then(textDist => {
-                                    abundance.taxon.text_distribution = textDist.rows;
-                                });
-
-                                sql = `
-                                SELECT * FROM tbl_ecocodes
-                                LEFT JOIN tbl_ecocode_definitions ON tbl_ecocodes.ecocode_definition_id = tbl_ecocode_definitions.ecocode_definition_id
-                                WHERE tbl_ecocodes.taxon_id=$1
-                                `;
-                                await pgClient.query(sql, [abundance.taxon_id]).then(ecoCodes => {
-                                    abundance.taxon.ecocodes = ecoCodes.rows;
-                                });
-
-                                sql = `
-                                SELECT * FROM tbl_taxa_seasonality
-                                LEFT JOIN tbl_seasons ON tbl_taxa_seasonality.season_id = tbl_seasons.season_id
-                                LEFT JOIN tbl_activity_types ON tbl_taxa_seasonality.activity_type_id = tbl_activity_types.activity_type_id
-                                WHERE tbl_taxa_seasonality.taxon_id=$1
-                                `;
-                                await pgClient.query(sql, [abundance.taxon_id]).then(seasonality => {
-                                    abundance.taxon.seasonality = seasonality.rows;
-                                });
-                                
-                            });
-
+                            }
                             
 
                         }

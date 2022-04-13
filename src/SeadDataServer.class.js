@@ -12,7 +12,7 @@ const MeasuredValuesModule = require('./Modules/MeasuredValuesModule.class');
 
 
 const appName = "seaddataserver";
-const appVersion = "1.5.3";
+const appVersion = "1.6.0";
 
 class SeadDataServer {
     constructor() {
@@ -49,8 +49,12 @@ class SeadDataServer {
         const mongoPass = encodeURIComponent(process.env.MONGO_PASS);
         this.mongoClient = new MongoClient('mongodb://'+mongoUser+':'+mongoPass+'@'+process.env.MONGO_HOST+':27017/');
         await this.mongoClient.connect();
-        let db = this.mongoClient.db(process.env.MONGO_DB);
-        this.mongoCollection = db.collection('sites');
+        this.mongo = this.mongoClient.db(process.env.MONGO_DB);
+        /*
+        this.mongoSiteCollection = db.collection('sites');
+        this.mongoSampleGroupCollection = db.collection('sample_groups');
+        this.mongoDataGroupCollection = db.collection('data_groups');
+        */
     }
 
     getHashFromString(string) {
@@ -674,11 +678,35 @@ class SeadDataServer {
     async getSiteFromCache(siteId) {
         let site = null;
         if(this.siteCacheStorage == "mongo") {
-            let siteFindResult = await this.mongoCollection.find({
+            let siteFindResult = await this.mongo.collection('sites').find({
                 site_id: parseInt(siteId)
             }).toArray();
-    
-            site = siteFindResult[0];
+            if(siteFindResult.length > 0) {
+                site = siteFindResult[0];
+                let siteSampleGroupsFindResult = await this.mongo.collection('sample_groups').find({
+                    site_id: parseInt(siteId)
+                }).toArray();
+                if(siteSampleGroupsFindResult.length > 0) {
+                    site.sample_groups = siteSampleGroupsFindResult[0].sample_groups;
+                }
+                else {
+                    console.warn("Could not find sample groups for site", siteId);
+                    return false;
+                }
+                
+                let siteDataGroupsFindResult = await this.mongo.collection('data_groups').find({
+                    site_id: parseInt(siteId)
+                }).toArray();
+                if(siteDataGroupsFindResult.length > 0) {
+                    site.data_groups = siteDataGroupsFindResult[0].data_groups;
+                }
+                else {
+                    console.warn("Could not find data groups for site", siteId);
+                    return false;
+                }
+                
+            }
+            
         }
 
         if(this.siteCacheStorage == "file") {
@@ -703,8 +731,28 @@ class SeadDataServer {
 
     async saveSiteToCache(site) {
         if(this.siteCacheStorage == "mongo") {
-            await this.mongoCollection.deleteOne({ site_id: parseInt(site.site_id) });
-            this.mongoCollection.insertOne(site);
+            //Divide site into chunks
+            let sampleGroups = {
+                siteId: site.site_id,
+                sample_groups: site.sample_groups
+            };
+            delete site.sample_groups;
+
+            let dataGroups = {
+                siteId: site.site_id,
+                data_groups: site.data_groups
+            };
+            delete site.data_groups;
+
+            await this.mongo.collection('sites').deleteOne({ site_id: parseInt(site.site_id) });
+            this.mongo.collection('sites').insertOne(site);
+
+            await this.mongo.collection('sample_groups').deleteOne({ site_id: parseInt(site.site_id) });
+            this.mongo.collection('sample_groups').insertOne(sampleGroups);
+
+            await this.mongo.collection('data_groups').deleteOne({ site_id: parseInt(site.site_id) });
+            this.mongo.collection('data_groups').insertOne(dataGroups);
+            
         }
         if(this.siteCacheStorage == "file") {
             fs.writeFileSync("site_cache/site_"+site.site_id+".json", JSON.stringify(site, null, 2));

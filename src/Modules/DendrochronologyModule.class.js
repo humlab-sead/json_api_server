@@ -174,6 +174,14 @@ class DendrochronologyModule {
         data = await pgClient.query(sql, [siteId]);
         let datingRows = data.rows;
         site.dating = data.rows;
+
+        //Grab data in tbl_dating_uncertainty by dating_uncertainty_id
+        sql = `SELECT * FROM tbl_dating_uncertainty WHERE dating_uncertainty_id=$1`;
+        site.dating.forEach(datingRow => {
+            datingRow.dating_uncertainty_id
+        });
+
+
         this.app.releaseDbConnection(pgClient);
 
         let dataGroups = this.dl.dbRowsToDataGroups(measurementRows, datingRows);
