@@ -39,7 +39,9 @@ class AbundanceModule {
         if(typeof site.lookup_tables.taxa == "undefined") {
             site.lookup_tables.taxa = [];
         }
-        site.lookup_tables.taxa.push(taxon);
+        if(this.getTaxonFromLocalLookup(site, taxon.taxon_id) == null) {
+            site.lookup_tables.taxa.push(taxon);
+        }
     }
 
     getAbundanceElementFromLocalLookup(site, abundance_element_id) {
@@ -58,26 +60,31 @@ class AbundanceModule {
         if(typeof site.lookup_tables.abundance_elements == "undefined") {
             site.lookup_tables.abundance_elements = [];
         }
-        site.lookup_tables.abundance_elements.push(abundance_element);
+        if(this.getAbundanceElementFromLocalLookup(site, abundance_element.abundance_element_id) == null) {
+            site.lookup_tables.abundance_elements.push(abundance_element);
+        }
     }
 
-    getAbundanceModificationFromLocalLookup(site, abundance_modification_id) {
+    getAbundanceModificationTypeFromLocalLookup(site, modification_type_id) {
         if(typeof site.lookup_tables.abundance_modifications == "undefined") {
             site.lookup_tables.abundance_modifications = [];
         }
         for(let key in site.lookup_tables.abundance_modifications) {
-            if(site.lookup_tables.abundance_modifications[key].abundance_modification_id == abundance_modification_id) {
+            if(site.lookup_tables.abundance_modifications[key].modification_type_id == modification_type_id) {
                 return site.lookup_tables.abundance_modifications[key];
             }
         }
         return null;
     }
 
-    addAbundanceModificationToLocalLookup(site, abundance_element) {
+    addAbundanceModificationTypeToLocalLookup(site, abundance_element) {
         if(typeof site.lookup_tables.abundance_modifications == "undefined") {
             site.lookup_tables.abundance_modifications = [];
         }
-        site.lookup_tables.abundance_modifications.push(abundance_element);
+        //Final check to see that it's really not registered already
+        if(this.getAbundanceModificationTypeFromLocalLookup(site, abundance_element.modification_type_id) == null) {
+            site.lookup_tables.abundance_modifications.push(abundance_element);
+        }
     }
 
     async fetchSiteData(site) {
@@ -103,6 +110,7 @@ class AbundanceModule {
 
                         for(let key in analysisEntity.abundances) {
                             let abundance = analysisEntity.abundances[key];
+
                             //Fetch abundance identification levels
                             let sql = `
                             SELECT
@@ -122,6 +130,7 @@ class AbundanceModule {
                             let abundanceElement = this.getAbundanceElementFromLocalLookup(site, abundance.abundance_element_id);
                             if(abundanceElement == null) {
                                 //Fetch abundance elements
+                                /*
                                 sql = `
                                 SELECT
                                 tbl_abundance_elements.element_name,
@@ -132,6 +141,7 @@ class AbundanceModule {
                                 LEFT JOIN tbl_record_types ON tbl_abundance_elements.record_type_id = tbl_record_types.record_type_id
                                 WHERE abundance_element_id=$1
                                 `;
+                                */
                                 await pgClient.query('SELECT * FROM tbl_abundance_elements WHERE abundance_element_id=$1', [abundance.abundance_element_id]).then(abundanceElements => {
                                     this.addAbundanceElementToLocalLookup(site, abundanceElements.rows[0]);
                                 });
@@ -143,11 +153,13 @@ class AbundanceModule {
 
                             for(let key in abundance.modifications) {
                                 let am = abundance.modifications[key];
-                                let abundanceModification = this.getAbundanceModificationFromLocalLookup(site, am.abundance_modification_id);
+                                let abundanceModification = this.getAbundanceModificationTypeFromLocalLookup(site, am.modification_type_id);
                                 if(abundanceModification == null) {
                                     sql = "SELECT * FROM tbl_modification_types WHERE modification_type_id=$1";
-                                    abundanceModification = await pgClient.query(sql, [am.modification_type_id]);
-                                    this.addAbundanceModificationToLocalLookup(site, abundanceModification);
+                                    let abundanceModificationResult = await pgClient.query(sql, [am.modification_type_id]);
+                                    if(abundanceModificationResult.rows.length > 0) {
+                                        this.addAbundanceModificationTypeToLocalLookup(site, abundanceModificationResult.rows[0]);
+                                    }
                                 }
                             }
 
