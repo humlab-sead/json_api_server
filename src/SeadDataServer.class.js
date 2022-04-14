@@ -12,7 +12,7 @@ const MeasuredValuesModule = require('./Modules/MeasuredValuesModule.class');
 
 
 const appName = "seaddataserver";
-const appVersion = "1.8.0";
+const appVersion = "1.8.1";
 
 class SeadDataServer {
     constructor() {
@@ -148,12 +148,26 @@ class SeadDataServer {
         console.log("Searching in", search, "for the value", value);
         let siteIds = [];
         let query = {}
+
+        //If search value is parseable as an integer, do that
+        if(!isNaN(parseInt(value))) {
+            value = parseInt(value);
+        }
+
+        //If search value is parseable as a float, do that
+        if(!isNaN(parseFloat(value))) {
+            value = parseFloat(value);
+        }
+
         query[search] = value;
 
         let res = await this.mongo.collection('sites').find(query);
         let sites = await res.toArray();
         sites.forEach(site => {
-            siteIds.push(site.site_id);
+            siteIds.push({
+                sitie_id: site.site_id,
+                link: "https://api.supersead.humlab.umu.se/site/"+site.site_id
+            });
         });
         return siteIds;
     }
