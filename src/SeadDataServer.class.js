@@ -12,7 +12,7 @@ const MeasuredValuesModule = require('./Modules/MeasuredValuesModule.class');
 
 
 const appName = "seaddataserver";
-const appVersion = "1.7.3";
+const appVersion = "1.8.0";
 
 class SeadDataServer {
     constructor() {
@@ -50,11 +50,6 @@ class SeadDataServer {
         this.mongoClient = new MongoClient('mongodb://'+mongoUser+':'+mongoPass+'@'+process.env.MONGO_HOST+':27017/');
         await this.mongoClient.connect();
         this.mongo = this.mongoClient.db(process.env.MONGO_DB);
-        /*
-        this.mongoSiteCollection = db.collection('sites');
-        this.mongoSampleGroupCollection = db.collection('sample_groups');
-        this.mongoDataGroupCollection = db.collection('data_groups');
-        */
     }
 
     getHashFromString(string) {
@@ -71,6 +66,12 @@ class SeadDataServer {
                 version: appVersion
             }
             res.send(JSON.stringify(versionInfo, null, 2));
+        });
+
+        this.expressApp.get('/search/:search/value/:value', async (req, res) => {
+            let siteIds = await this.searchSites(req.params.search, req.params.value);
+            res.header("Content-type", "application/json");
+            res.send(JSON.stringify(siteIds, null, 2));
         });
 
         this.expressApp.get('/site/:siteId', async (req, res) => {
@@ -143,7 +144,22 @@ class SeadDataServer {
         });
     }
 
+    async searchSites(search, value) {
+        console.log("Searching in", search, "for the value", value);
+        let siteIds = [];
+        let query = {}
+        query[search] = value;
+
+        let res = await this.mongo.collection('sites').find(query);
+        let sites = await res.toArray();
+        sites.forEach(site => {
+            siteIds.push(site.site_id);
+        });
+        return siteIds;
+    }
+
     async flushSiteCache() {
+        //FIXME: This function assumes file storage
         console.log("Flushing site cache");
         let files = fs.readdirSync("site_cache");
         for(let key in files) {
@@ -685,37 +701,6 @@ class SeadDataServer {
                 site = siteFindResult[0];
             }
         }
-        /*
-        if(this.siteCacheStorage == "mongo") {
-            let siteFindResult = await this.mongo.collection('sites').find({
-                site_id: parseInt(siteId)
-            }).toArray();
-            if(siteFindResult.length > 0) {
-                site = siteFindResult[0];
-                let siteSampleGroupsFindResult = await this.mongo.collection('sample_groups').find({
-                    site_id: parseInt(siteId)
-                }).toArray();
-                if(siteSampleGroupsFindResult.length > 0) {
-                    site.sample_groups = siteSampleGroupsFindResult[0].sample_groups;
-                }
-                else {
-                    console.warn("Could not find sample groups for site", siteId);
-                    return false;
-                }
-                
-                let siteDataGroupsFindResult = await this.mongo.collection('data_groups').find({
-                    site_id: parseInt(siteId)
-                }).toArray();
-                if(siteDataGroupsFindResult.length > 0) {
-                    site.data_groups = siteDataGroupsFindResult[0].data_groups;
-                }
-                else {
-                    console.warn("Could not find data groups for site", siteId);
-                    return false;
-                }
-            }
-        }
-        */
 
         if(this.siteCacheStorage == "file") {
             try {
@@ -741,31 +726,6 @@ class SeadDataServer {
         if(this.siteCacheStorage == "mongo") {
             await this.mongo.collection('sites').deleteOne({ site_id: parseInt(site.site_id) });
             this.mongo.collection('sites').insertOne(site);
-
-            /*
-            //Divide site into chunks
-            let sampleGroups = {
-                siteId: site.site_id,
-                sample_groups: site.sample_groups
-            };
-            delete site.sample_groups;
-
-            let dataGroups = {
-                siteId: site.site_id,
-                data_groups: site.data_groups
-            };
-            delete site.data_groups;
-
-            await this.mongo.collection('sites').deleteOne({ site_id: parseInt(site.site_id) });
-            this.mongo.collection('sites').insertOne(site);
-
-            await this.mongo.collection('sample_groups').deleteOne({ site_id: parseInt(site.site_id) });
-            this.mongo.collection('sample_groups').insertOne(sampleGroups);
-
-            await this.mongo.collection('data_groups').deleteOne({ site_id: parseInt(site.site_id) });
-            this.mongo.collection('data_groups').insertOne(dataGroups);
-            */
-            
         }
         if(this.siteCacheStorage == "file") {
             fs.writeFileSync("site_cache/site_"+site.site_id+".json", JSON.stringify(site, null, 2));
