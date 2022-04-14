@@ -165,7 +165,7 @@ class SeadDataServer {
         let sites = await res.toArray();
         sites.forEach(site => {
             siteIds.push({
-                sitie_id: site.site_id,
+                site_id: site.site_id,
                 link: "https://api.supersead.humlab.umu.se/site/"+site.site_id
             });
         });
