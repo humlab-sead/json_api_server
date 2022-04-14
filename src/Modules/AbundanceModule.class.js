@@ -143,7 +143,9 @@ class AbundanceModule {
                                 `;
                                 */
                                 await pgClient.query('SELECT * FROM tbl_abundance_elements WHERE abundance_element_id=$1', [abundance.abundance_element_id]).then(abundanceElements => {
-                                    this.addAbundanceElementToLocalLookup(site, abundanceElements.rows[0]);
+                                    if(abundanceElements.rows.length > 0) {
+                                        this.addAbundanceElementToLocalLookup(site, abundanceElements.rows[0]);
+                                    }
                                 });
                             }
 
