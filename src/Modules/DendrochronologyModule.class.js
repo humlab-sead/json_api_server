@@ -100,6 +100,11 @@ class DendrochronologyModule {
         }
         site.data_groups = site.data_groups.concat(measurements);
         site.lookup_tables.dendro = await this.fetchDendroLookup();
+        if(typeof site.lookup_tables.dating_uncertainty == "undefined") {
+            site.lookup_tables.dating_uncertainty = [];
+        }
+        site.lookup_tables.dating_uncertainty = await this.fetchDatingUncertainty(site);
+        
 
         return site;
     }
@@ -154,6 +159,8 @@ class DendrochronologyModule {
         dd.age_younger AS younger,
         dd.error_plus AS plus,
         dd.error_minus AS minus,
+        dd.dating_uncertainty_id,
+        ddn.note AS dating_note,
         eu.error_uncertainty_type AS error_uncertainty,
         soq.season_or_qualifier_type AS season,
         dl.dendro_lookup_id,
@@ -167,26 +174,64 @@ class DendrochronologyModule {
         LEFT JOIN tbl_error_uncertainties eu ON eu.error_uncertainty_id = dd.error_uncertainty_id
         LEFT JOIN tbl_dendro_lookup dl ON dd.dendro_lookup_id = dl.dendro_lookup_id
         LEFT JOIN tbl_sample_groups sg ON sg.sample_group_id = ps.sample_group_id
+        LEFT JOIN tbl_dendro_date_notes ddn ON ddn.dendro_date_id = dd.dendro_date_id
         LEFT JOIN tbl_sites ON tbl_sites.site_id = sg.site_id
         WHERE tbl_sites.site_id=$1
         `;
-        //data = await pgClient.query('SELECT * FROM postgrest_api.qse_dendro_dating2 WHERE site_id=$1', [siteId]);
         data = await pgClient.query(sql, [siteId]);
         let datingRows = data.rows;
         site.dating = data.rows;
 
-        //Grab data in tbl_dating_uncertainty by dating_uncertainty_id
-        sql = `SELECT * FROM tbl_dating_uncertainty WHERE dating_uncertainty_id=$1`;
+        /*
+        sql = `SELECT * FROM tbl_dendro_date_notes WHERE dendro_date_id=$1`;
         site.dating.forEach(datingRow => {
             datingRow.dating_uncertainty_id
         });
-
+        */
 
         this.app.releaseDbConnection(pgClient);
 
         let dataGroups = this.dl.dbRowsToDataGroups(measurementRows, datingRows);
 
         return dataGroups;
+    }
+
+    async fetchDatingNotes(site) {
+
+    }
+
+    async fetchDatingUncertainty(site) {
+        //Grab data in tbl_dating_uncertainty by dating_uncertainty_id
+        let datingUncertaintyIds = [];
+        site.data_groups.forEach(dg => {
+            dg.data_points.forEach(dp => {
+                if(dp.id == 134 || dp.id == 137) {
+                    if(parseInt(dp.value.dating_uncertainty)) {
+                        datingUncertaintyIds.push(dp.value.dating_uncertainty);
+                    }
+                }
+            });
+        });
+
+        //Make them unique
+        datingUncertaintyIds = datingUncertaintyIds.filter((value, index, self) => {
+            return self.indexOf(value) === index;
+        });
+
+        let pgClient = await this.app.getDbConnection();
+        if(!pgClient) {
+            return false;
+        }
+
+        let datingUncertaintyLookupTable = [];
+        let sql = `SELECT * FROM tbl_dating_uncertainty WHERE dating_uncertainty_id=$1`;
+        for(let key in datingUncertaintyIds) {
+            let datingUncertaintyRows = await pgClient.query(sql, [datingUncertaintyIds[key]]);
+            datingUncertaintyLookupTable.push(datingUncertaintyRows.rows[0]);
+        }
+        this.app.releaseDbConnection(pgClient);
+
+        return datingUncertaintyLookupTable;
     }
 
     async getMeasurementsForAllSites() {

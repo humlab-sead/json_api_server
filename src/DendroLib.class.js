@@ -161,8 +161,10 @@ class DendroLib {
                             younger: m2.younger,
                             plus: m2.plus,
                             minus: m2.minus,
+                            dating_uncertainty: m2.dating_uncertainty_id,
                             error_uncertainty: m2.error_uncertainty,
-                            season: m2.season
+                            season: m2.season,
+                            dating_note: m2.dating_note
                         }
                     });
                 }
