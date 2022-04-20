@@ -104,7 +104,7 @@ class DendrochronologyModule {
             site.lookup_tables.dating_uncertainty = [];
         }
         site.lookup_tables.dating_uncertainty = await this.fetchDatingUncertainty(site);
-        
+        site.lookup_tables.error_uncertainty = await this.fetchErrorUncertainty(site);
 
         return site;
     }
@@ -232,6 +232,17 @@ class DendrochronologyModule {
         this.app.releaseDbConnection(pgClient);
 
         return datingUncertaintyLookupTable;
+    }
+
+    async fetchErrorUncertainty(site) {
+        let pgClient = await this.app.getDbConnection();
+        if(!pgClient) {
+            return false;
+        }
+        let sql = `SELECT * FROM tbl_error_uncertainties`;
+        let errorUncertaintyData = await pgClient.query(sql);
+        this.app.releaseDbConnection(pgClient);
+        return errorUncertaintyData.rows;
     }
 
     async getMeasurementsForAllSites() {
