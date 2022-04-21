@@ -159,8 +159,23 @@ class SeadDataServer {
             value = parseFloat(value);
         }
 
-        query[search] = value;
+        let findMode = "$eq";
+        if(value.toString().substring(0, 4) == "not:") {
+            findMode = "$ne";
+            value = value.substring(4);
+        }
+        if(value.toString().substring(0, 3) == "gt:") {
+            findMode = "$gt";
+            value = value.substring(3);
+        }
+        if(value.toString().substring(0, 3) == "lt:") {
+            findMode = "$lt";
+            value = value.substring(3);
+        }
 
+        query[search] = value;
+        query = "{ \""+search+"\": { \""+findMode+"\": "+value+" } }";
+        query = JSON.parse(query);
         let res = await this.mongo.collection('sites').find(query);
         let sites = await res.toArray();
         sites.forEach(site => {
