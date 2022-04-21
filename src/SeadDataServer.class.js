@@ -12,7 +12,7 @@ const MeasuredValuesModule = require('./Modules/MeasuredValuesModule.class');
 
 
 const appName = "seaddataserver";
-const appVersion = "1.11.0";
+const appVersion = "1.11.1";
 
 class SeadDataServer {
     constructor() {
@@ -148,17 +148,7 @@ class SeadDataServer {
         console.log("Searching in", search, "for the value", value);
         let siteIds = [];
         let query = {}
-
-        //If search value is parseable as an integer, do that
-        if(!isNaN(parseInt(value))) {
-            value = parseInt(value);
-        }
-
-        //If search value is parseable as a float, do that
-        if(!isNaN(parseFloat(value))) {
-            value = parseFloat(value);
-        }
-
+        
         let findMode = "$eq";
         if(value.toString().substring(0, 4) == "not:") {
             findMode = "$ne";
@@ -173,7 +163,16 @@ class SeadDataServer {
             value = value.substring(3);
         }
 
-        query[search] = value;
+        if(!isNaN(parseInt(value))) {
+            value = parseInt(value);
+        }
+        else if(!isNaN(parseFloat(value))) {
+            value = parseFloat(value);
+        }
+        else {
+            value = "\""+value.toString()+"\"";
+        }
+
         query = "{ \""+search+"\": { \""+findMode+"\": "+value+" } }";
         query = JSON.parse(query);
         let res = await this.mongo.collection('sites').find(query);
