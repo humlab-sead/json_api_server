@@ -12,7 +12,7 @@ const MeasuredValuesModule = require('./Modules/MeasuredValuesModule.class');
 
 
 const appName = "seaddataserver";
-const appVersion = "1.11.1";
+const appVersion = "1.12.0";
 
 class SeadDataServer {
     constructor() {
@@ -710,6 +710,18 @@ class SeadDataServer {
                 let sampleDimensions = await pgClient.query(sql, [sample.physical_sample_id]);
                 sample.dimensions = sampleDimensions.rows;
                 
+                //If we have dimensions, then we need the units for these dimensions
+                for(let key in sample.dimensions) {
+                    let unit = this.getUnitFromLocalLookup(site, sample.dimensions[key].unit_id);
+                    if(!unit) {
+                        this.fetchUnit(sample.dimensions[key].unit_id).then(unit => {
+                            if(unit) {
+                                this.addUnitToLocalLookup(site, unit);
+                            }
+                        });
+                    }
+                }
+
             }
 
         }
@@ -717,6 +729,48 @@ class SeadDataServer {
         this.releaseDbConnection(pgClient);
 
         return site;
+    }
+
+    async fetchUnit(unit_id) {
+        let pgClient = await this.getDbConnection();
+        if(!pgClient) {
+            return false;
+        }
+
+        let unit = null;
+
+        let sql = `SELECT *
+        FROM tbl_units
+        WHERE unit_id=$1
+        `;
+        let unitRes = await pgClient.query(sql, [unit_id]);
+        this.releaseDbConnection(pgClient);
+        if(unitRes.rows.length > 0) {
+            unit = unitRes.rows[0];
+        }
+        
+        return unit;
+    }
+
+    getUnitFromLocalLookup(site, unit_id) {
+        if(typeof site.lookup_tables.units == "undefined") {
+            site.lookup_tables.units = [];
+        }
+        for(let key in site.lookup_tables.units) {
+            if(site.lookup_tables.units[key].unit_id == unit_id) {
+                return site.lookup_tables.units[key];
+            }
+        }
+        return null;
+    }
+
+    addUnitToLocalLookup(site, unit) {
+        if(typeof site.lookup_tables.units == "undefined") {
+            site.lookup_tables.units = [];
+        }
+        if(this.getUnitFromLocalLookup(site, unit.unit_id) == null) {
+            site.lookup_tables.units.push(unit);
+        }
     }
 
     async getSiteFromCache(siteId) {
