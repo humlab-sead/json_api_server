@@ -18,7 +18,7 @@ class SeadDataServer {
     constructor() {
         this.siteCacheStorage = typeof(process.env.SITE_CACHE_STORAGE) != "undefined" ? process.env.SITE_CACHE_STORAGE : "file";
         this.useSiteCaching = typeof(process.env.USE_SITE_CACHE) != "undefined" ? process.env.USE_SITE_CACHE == "true" : true;
-        this.useStaticDbConnection = typeof(process.env.USE_SINGLE_PERSISTANT_DBCON) != "undefined" ? process.env.USE_SINGLE_PERSISTANT_DBCON == "true" : false;
+        this.useStaticDbConnection = typeof(process.env.USE_SINGLE_PERSISTENT_DBCON) != "undefined" ? process.env.USE_SINGLE_PERSISTENT_DBCON == "true" : false;
         this.staticDbConnection = null;
         console.log("Starting up SEAD Data Server "+appVersion);
         if(this.useSiteCaching) {
