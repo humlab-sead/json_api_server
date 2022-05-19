@@ -152,13 +152,14 @@ class SeadJsonServer {
                 return;
             }
 
-            let taxon = await this.fetchTaxon(taxonId);
+            let taxon = await this.getTaxon(taxonId);
 
+            res.header("Content-type", "application/json");
             res.send(JSON.stringify(taxon, null, 2));
         });
     }
 
-    async fetchTaxon(taxonId) {
+    async getTaxon(taxonId) {
         let taxon = null;
         if(this.useTaxonCaching) {
             taxon = await this.getTaxonFromCache(taxonId);
