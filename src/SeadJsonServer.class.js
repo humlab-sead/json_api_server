@@ -12,7 +12,7 @@ const res = require('express/lib/response');
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.15.0";
+const appVersion = "1.15.1";
 
 class SeadJsonServer {
     constructor() {
@@ -159,7 +159,7 @@ class SeadJsonServer {
         });
     }
 
-    async getTaxon(taxonId) {
+    async getTaxon(taxonId, verbose = true) {
         if(verbose) console.log("Request for taxon", taxonId);
         let taxon = null;
         if(this.useTaxonCaching) {
