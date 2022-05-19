@@ -1,5 +1,4 @@
 const fs = require('fs');
-const { unlink } = require('fs/promises');
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
@@ -9,21 +8,23 @@ const { MongoClient } = require('mongodb');
 const DendrochronologyModule = require('./Modules/DendrochronologyModule.class');
 const AbundanceModule = require('./Modules/AbundanceModule.class');
 const MeasuredValuesModule = require('./Modules/MeasuredValuesModule.class');
+const res = require('express/lib/response');
 
 
-const appName = "seaddataserver";
-const appVersion = "1.12.0";
+const appName = "sead-json-api-server";
+const appVersion = "1.13.0";
 
-class SeadDataServer {
+class SeadJsonServer {
     constructor() {
-        this.siteCacheStorage = typeof(process.env.SITE_CACHE_STORAGE) != "undefined" ? process.env.SITE_CACHE_STORAGE : "file";
+        this.cacheStorageMethod = typeof(process.env.CACHE_STORAGE_METHOD) != "undefined" ? process.env.CACHE_STORAGE_METHOD : "file";
         this.useSiteCaching = typeof(process.env.USE_SITE_CACHE) != "undefined" ? process.env.USE_SITE_CACHE == "true" : true;
+        this.useTaxonCaching = typeof(process.env.USE_TAXON_CACHE) != "undefined" ? process.env.USE_TAXON_CACHE == "true" : true;
         this.useStaticDbConnection = typeof(process.env.USE_SINGLE_PERSISTENT_DBCON) != "undefined" ? process.env.USE_SINGLE_PERSISTENT_DBCON == "true" : false;
         this.staticDbConnection = null;
         console.log("Starting up SEAD Data Server "+appVersion);
         if(this.useSiteCaching) {
             console.log("Site cache is enabled")
-            console.log("Using "+this.siteCacheStorage+" for site cache storage");
+            console.log("Using "+this.cacheStorageMethod+" for site cache storage");
         }
         this.expressApp = express();
         this.expressApp.use(cors());
@@ -62,7 +63,7 @@ class SeadDataServer {
     setupEndpoints() {
         this.expressApp.get('/version', async (req, res) => {
             let versionInfo = {
-                app: "Sead Data Server",
+                app: "Sead JSON Server",
                 version: appVersion
             }
             res.send(JSON.stringify(versionInfo, null, 2));
@@ -142,6 +143,169 @@ class SeadDataServer {
         
             res.send(dataset);
         });
+
+        this.expressApp.get('/taxon/:taxonId', async (req, res) => {
+            let taxonId = parseInt(req.params.taxonId);
+            if(!taxonId) {
+                res.statusCode(400);
+                res.send("Bad request");
+                return;
+            }
+
+            let taxon = await this.fetchTaxon(taxonId);
+
+            res.send(JSON.stringify(taxon, null, 2));
+        });
+    }
+
+    async fetchTaxon(taxonId) {
+        let taxon = null;
+        if(this.useTaxonCaching) {
+            taxon = await this.getTaxonFromCache(taxonId);
+            if(taxon) {
+                return taxon;
+            }
+        }
+        
+        let pgClient = await this.getDbConnection();
+        if(!pgClient) {
+            return false;
+        }
+
+        let rows = await this.fetchFromTable("tbl_taxa_tree_master", "taxon_id", taxonId);
+        taxon = rows[0];
+
+        taxon.api_source = appName+"-"+appVersion;
+
+        //Fetch ecocodes
+        taxon.ecocodes = await this.fetchFromTable("tbl_ecocodes", "taxon_id", taxonId);
+
+        for(let key in taxon.ecocodes) {
+            let ecocode = taxon.ecocodes[key];
+
+            rows = await this.fetchFromTable("tbl_ecocode_definitions", "ecocode_definition_id", ecocode.ecocode_definition_id);
+            ecocode.definition = rows[0];
+        }
+
+        //tbl_ecocode_groups
+        for(let key in taxon.ecocodes) {
+            taxon.ecocodes[key].definition.ecocode_group = await this.fetchFromTable("tbl_ecocode_groups", "ecocode_group_id", taxon.ecocodes[key].definition.ecocode_group_id);
+        }
+
+        //tbl_taxa_images
+        taxon.images = await this.fetchFromTable("tbl_taxa_images", "taxon_id", taxonId);
+
+
+        taxon.measured_attributes = await this.fetchFromTable("tbl_taxa_measured_attributes", "taxon_id", taxonId);
+
+        let res = await pgClient.query('SELECT tbl_taxa_common_names.*, tbl_languages.language_name_english FROM tbl_taxa_common_names left join tbl_languages on tbl_taxa_common_names.language_id=tbl_languages.language_id where taxon_id=$1', [taxonId]);
+        taxon.common_names = res.rows;
+
+        if(parseInt(taxon.author_id)) {
+            taxon.taxa_tree_authors = await this.fetchFromTable("tbl_taxa_tree_authors", "author_id", taxon.author_id);
+        }
+        
+        taxon.taxa_synonyms = await this.fetchFromTable("tbl_taxa_synonyms", "taxon_id", taxonId);
+        
+        //tbl_taxa_tree_families
+        taxon.taxa_tree_families = [];
+        for(let key in taxon.taxa_synonyms) {
+            rows = await this.fetchFromTable("tbl_taxa_tree_families", "family_id", taxon.taxa_synonyms[key].family_id)
+            taxon.taxa_tree_families.push(rows[0]);
+        }
+        
+        //tbl_taxa_tree_orders
+        taxon.taxa_tree_orders = [];
+        for(let key in taxon.tbl_taxa_tree_families) {
+            rows = await this.fetchFromTable("tbl_taxa_tree_orders", "order_id", taxon.tbl_taxa_tree_families[key].order_id)
+            taxon.taxa_tree_orders.push(rows[0]);
+        }
+
+        //tbl_taxa_seasonality
+        taxon.taxa_seasonality = await this.fetchFromTable("tbl_taxa_seasonality", "taxon_id", taxonId);
+
+        //tbl_taxa_reference_specimens
+        taxon.taxa_reference_specimens = await this.fetchFromTable("tbl_taxa_reference_specimens", "taxon_id", taxonId);
+
+        //tbl_activity_types
+        for(let key in taxon.taxa_seasonality) {
+            taxon.taxa_seasonality[key].activity_type = await this.fetchFromTable("tbl_activity_types", "activity_type_id", taxon.taxa_seasonality[key].activity_type_id);
+        }
+
+        //tbl_seasons && tbl_season_types
+        for(let key in taxon.taxa_seasonality) {
+            //taxon.taxa_seasonality[key].season = await this.fetchFromTable("tbl_seasons", "season_id", taxon.taxa_seasonality[key].season_id);
+
+            const sql = `
+                SELECT 
+                tbl_seasons.*,
+                tbl_season_types.season_type,
+                tbl_season_types.description
+                FROM tbl_seasons 
+                LEFT JOIN tbl_season_types ON tbl_season_types.season_type_id = tbl_seasons.season_type_id
+                WHERE tbl_seasons.season_id=$1
+                `;
+            let res = await pgClient.query(sql, [taxon.taxa_seasonality[key].season_id]);
+            taxon.taxa_seasonality[key].season = res.rows;
+        }
+
+        //tbl_text_distribution
+        taxon.distribution = await this.fetchFromTable("tbl_text_distribution", "taxon_id", taxonId);
+
+        //tbl_text_biology
+        taxon.biology = await this.fetchFromTable("tbl_text_biology", "taxon_id", taxonId);
+
+        //tbl_taxonomy_notes
+        taxon.taxonomy_notes = await this.fetchFromTable("tbl_taxonomy_notes", "taxon_id", taxonId);
+
+        //tbl_taxonomic_order
+        taxon.taxonomic_order = await this.fetchFromTable("tbl_taxonomic_order", "taxon_id", taxonId);
+
+        //tbl_taxonomic_order_systems
+        for(let key in taxon.taxonomic_order) {
+            taxon.taxonomic_order[key].system = await this.fetchFromTable("tbl_taxonomic_order_systems", "taxonomic_order_system_id", taxon.taxonomic_order[key].taxonomic_order_system_id);
+        }
+        
+        //tbl_taxonomic_order_biblio
+        //taxon.taxonomic_order = await this.fetchFromTable("tbl_taxonomic_order_biblio", "taxon_id", taxonId);
+
+        //tbl_text_identification_keys
+        taxon.text_identification_keys = await this.fetchFromTable("tbl_text_identification_keys", "taxon_id", taxonId);
+
+
+        //tbl_species_associations
+        let sql = `SELECT 
+        tbl_species_associations.*,
+        tbl_species_association_types.association_description,
+        tbl_species_association_types.association_type_name
+        FROM tbl_species_associations
+        LEFT JOIN tbl_species_association_types ON tbl_species_association_types.association_type_id = tbl_species_associations.association_type_id
+        WHERE tbl_species_associations.taxon_id=$1
+        `;
+        let speciesAssociationsRes = await pgClient.query(sql, [taxonId]);
+        taxon.species_associations = speciesAssociationsRes.rows;
+
+        //tbl_biblio
+
+        this.releaseDbConnection(pgClient);
+
+        if(this.useTaxonCaching) {
+            //Store in cache
+            this.saveTaxonToCache(taxon);
+        }
+
+        return taxon;
+    }
+
+    async fetchFromTable(table, column, value) {
+        let pgClient = await this.getDbConnection();
+        if(!pgClient) {
+            return false;
+        }
+        const sql = 'SELECT * FROM '+table+' where '+column+'=$1';
+        let res = await pgClient.query(sql, [value]);
+        this.releaseDbConnection(pgClient);
+        return res.rows;
     }
 
     async searchSites(search, value) {
@@ -773,9 +937,50 @@ class SeadDataServer {
         }
     }
 
+    async getTaxonFromCache(taxonId) {
+        let taxon = null;
+        if(this.cacheStorageMethod == "mongo") {
+            let findResult = await this.mongo.collection('taxa').find({
+                taxon_id: parseInt(taxonId)
+            }).toArray();
+            if(findResult.length > 0) {
+                taxon = findResult[0];
+            }
+        }
+
+        if(this.cacheStorageMethod == "file") {
+            try {
+                taxon = fs.readFileSync("taxa_cache/taxon_"+taxonId+".json");
+                if(taxon) {
+                    taxon = JSON.parse(taxon);
+                }
+            }
+            catch(error) {
+                //Nope, no such file
+            }
+        }
+
+        //Check that this cached version of the site was generated by the same server version as we are running
+        //If not, it will be re-generated using the (hopefully) newer version
+        if(taxon && taxon.api_source == appName+"-"+appVersion) {
+            return taxon;
+        }
+        return false;
+    }
+
+    async saveTaxonToCache(taxon) {
+        if(this.cacheStorageMethod == "mongo") {
+            await this.mongo.collection('taxa').deleteOne({ taxon_id: parseInt(taxon.taxon_id) });
+            this.mongo.collection('taxa').insertOne(taxon);
+        }
+        if(this.cacheStorageMethod == "file") {
+            fs.writeFileSync("taxa_cache/taxon_"+taxon.taxon_id+".json", JSON.stringify(taxon, null, 2));
+        }
+    }
+
     async getSiteFromCache(siteId) {
         let site = null;
-        if(this.siteCacheStorage == "mongo") {
+        if(this.cacheStorageMethod == "mongo") {
             let siteFindResult = await this.mongo.collection('sites').find({
                 site_id: parseInt(siteId)
             }).toArray();
@@ -784,7 +989,7 @@ class SeadDataServer {
             }
         }
 
-        if(this.siteCacheStorage == "file") {
+        if(this.cacheStorageMethod == "file") {
             try {
                 site = fs.readFileSync("site_cache/site_"+siteId+".json");
                 if(site) {
@@ -805,11 +1010,11 @@ class SeadDataServer {
     }
 
     async saveSiteToCache(site) {
-        if(this.siteCacheStorage == "mongo") {
+        if(this.cacheStorageMethod == "mongo") {
             await this.mongo.collection('sites').deleteOne({ site_id: parseInt(site.site_id) });
             this.mongo.collection('sites').insertOne(site);
         }
-        if(this.siteCacheStorage == "file") {
+        if(this.cacheStorageMethod == "file") {
             fs.writeFileSync("site_cache/site_"+site.site_id+".json", JSON.stringify(site, null, 2));
         }
     }
@@ -922,4 +1127,4 @@ class SeadDataServer {
     }
 }
 
-module.exports = SeadDataServer;
+module.exports = SeadJsonServer;

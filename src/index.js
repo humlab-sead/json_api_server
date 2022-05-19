@@ -1,12 +1,13 @@
+
 require('dotenv/config');
-const SeadDataServer = require('./SeadDataServer.class')
+const SeadJsonServer = require('./SeadJsonServer.class')
 
 if(typeof process.env.POSTGRES_HOST == "undefined") {
     throw new Error("Didn't find any .env file! Please copy .env-example to .env and fill it out.");
 }
 
 
-const seadDataServer = new SeadDataServer();
+const seadDataServer = new SeadJsonServer();
 
 process.on('SIGTERM', function (code) {
     console.log('SIGTERM received...', code);
