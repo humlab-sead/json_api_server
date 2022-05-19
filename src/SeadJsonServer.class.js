@@ -12,7 +12,7 @@ const res = require('express/lib/response');
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.13.0";
+const appVersion = "1.14.0";
 
 class SeadJsonServer {
     constructor() {
@@ -178,6 +178,15 @@ class SeadJsonServer {
 
         taxon.api_source = appName+"-"+appVersion;
 
+        let generaRes = await this.fetchFromTable("tbl_taxa_tree_genera", "genus_id", taxon.genus_id);
+        taxon.taxa_tree_genera = generaRes[0];
+        
+        let familyRes = await this.fetchFromTable("tbl_taxa_tree_families", "family_id", taxon.taxa_tree_genera.family_id);
+        taxon.taxa_tree_families = familyRes[0];
+
+        let orderRes = await this.fetchFromTable("tbl_taxa_tree_orders", "order_id", taxon.taxa_tree_families.order_id);
+        taxon.taxa_tree_orders = orderRes[0];
+
         //Fetch ecocodes
         taxon.ecocodes = await this.fetchFromTable("tbl_ecocodes", "taxon_id", taxonId);
 
@@ -207,20 +216,6 @@ class SeadJsonServer {
         }
         
         taxon.taxa_synonyms = await this.fetchFromTable("tbl_taxa_synonyms", "taxon_id", taxonId);
-        
-        //tbl_taxa_tree_families
-        taxon.taxa_tree_families = [];
-        for(let key in taxon.taxa_synonyms) {
-            rows = await this.fetchFromTable("tbl_taxa_tree_families", "family_id", taxon.taxa_synonyms[key].family_id)
-            taxon.taxa_tree_families.push(rows[0]);
-        }
-        
-        //tbl_taxa_tree_orders
-        taxon.taxa_tree_orders = [];
-        for(let key in taxon.tbl_taxa_tree_families) {
-            rows = await this.fetchFromTable("tbl_taxa_tree_orders", "order_id", taxon.tbl_taxa_tree_families[key].order_id)
-            taxon.taxa_tree_orders.push(rows[0]);
-        }
 
         //tbl_taxa_seasonality
         taxon.taxa_seasonality = await this.fetchFromTable("tbl_taxa_seasonality", "taxon_id", taxonId);
@@ -235,8 +230,6 @@ class SeadJsonServer {
 
         //tbl_seasons && tbl_season_types
         for(let key in taxon.taxa_seasonality) {
-            //taxon.taxa_seasonality[key].season = await this.fetchFromTable("tbl_seasons", "season_id", taxon.taxa_seasonality[key].season_id);
-
             const sql = `
                 SELECT 
                 tbl_seasons.*,
@@ -252,12 +245,27 @@ class SeadJsonServer {
 
         //tbl_text_distribution
         taxon.distribution = await this.fetchFromTable("tbl_text_distribution", "taxon_id", taxonId);
+        //Fetch biblio for each distribution item
+        for(let key in taxon.distribution) {
+            let biblioRes = await this.fetchFromTable("tbl_biblio", "biblio_id", taxon.distribution[key].biblio_id);
+            taxon.distribution[key].biblio = biblioRes[0];
+        }
 
         //tbl_text_biology
         taxon.biology = await this.fetchFromTable("tbl_text_biology", "taxon_id", taxonId);
+        //Fetch biblio for each biology item
+        for(let key in taxon.biology) {
+            let biblioRes = await this.fetchFromTable("tbl_biblio", "biblio_id", taxon.biology[key].biblio_id);
+            taxon.biology[key].biblio = biblioRes[0];
+        }
 
         //tbl_taxonomy_notes
         taxon.taxonomy_notes = await this.fetchFromTable("tbl_taxonomy_notes", "taxon_id", taxonId);
+        //Fetch biblio for each taxonomy_notes item
+        for(let key in taxon.taxonomy_notes) {
+            let biblioRes = await this.fetchFromTable("tbl_biblio", "biblio_id", taxon.taxonomy_notes[key].biblio_id);
+            taxon.taxonomy_notes[key].biblio = biblioRes[0];
+        }
 
         //tbl_taxonomic_order
         taxon.taxonomic_order = await this.fetchFromTable("tbl_taxonomic_order", "taxon_id", taxonId);
