@@ -12,7 +12,7 @@ const res = require('express/lib/response');
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.15.1";
+const appVersion = "1.15.2";
 
 class SeadJsonServer {
     constructor() {
@@ -215,8 +215,6 @@ class SeadJsonServer {
         if(parseInt(taxon.author_id)) {
             taxon.taxa_tree_authors = await this.fetchFromTable("tbl_taxa_tree_authors", "author_id", taxon.author_id);
         }
-        
-        taxon.taxa_synonyms = await this.fetchFromTable("tbl_taxa_synonyms", "taxon_id", taxonId);
 
         //tbl_taxa_seasonality
         taxon.taxa_seasonality = await this.fetchFromTable("tbl_taxa_seasonality", "taxon_id", taxonId);
@@ -226,8 +224,10 @@ class SeadJsonServer {
 
         //tbl_activity_types
         for(let key in taxon.taxa_seasonality) {
-            taxon.taxa_seasonality[key].activity_type = await this.fetchFromTable("tbl_activity_types", "activity_type_id", taxon.taxa_seasonality[key].activity_type_id);
+             let activityTypeRes = await this.fetchFromTable("tbl_activity_types", "activity_type_id", taxon.taxa_seasonality[key].activity_type_id);
+             taxon.taxa_seasonality[key].activity_type = activityTypeRes[0];
         }
+
 
         //tbl_seasons && tbl_season_types
         for(let key in taxon.taxa_seasonality) {
@@ -241,7 +241,7 @@ class SeadJsonServer {
                 WHERE tbl_seasons.season_id=$1
                 `;
             let res = await pgClient.query(sql, [taxon.taxa_seasonality[key].season_id]);
-            taxon.taxa_seasonality[key].season = res.rows;
+            taxon.taxa_seasonality[key].season = res.rows[0];
         }
 
         //tbl_text_distribution
