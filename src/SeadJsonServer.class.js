@@ -12,7 +12,7 @@ const res = require('express/lib/response');
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.15.2";
+const appVersion = "1.15.3";
 
 class SeadJsonServer {
     constructor() {
@@ -242,6 +242,12 @@ class SeadJsonServer {
                 `;
             let res = await pgClient.query(sql, [taxon.taxa_seasonality[key].season_id]);
             taxon.taxa_seasonality[key].season = res.rows[0];
+        }
+
+        for(let key in taxon.taxa_seasonality) {
+            const sql = `SELECT * FROM tbl_locations WHERE location_id=$1`;
+            let res = await pgClient.query(sql, [taxon.taxa_seasonality[key].location_id]);
+            taxon.taxa_seasonality[key].location = res.rows[0];
         }
 
         //tbl_text_distribution
