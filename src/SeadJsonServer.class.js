@@ -12,7 +12,7 @@ const res = require('express/lib/response');
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.15.3";
+const appVersion = "1.15.4";
 
 class SeadJsonServer {
     constructor() {
@@ -180,13 +180,13 @@ class SeadJsonServer {
         taxon.api_source = appName+"-"+appVersion;
 
         let generaRes = await this.fetchFromTable("tbl_taxa_tree_genera", "genus_id", taxon.genus_id);
-        taxon.taxa_tree_genera = generaRes[0];
+        taxon.genus = generaRes[0];
         
         let familyRes = await this.fetchFromTable("tbl_taxa_tree_families", "family_id", taxon.taxa_tree_genera.family_id);
-        taxon.taxa_tree_families = familyRes[0];
+        taxon.family = familyRes[0];
 
         let orderRes = await this.fetchFromTable("tbl_taxa_tree_orders", "order_id", taxon.taxa_tree_families.order_id);
-        taxon.taxa_tree_orders = orderRes[0];
+        taxon.order = orderRes[0];
 
         //Fetch ecocodes
         taxon.ecocodes = await this.fetchFromTable("tbl_ecocodes", "taxon_id", taxonId);
