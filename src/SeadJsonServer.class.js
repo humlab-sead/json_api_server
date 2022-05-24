@@ -173,7 +173,6 @@ class SeadJsonServer {
         });
 
         this.expressApp.get('/search/taxon/:attribute/:value', async (req, res) => {
-            console.log(req.params.value)
             let taxonIds = await this.searchTaxa(req.params.attribute, req.params.value);
             res.header("Content-type", "application/json");
             res.send(JSON.stringify(taxonIds, null, 2));
