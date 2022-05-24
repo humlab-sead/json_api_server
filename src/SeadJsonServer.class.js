@@ -61,6 +61,10 @@ class SeadJsonServer {
     }
 
     setupEndpoints() {
+        this.expressApp.get('*', (req, res, next) => {
+            console.log("Request:", req.path);
+            next();
+        });
         this.expressApp.get('/version', async (req, res) => {
             let versionInfo = {
                 app: "Sead JSON Server",
@@ -156,6 +160,7 @@ class SeadJsonServer {
         this.expressApp.get('/taxon/:taxonId', async (req, res) => {
             let taxonId = parseInt(req.params.taxonId);
             if(!taxonId) {
+                console.log(req.path, "Bad request");
                 res.statusCode(400);
                 res.send("Bad request");
                 return;
@@ -168,6 +173,7 @@ class SeadJsonServer {
         });
 
         this.expressApp.get('/search/taxon/:attribute/:value', async (req, res) => {
+            console.log(req.params.value)
             let taxonIds = await this.searchTaxa(req.params.attribute, req.params.value);
             res.header("Content-type", "application/json");
             res.send(JSON.stringify(taxonIds, null, 2));
