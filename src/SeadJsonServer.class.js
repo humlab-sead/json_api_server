@@ -182,10 +182,10 @@ class SeadJsonServer {
         let generaRes = await this.fetchFromTable("tbl_taxa_tree_genera", "genus_id", taxon.genus_id);
         taxon.genus = generaRes[0];
         
-        let familyRes = await this.fetchFromTable("tbl_taxa_tree_families", "family_id", taxon.taxa_tree_genera.family_id);
+        let familyRes = await this.fetchFromTable("tbl_taxa_tree_families", "family_id", taxon.genus.family_id);
         taxon.family = familyRes[0];
 
-        let orderRes = await this.fetchFromTable("tbl_taxa_tree_orders", "order_id", taxon.taxa_tree_families.order_id);
+        let orderRes = await this.fetchFromTable("tbl_taxa_tree_orders", "order_id", taxon.family.order_id);
         taxon.order = orderRes[0];
 
         //Fetch ecocodes
