@@ -12,7 +12,7 @@ const res = require('express/lib/response');
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.15.4";
+const appVersion = "1.15.5";
 
 class SeadJsonServer {
     constructor() {
@@ -69,7 +69,7 @@ class SeadJsonServer {
             res.send(JSON.stringify(versionInfo, null, 2));
         });
 
-        this.expressApp.get('/search/:search/value/:value', async (req, res) => {
+        this.expressApp.get('/search/site/:search/:value', async (req, res) => {
             let siteIds = await this.searchSites(req.params.search, req.params.value);
             res.header("Content-type", "application/json");
             res.send(JSON.stringify(siteIds, null, 2));
@@ -98,13 +98,22 @@ class SeadJsonServer {
             }
         });
 
-        this.expressApp.get('/preload/:flushSiteCache?', async (req, res) => {
+        this.expressApp.get('/preload/sites/:flushCache?', async (req, res) => {
             console.log(req.path);
-            if(req.params.flushSiteCache) {
+            if(req.params.flushCache) {
                 await this.flushSiteCache();
             }
             await this.preloadAllSites();
-            res.send("Preload complete");
+            res.send("Preload of sites complete");
+        });
+
+        this.expressApp.get('/preload/taxa/:flushCache?', async (req, res) => {
+            console.log(req.path);
+            if(req.params.flushCache) {
+                await this.flushTaxaCache();
+            }
+            await this.preloadAllTaxa();
+            res.send("Preload of taxa complete");
         });
 
         this.expressApp.get('/flushSiteCache', async (req, res) => {
@@ -156,6 +165,12 @@ class SeadJsonServer {
 
             res.header("Content-type", "application/json");
             res.send(JSON.stringify(taxon, null, 2));
+        });
+
+        this.expressApp.get('/search/taxon/:attribute/:value', async (req, res) => {
+            let taxonIds = await this.searchTaxa(req.params.attribute, req.params.value);
+            res.header("Content-type", "application/json");
+            res.send(JSON.stringify(taxonIds, null, 2));
         });
     }
 
@@ -324,6 +339,48 @@ class SeadJsonServer {
         return res.rows;
     }
 
+    async searchTaxa(attribute, value) {
+        console.log("Taxa search for attribute", attribute, "with value", value);
+        let taxaIds = [];
+        let query = {}
+        
+        let findMode = "$eq";
+        if(value.toString().substring(0, 4) == "not:") {
+            findMode = "$ne";
+            value = value.substring(4);
+        }
+        if(value.toString().substring(0, 3) == "gt:") {
+            findMode = "$gt";
+            value = value.substring(3);
+        }
+        if(value.toString().substring(0, 3) == "lt:") {
+            findMode = "$lt";
+            value = value.substring(3);
+        }
+
+        if(!isNaN(parseInt(value))) {
+            value = parseInt(value);
+        }
+        else if(!isNaN(parseFloat(value))) {
+            value = parseFloat(value);
+        }
+        else {
+            value = "\""+value.toString()+"\"";
+        }
+
+        query = "{ \""+attribute+"\": { \""+findMode+"\": "+value+" } }";
+        query = JSON.parse(query);
+        let res = await this.mongo.collection('taxa').find(query);
+        let taxa = await res.toArray();
+        taxa.forEach(taxon => {
+            taxaIds.push({
+                taxon_id: taxon.taxon_id,
+                link: "https://api.supersead.humlab.umu.se/taxon/"+taxon.taxon_id
+            });
+        });
+        return taxaIds;
+    }
+
     async searchSites(search, value) {
         console.log("Searching in", search, "for the value", value);
         let siteIds = [];
@@ -366,13 +423,76 @@ class SeadJsonServer {
         return siteIds;
     }
 
-    async flushSiteCache() {
-        //FIXME: This function assumes file storage
-        console.log("Flushing site cache");
-        let files = fs.readdirSync("site_cache");
-        for(let key in files) {
-            fs.unlinkSync("site_cache/"+files[key]);
+    
+    async flushTaxaCache() {
+        console.log("Flushing taxa cache");
+        if(this.cacheStorageMethod == "mongo") {
+            await this.mongo.collection('taxa').deleteMany({});
         }
+        if(this.cacheStorageMethod == "file") {
+            let files = fs.readdirSync("taxa_cache");
+            for(let key in files) {
+                fs.unlinkSync("taxa_cache/"+files[key]);
+            }
+        }
+    }
+
+    async flushSiteCache() {
+        console.log("Flushing site cache");
+        if(this.cacheStorageMethod == "mongo") {
+            await this.mongo.collection('sites').deleteMany({});
+        }
+        if(this.cacheStorageMethod == "file") {
+            let files = fs.readdirSync("site_cache");
+            for(let key in files) {
+                fs.unlinkSync("site_cache/"+files[key]);
+            }
+        }
+    }
+
+    async preloadAllTaxa() {
+        let pgClient = await this.getDbConnection();
+        if(!pgClient) {
+            return false;
+        }
+
+        console.time("Preload of taxa complete");
+        console.log("Preloading taxa");
+
+        let taxaData = await pgClient.query('SELECT * FROM tbl_taxa_tree_master ORDER BY taxon_id');
+        this.releaseDbConnection(pgClient);
+
+        console.log("Will fetch taxa data for "+taxaData.rows.length+" sites");
+
+        let taxonIds = [];
+        for(let key in taxaData.rows) {
+            taxonIds.push(taxaData.rows[key].taxon_id);
+        }
+
+        let maxConcurrentFetches = parseInt(process.env.MAX_CONCURRENT_FETCHES);
+        maxConcurrentFetches = isNaN(maxConcurrentFetches) == false ? maxConcurrentFetches : 10;
+
+        let pendingFetches = 0;
+
+        await new Promise((resolve, reject) => {
+            const fetchCheckInterval = setInterval(() => {
+                if(taxonIds.length > 0 && pendingFetches < maxConcurrentFetches) {
+                    pendingFetches++;
+                    let taxonId = taxonIds.shift();
+                    console.time("Fetched taxon "+taxonId);
+                    this.getTaxon(taxonId, false).then(() => {
+                        console.timeEnd("Fetched taxon "+taxonId);
+                        pendingFetches--;
+                    });
+                }
+                if(taxonIds.length == 0) {
+                    clearInterval(fetchCheckInterval);
+                    resolve();
+                }
+            }, 100);
+        });
+
+        console.timeEnd("Preload of taxa complete");
     }
 
     async preloadAllSites() {
@@ -382,7 +502,6 @@ class SeadJsonServer {
         }
 
         console.time("Preload of sites complete");
-
         console.log("Preloading sites");
 
         let siteData = await pgClient.query('SELECT * FROM tbl_sites ORDER BY site_id');
