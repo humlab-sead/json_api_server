@@ -4,7 +4,7 @@ const bodyParser = require('body-parser');
 const cors = require('cors');
 const { Pool } = require('pg');
 const crypto = require('crypto');
-const { gzip, ungzip } = require('node-gzip');
+const zip = new require('node-zip')();
 const { MongoClient } = require('mongodb');
 const DendrochronologyModule = require('./Modules/DendrochronologyModule.class');
 const AbundanceModule = require('./Modules/AbundanceModule.class');
@@ -44,6 +44,7 @@ class SeadJsonServer {
         this.setupMongoDb().then(() => {
             console.log('Connected to MongoDB');
         });
+
     }
 
     async setupMongoDb() {
@@ -103,11 +104,16 @@ class SeadJsonServer {
             })
             let data = await this.exportSites(siteIds);
             let jsonData = JSON.stringify(data, null, 2);
-            let compressed = await gzip(jsonData);
 
-            res.set({"Content-Disposition":"attachment; filename=\"sites_export.zip\""});
-            res.header("Content-type", "application/json")
-            res.send(compressed);
+            zip.file('sites_export.json', jsonData);
+            let compressed = zip.generate({base64:false,compression:'DEFLATE'});
+
+            res.writeHead(200, {
+                'Content-Type': "application/zip",
+                'Content-disposition': 'attachment;filename=' + "sites_export.zip",
+                'Content-Length': compressed.length
+            });
+            res.end(Buffer.from(compressed, 'binary'));
         });
 
         this.expressApp.get('/sample/:sampleId', async (req, res) => {
