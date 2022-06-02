@@ -88,14 +88,17 @@ class SeadJsonServer {
 
         this.expressApp.post('/export/sites', async (req, res) => {
             let siteIds = req.body;
+            console.log(siteIds);
             if(typeof siteIds != "object") {
                 res.status(400);
                 res.send("Bad input - should be an array of site IDs");
+                return;
             }
             siteIds.forEach(siteId => {
                 if(!parseInt(siteId)) {
                     res.status(400);
                     res.send("Bad input - should be an array of site IDs");
+                    return;
                 }
             })
             let data = await this.exportSites(siteIds);
