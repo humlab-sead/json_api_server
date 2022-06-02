@@ -13,7 +13,8 @@ const res = require('express/lib/response');
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.15.5";
+const appVersion = "1.16.0";
+const datasetVersion = "1.1.0";
 
 class SeadJsonServer {
     constructor() {
@@ -70,7 +71,8 @@ class SeadJsonServer {
         this.expressApp.get('/version', async (req, res) => {
             let versionInfo = {
                 app: "Sead JSON Server",
-                version: appVersion
+                version: appVersion,
+                datasetVersion: datasetVersion
             }
             res.send(JSON.stringify(versionInfo, null, 2));
         });
@@ -238,6 +240,7 @@ class SeadJsonServer {
         taxon = rows[0];
 
         taxon.api_source = appName+"-"+appVersion;
+        taxon.dataset_version = datasetVersion;
 
         let generaRes = await this.fetchFromTable("tbl_taxa_tree_genera", "genus_id", taxon.genus_id);
         taxon.genus = generaRes[0];
@@ -607,6 +610,7 @@ class SeadJsonServer {
         site = siteData.rows[0];
         site.data_groups = [];
         site.api_source = appName+"-"+appVersion;
+        site.dataset_version = datasetVersion;
         site.lookup_tables = {};
 
         if(verbose) console.timeEnd("Fetched basic site data for site "+siteId);
@@ -643,6 +647,9 @@ class SeadJsonServer {
         if(verbose) console.time("Fetched analysis methods for site "+siteId);
         await this.fetchAnalysisMethods(site);
         if(verbose) console.timeEnd("Fetched analysis methods for site "+siteId);
+
+        //tbl_site_other_records
+
 
         if(fetchMethodSpecificData) {
             if(verbose) console.time("Fetched method specific data for site "+siteId);
@@ -716,6 +723,33 @@ class SeadJsonServer {
             let module = this.modules[key];
             module.postProcessSiteData(site);
         }
+        return site;
+    }
+
+    async fetchSiteOtherRecords() {
+        let pgClient = await this.getDbConnection();
+        if(!pgClient) {
+            return false;
+        }
+        let sql = `
+        SELECT * FROM tbl_site_other_records
+        INNER JOIN tbl_record_types ON tbl_record_types.record_type_id = tbl_site_other_records.record_type_id
+        WHERE site_id=$1
+        `;
+
+        let data = await pgClient.query(sql, [site.site_id]);
+        site.other_records = data.rows;
+
+        site.other_records.forEach(otherRec => {
+            if(parseInt(otherRec.biblio_id)) {
+                pgClient.query("SELECT * FROM tbl_biblio WHERE biblio_id=$1", [otherRec.biblio_id]).then(biblioData => {
+                    otherRec.biblio = biblioData.rows[0];
+                });
+            }
+        })
+
+        this.releaseDbConnection(pgClient);
+        
         return site;
     }
 
@@ -928,9 +962,16 @@ class SeadJsonServer {
         WHERE dataset_id=$1
         `;
         datasetIds.forEach(datasetId => {
-            let promise = pgClient.query(sql, [datasetId]).then(dataset => {
-                if(dataset.rows.length > 0) {
-                    datasets.push(dataset.rows[0]);
+            let promise = pgClient.query(sql, [datasetId]).then(datasetRes => {
+                if(datasetRes.rows.length > 0) {
+                    let dataset = datasetRes.rows[0];
+                    datasets.push(dataset);
+                    if(dataset.biblio_id) {
+                        pgClient.query("SELECT * FROM tbl_biblio WHERE biblio_id=$1", [dataset.biblio_id]).then(dsBiblio => {
+                            dataset.biblio = dsBiblio.rows;
+                        });
+                    }
+                    
                 }
             });
             queryPromises.push(promise);
