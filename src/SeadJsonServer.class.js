@@ -4,6 +4,7 @@ const bodyParser = require('body-parser');
 const cors = require('cors');
 const { Pool } = require('pg');
 const crypto = require('crypto');
+const { gzip, ungzip } = require('node-gzip');
 const { MongoClient } = require('mongodb');
 const DendrochronologyModule = require('./Modules/DendrochronologyModule.class');
 const AbundanceModule = require('./Modules/AbundanceModule.class');
@@ -83,6 +84,27 @@ class SeadJsonServer {
             let site = await this.getSite(req.params.siteId, true);
             res.header("Content-type", "application/json");
             res.send(JSON.stringify(site, null, 2));
+        });
+
+        this.expressApp.post('/export/sites', async (req, res) => {
+            let siteIds = req.body;
+            if(typeof siteIds != "object") {
+                res.status(400);
+                res.send("Bad input - should be an array of site IDs");
+            }
+            siteIds.forEach(siteId => {
+                if(!parseInt(siteId)) {
+                    res.status(400);
+                    res.send("Bad input - should be an array of site IDs");
+                }
+            })
+            let data = await this.exportSites(siteIds);
+            let jsonData = JSON.stringify(data, null, 2);
+            let compressed = await gzip(jsonData);
+
+            res.set({"Content-Disposition":"attachment; filename=\"sites_export.zip\""});
+            res.header("Content-type", "application/json")
+            res.send(compressed);
         });
 
         this.expressApp.get('/sample/:sampleId', async (req, res) => {
@@ -177,6 +199,15 @@ class SeadJsonServer {
             res.header("Content-type", "application/json");
             res.send(JSON.stringify(taxonIds, null, 2));
         });
+    }
+
+    async exportSites(siteIds) {
+        let promises = [];
+        siteIds.forEach(siteId => {
+            promises.push(this.getSite(siteId));
+        });
+        
+        return await Promise.all(promises);
     }
 
     async getTaxon(taxonId, verbose = true) {
@@ -1197,9 +1228,9 @@ class SeadJsonServer {
                 database: process.env.POSTGRES_DATABASE,
                 password:process.env.POSTGRES_PASS,
                 port: process.env.POSTGRES_PORT,
-                max: 100,
+                max: 200,
                 idleTimeoutMillis: 30000,
-                connectionTimeoutMillis: 60000,
+                connectionTimeoutMillis: 5000,
             });
 
             if(this.useStaticDbConnection) {
