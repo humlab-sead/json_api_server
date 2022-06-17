@@ -8,7 +8,6 @@ class DendrochronologyModule {
         this.moduleMethods = [10];
         this.app = app;
         this.expressApp = this.app.expressApp;
-        this.cachingEnabled = true;
         this.dl = new DendroLib();
         this.setupEndpoints();
     }
@@ -35,8 +34,8 @@ class DendrochronologyModule {
         this.expressApp.post('/dendro/dating-histogram', async (req, res) => {
             console.log(req.path);
             let data = false;
-            let cacheKeyString = req.path+JSON.stringify(req.body.sites);
-            if(this.cachingEnabled) {
+            let cacheKeyString = appVersion+req.path+req.body.sites.join("");
+            if(this.app.useQueryCaching) {
                 data = this.readCache(cacheKeyString);
             }
             if(!data) {
@@ -55,8 +54,8 @@ class DendrochronologyModule {
             console.log(req.path);
 
             let data = false;
-            let cacheKeyString = req.path+JSON.stringify(req.body.sites);
-            if(this.cachingEnabled) {
+            let cacheKeyString = appVersion+req.path+req.body.sites.join("");
+            if(this.app.useQueryCaching) {
                 data = this.readCache(cacheKeyString);
             }
             if(!data) {

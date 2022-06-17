@@ -13,13 +13,13 @@ const res = require('express/lib/response');
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.16.0";
-const datasetVersion = "1.1.0";
+const appVersion = "1.16.1";
 
 class SeadJsonServer {
     constructor() {
         this.cacheStorageMethod = typeof(process.env.CACHE_STORAGE_METHOD) != "undefined" ? process.env.CACHE_STORAGE_METHOD : "file";
         this.useSiteCaching = typeof(process.env.USE_SITE_CACHE) != "undefined" ? process.env.USE_SITE_CACHE == "true" : true;
+        this.useQueryCaching = typeof(process.env.USE_QUERY_CACHE) != "undefined" ? process.env.USE_QUERY_CACHE == "true" : true;
         this.useTaxonCaching = typeof(process.env.USE_TAXON_CACHE) != "undefined" ? process.env.USE_TAXON_CACHE == "true" : true;
         this.useStaticDbConnection = typeof(process.env.USE_SINGLE_PERSISTENT_DBCON) != "undefined" ? process.env.USE_SINGLE_PERSISTENT_DBCON == "true" : false;
         this.staticDbConnection = null;
@@ -71,8 +71,7 @@ class SeadJsonServer {
         this.expressApp.get('/version', async (req, res) => {
             let versionInfo = {
                 app: "Sead JSON Server",
-                version: appVersion,
-                datasetVersion: datasetVersion
+                version: appVersion
             }
             res.send(JSON.stringify(versionInfo, null, 2));
         });
@@ -240,7 +239,6 @@ class SeadJsonServer {
         taxon = rows[0];
 
         taxon.api_source = appName+"-"+appVersion;
-        taxon.dataset_version = datasetVersion;
 
         let generaRes = await this.fetchFromTable("tbl_taxa_tree_genera", "genus_id", taxon.genus_id);
         taxon.genus = generaRes[0];
@@ -610,7 +608,6 @@ class SeadJsonServer {
         site = siteData.rows[0];
         site.data_groups = [];
         site.api_source = appName+"-"+appVersion;
-        site.dataset_version = datasetVersion;
         site.lookup_tables = {};
 
         if(verbose) console.timeEnd("Fetched basic site data for site "+siteId);
