@@ -308,12 +308,17 @@ class DendroLib {
             return false;
         }
 
-        for(let key in sampleDataObject.datasets) {
-            if(sampleDataObject.datasets[key].id == dendroLookupId) {
-                if(sampleDataObject.datasets[key].value == "complex") {
-                    return sampleDataObject.datasets[key].data;
+        let dpKey = "datasets";
+        if(typeof sampleDataObject.data_points != "undefined") {
+            dpKey = "data_points";
+        }
+
+        for(let key in sampleDataObject[dpKey]) {
+            if(sampleDataObject[dpKey][key].id == dendroLookupId) {
+                if(sampleDataObject[dpKey][key].value == "complex") {
+                    return sampleDataObject[dpKey][key].data;
                 }
-                return sampleDataObject.datasets[key].value;
+                return sampleDataObject[dpKey][key].value;
             }
         }
     }
