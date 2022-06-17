@@ -398,8 +398,10 @@ class DendrochronologyModule {
         let treeSpeciesCategories = [];
 
         sites.forEach(site => {
+            console.log(site.siteId);
             site.sampleDataObjects.forEach(sampleDataObject => {
                 let species = this.dl.getDendroMeasurementByName("Tree species", sampleDataObject);
+                console.log(species);
                 if(!species) {
                     return false;
                 }
