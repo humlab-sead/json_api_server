@@ -34,7 +34,7 @@ class DendrochronologyModule {
         this.expressApp.post('/dendro/dating-histogram', async (req, res) => {
             console.log(req.path);
             let data = false;
-            let cacheKeyString = appVersion+req.path+req.body.sites.join("");
+            let cacheKeyString = this.app.appVersion+req.path+req.body.sites.join("");
             if(this.app.useQueryCaching) {
                 data = this.readCache(cacheKeyString);
             }
@@ -54,7 +54,7 @@ class DendrochronologyModule {
             console.log(req.path);
 
             let data = false;
-            let cacheKeyString = appVersion+req.path+req.body.sites.join("");
+            let cacheKeyString = this.app.appVersion+req.path+req.body.sites.join("");
             if(this.app.useQueryCaching) {
                 data = this.readCache(cacheKeyString);
             }
