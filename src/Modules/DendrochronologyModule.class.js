@@ -373,6 +373,7 @@ class DendrochronologyModule {
     }
 
     async getTreeSpeciesForSites(siteIds) {
+        console.log("getTreeSpeciesForSites");
         if(!siteIds) {
             siteIds = [];
         }
@@ -381,8 +382,10 @@ class DendrochronologyModule {
         if(siteIds.length == 0) {
             //If no sites are selected we assume ALL sites
             sites = await this.getMeasurementsForAllSites();
+            console.log("Sites (all): "+sites.length);
         }
         else {
+            console.log("Sites: "+siteIds.length)
             for(let key in siteIds) {
                 let sampleDataObjects = await this.getMeasurementsForSite(siteIds[key]);
                 sites.push({
