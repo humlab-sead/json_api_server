@@ -204,10 +204,10 @@ class DendrochronologyModule {
         //Grab data in tbl_dating_uncertainty by dating_uncertainty_id
         let datingUncertaintyIds = [];
         site.data_groups.forEach(dg => {
-            dg.data_points.forEach(dp => {
-                if(dp.id == 134 || dp.id == 137) {
-                    if(parseInt(dp.value.dating_uncertainty)) {
-                        datingUncertaintyIds.push(dp.value.dating_uncertainty);
+            dg.datasets.forEach(dataset => {
+                if(dataset.id == 134 || dataset.id == 137) {
+                    if(parseInt(dataset.value.dating_uncertainty)) {
+                        datingUncertaintyIds.push(dataset.value.dating_uncertainty);
                     }
                 }
             });

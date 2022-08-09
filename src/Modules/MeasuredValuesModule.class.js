@@ -71,7 +71,7 @@ class MeasuredValuesModule {
                     method_group_id: dataset.method_group_id,
                     method_name: method.method_name,
                     type: "measured_values",
-                    data_points: []
+                    datasets: []
                 }
 
                 for(let aeKey in dataset.analysis_entities) {
@@ -89,7 +89,7 @@ class MeasuredValuesModule {
                                     value = parseInt(value);
                                 }
 
-                                dataGroup.data_points.push({
+                                dataGroup.datasets.push({
                                     physical_sample_id: ae.physical_sample_id,
                                     sample_name: this.app.getSampleNameBySampleId(site, ae.physical_sample_id),
                                     label: ae.physical_sample_id,
