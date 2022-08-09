@@ -191,9 +191,9 @@ class DendrochronologyModule {
 
         this.app.releaseDbConnection(pgClient);
 
-        let dataGroups = this.dl.dbRowsToDataGroups(measurementRows, datingRows);
+        let sampleDataObjects = this.dl.dbRowsToSampleDataObjects(measurementRows, datingRows);
 
-        return dataGroups;
+        return sampleDataObjects;
     }
 
     async fetchDatingNotes(site) {
