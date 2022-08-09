@@ -32,15 +32,16 @@ class DendrochronologyModule {
         });
 
         this.expressApp.post('/dendro/dating-histogram', async (req, res) => {
-            console.log(req.path);
             let data = false;
             let cacheKeyString = this.app.appVersion+req.path+req.body.sites.join("");
             if(this.app.useQueryCaching) {
                 data = this.readCache(cacheKeyString);
+                console.log(req.path+" - cache hit");
             }
             if(!data) {
                 data = await this.getDatingHistogramForSites(req.body.sites);
                 this.writeCache(cacheKeyString, data);
+                console.log(req.path+" - cache miss");
             }
 
             res.send({
@@ -51,16 +52,16 @@ class DendrochronologyModule {
         });
 
         this.expressApp.post('/dendro/treespecies', async (req, res) => {
-            console.log(req.path);
-
             let data = false;
             let cacheKeyString = this.app.appVersion+req.path+req.body.sites.join("");
             if(this.app.useQueryCaching) {
                 data = this.readCache(cacheKeyString);
+                console.log(req.path+" - cache hit");
             }
             if(!data) {
                 data = await this.getTreeSpeciesForSites(req.body.sites);
                 this.writeCache(cacheKeyString, data);
+                console.log(req.path+" - cache miss");
             }
 
             res.send({
@@ -265,7 +266,6 @@ class DendrochronologyModule {
         LEFT JOIN tbl_dendro_lookup dl ON tbl_dendro.dendro_lookup_id = dl.dendro_lookup_id
         LEFT JOIN tbl_sample_groups sg ON sg.sample_group_id = ps.sample_group_id
         LEFT JOIN tbl_sites ON tbl_sites.site_id = sg.site_id
-        WHERE tbl_sites.site_id=$1
         `;
         //let data = await pgClient.query('SELECT * FROM postgrest_api.qse_dendro_measurements');
         let data = await pgClient.query(sql);
