@@ -121,9 +121,11 @@ class DendroLib {
 
         physicalSampleIds.forEach(physicalSampleId => {
             let sampleDataObject = {
-                sampleName: "",
-                sampleTaken: "",
-                physicalSampleId: physicalSampleId,
+                id: physicalSampleId,
+                type: "dendro",
+                sample_name: "",
+                date_sampled: "",
+                physical_sample_id: physicalSampleId,
                 datasets: []
             }
 
@@ -136,7 +138,8 @@ class DendroLib {
                         value = intVal;
                     }
 
-                    sampleDataObject.sampleName = m2.sample;
+                    sampleDataObject.sample_name = m2.sample;
+                    sampleDataObject.date_sampled = m2.date_sampled;
 
                     sampleDataObject.datasets.push({
                         id: m2.dendro_lookup_id,
@@ -148,7 +151,6 @@ class DendroLib {
 
             datingRows.forEach(m2 => {
                 if(physicalSampleId == m2.physical_sample_id) {
-
                     sampleDataObject.datasets.push({
                         id: m2.dendro_lookup_id,
                         label: m2.date_type,
@@ -159,8 +161,10 @@ class DendroLib {
                             younger: m2.younger,
                             plus: m2.plus,
                             minus: m2.minus,
+                            dating_uncertainty: m2.dating_uncertainty_id,
                             error_uncertainty: m2.error_uncertainty,
-                            season: m2.season
+                            season: m2.season,
+                            dating_note: m2.dating_note
                         }
                     });
                 }
