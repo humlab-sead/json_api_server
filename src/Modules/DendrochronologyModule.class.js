@@ -450,7 +450,7 @@ class DendrochronologyModule {
         sites.forEach(site => {
             site.sampleDataObjects.forEach(dataObject => {
                 let germinationYearOldest = this.dl.getOldestGerminationYear(dataObject);
-                if(germinationYearOldest && (oldestYear == null || germinationYearOldest.value < oldestYear.value)) {
+                if(germinationYearOldest.value != null && (oldestYear == null || germinationYearOldest.value < oldestYear.value)) {
                     oldestYear = germinationYearOldest;
                 }
             })
@@ -459,7 +459,7 @@ class DendrochronologyModule {
         sites.forEach(site => {
             site.sampleDataObjects.forEach(dataObject => {
                 let fellingYearYoungest = this.dl.getYoungestFellingYear(dataObject);
-                if(fellingYearYoungest.value && (youngestYear == null || fellingYearYoungest.value > youngestYear.value)) {
+                if(fellingYearYoungest.value != null && (youngestYear == null || fellingYearYoungest.value > youngestYear.value)) {
                     youngestYear = fellingYearYoungest;
                 }
             })
@@ -507,7 +507,7 @@ class DendrochronologyModule {
                     let oldestGerminationYear = this.dl.getOldestGerminationYear(sampleDataObject);
                     let youngestFellingYear = this.dl.getYoungestFellingYear(sampleDataObject);
 
-                    if(!oldestGerminationYear || !youngestFellingYear) {
+                    if(!oldestGerminationYear.value || !youngestFellingYear.value) {
                         return false;
                     }
                     if(oldestGerminationYear.reliability == 1 && youngestFellingYear.reliability == 1) {

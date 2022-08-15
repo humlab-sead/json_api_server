@@ -426,31 +426,6 @@ class DendroLib {
         //At this point we give up
         return result;
     }
-
-    async getDatedSamplesForAllSites() {
-        let siteIdFrom = 2000;
-        let siteIdTo = 2050;
-
-        for(let siteId = siteIdFrom; siteIdFrom < siteIdTo; siteId++) {
-            await this.getDatedSamplesForSite(siteId);
-        }
-    }
-
-    async getDatedSamplesForSite(siteId) {
-        return new Promise((resolve, reject) => {
-            $.get(Config.dataServerAddress+"/site/"+siteId).then(siteData => {
-
-                /*
-                let contentItem = this.contentItem;
-                this.dataObjects = this.getTableRowsAsObjects(contentItem);
-                let totalNumOfSamples = this.dataObjects.length;
-                this.dataObjects = this.stripNonDatedObjects(this.dataObjects);
-                */
-
-                resolve(siteData);
-            });
-        });
-    }
     
     getYoungestGerminationYear(dataGroup) {
         let result = {
@@ -691,7 +666,7 @@ class DendroLib {
 
         let maxTreeAge = this.getDendroMeasurementByName("Tree age ≤", dataGroup);
         let germinationYear = this.getDendroMeasurementByName("Inferred growth year ≥", dataGroup);
-        if(minTreeAge && germinationYear) {
+        if(maxTreeAge && germinationYear) {
             result.formula = "Inferred growth year ≥ + Tree age ≤";
             result.reliability = 3;
             result.value = germinationYear + maxTreeAge;
