@@ -69,6 +69,25 @@ class DendrochronologyModule {
                 categories: data
             });
         });
+
+        this.expressApp.post('/dendro/featuretypes', async (req, res) => {
+            let data = false;
+            let cacheKeyString = this.app.appVersion+req.path+req.body.sites.join("");
+            if(this.app.useQueryCaching) {
+                data = this.readCache(cacheKeyString);
+                console.log(req.path+" - cache hit");
+            }
+            if(!data) {
+                data = await this.getFeatureTypesForSites(req.body.sites);
+                this.writeCache(cacheKeyString, data);
+                console.log(req.path+" - cache miss");
+            }
+
+            res.send({
+                requestId: req.body.requestId,
+                categories: data
+            });
+        });
     }
 
     siteHasModuleMethods(site) {
@@ -182,11 +201,26 @@ class DendrochronologyModule {
         let datingRows = data.rows;
         site.dating = data.rows;
 
-        /*
-        sql = `SELECT * FROM tbl_dendro_date_notes WHERE dendro_date_id=$1`;
-        site.dating.forEach(datingRow => {
-            datingRow.dating_uncertainty_id
-        });
+        /* DISABLED THIS - not because it doesn't work but because I'm not sure where to put this data
+        sql = `
+        SELECT
+        tbl_sites.site_id,
+        tbl_physical_sample_features.*,
+        tbl_features.*,
+        tbl_feature_types.*,
+        tbl_physical_samples.sample_group_id
+        FROM
+        tbl_sites
+        LEFT JOIN tbl_sample_groups ON tbl_sample_groups.site_id = tbl_sites.site_id
+        LEFT JOIN tbl_physical_samples ON tbl_physical_samples.sample_group_id=tbl_sample_groups.sample_group_id
+        LEFT JOIN tbl_physical_sample_features ON tbl_physical_sample_features.physical_sample_id=tbl_physical_samples.physical_sample_id
+        LEFT JOIN tbl_features ON tbl_features.feature_id=tbl_physical_sample_features.feature_id
+        LEFT JOIN tbl_feature_types ON tbl_feature_types.feature_type_id=tbl_features.feature_type_id
+        WHERE tbl_sites.site_id=$1
+        `;
+
+        data = await pgClient.query(sql, [siteId]);
+        let sampleFeatures = data.rows;
         */
 
         this.app.releaseDbConnection(pgClient);
@@ -372,6 +406,38 @@ class DendrochronologyModule {
         }
     }
 
+    async getFeatureTypesForSites(siteIds) {
+        if(!siteIds) {
+            siteIds = [];
+        }
+        let sites = [];
+
+        if(siteIds.length == 0) {
+            //If no sites are selected we assume ALL sites
+            sites = await this.getMeasurementsForAllSites();
+        }
+        else {
+            for(let key in siteIds) {
+                let sampleDataObjects = await this.getMeasurementsForSite(siteIds[key]);
+                sites.push({
+                    siteId: siteIds[key],
+                    sampleDataObjects: sampleDataObjects
+                });
+            }
+        }
+
+        let featureTypeCategories = [];
+
+        sites.forEach(site => {
+            site.sampleDataObjects.forEach(sampleDataObject => {
+                //let species = this.dl.getDendroMeasurementByName("Tree species", sampleDataObject);
+                console.log(sampleDataObject);
+            });
+        })
+
+        return featureTypeCategories;
+    }
+
     async getTreeSpeciesForSites(siteIds) {
         if(!siteIds) {
             siteIds = [];
@@ -471,14 +537,16 @@ class DendrochronologyModule {
         }
 
         //2. Divide year span into categories/bars
-        const categoriesNum = 40;
-        const catSize = Math.floor((youngestYear.value -  oldestYear.value) / categoriesNum);
+        //const categoriesNum = 20;
+        //778 - 1883
+        let catSize = 20;
+        let categoriesNum = Math.ceil((youngestYear.value - oldestYear.value) / catSize);
         let categories = [];
         let prevCatEnd = 0;
         for(let i = 0; i < categoriesNum; i++) {
             categories.push({
                 startYear: oldestYear.value + prevCatEnd,
-                endYear: oldestYear.value + (catSize * (i+1)) - 1
+                endYear: oldestYear.value + (catSize * (i+1))
             });
             prevCatEnd = catSize * (i+1);
         }
@@ -500,24 +568,30 @@ class DendrochronologyModule {
             cat.datingsNum = 0;
             cat.datingsNumHighReliability = 0;
             sites.forEach(site => {
+
                 let selectedSampleDataObjects = this.dl.getSamplesWithinTimespan(site.sampleDataObjects, cat.startYear, cat.endYear);
 
-                //Further divide the selected samples in reliability categories
-                let selectedSampleDataObjectsHighReliability = selectedSampleDataObjects.filter(sampleDataObject => {
-                    let oldestGerminationYear = this.dl.getOldestGerminationYear(sampleDataObject);
-                    let youngestFellingYear = this.dl.getYoungestFellingYear(sampleDataObject);
+                if(selectedSampleDataObjects) {
 
-                    if(!oldestGerminationYear.value || !youngestFellingYear.value) {
+                    //Further divide the selected samples in reliability categories
+                    let selectedSampleDataObjectsHighReliability = selectedSampleDataObjects.filter(sampleDataObject => {
+                        let oldestGerminationYear = this.dl.getOldestGerminationYear(sampleDataObject);
+                        let youngestFellingYear = this.dl.getYoungestFellingYear(sampleDataObject);
+
+                        if(!oldestGerminationYear.value || !youngestFellingYear.value) {
+                            return false;
+                        }
+                        if(oldestGerminationYear.reliability == 1 && youngestFellingYear.reliability == 1) {
+                            return true;
+                        }
                         return false;
-                    }
-                    if(oldestGerminationYear.reliability == 1 && youngestFellingYear.reliability == 1) {
-                        return true;
-                    }
-                    return false;
-                });
+                    });
 
-                cat.datingsNum += selectedSampleDataObjects.length;
-                cat.datingsNumHighReliability += selectedSampleDataObjectsHighReliability.length;
+                    cat.datingsNum += selectedSampleDataObjectsHighReliability.length;
+                    cat.datingsNumUncertain += selectedSampleDataObjects.length;
+                }
+                
+                
             });
         });
 

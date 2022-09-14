@@ -5,9 +5,52 @@ class AbundanceModule {
         this.app = app;
         this.expressApp = this.app.expressApp;
         this.setupEndpoints();
+
+        /*
+        this.getEcocodesFromTaxa([{
+            taxon_id: 33588,
+            count: 100
+        }]);
+        */
     }
 
     setupEndpoints() {
+    }
+
+    async getEcocodesFromTaxa(taxa) {
+        /*taxa should be an array of objects, like so:
+        taxa = [{
+                taxon_id: int,
+                count: int
+            },]
+        */
+        let pgClient = await this.app.getDbConnection();
+        if(!pgClient) {
+            return false;
+        }
+        let sql = `SELECT mcr_data FROM tbl_mcrdata_birmbeetledat WHERE taxon_id=$1 ORDER BY mcr_row ASC`;
+        
+        let queryPromises = [];
+        for(let key in taxa) {
+            let queryPromise = pgClient.query(sql, [taxa[key].taxon_id]).then(result => {
+                //taxa[key].mcrMatrix = result.rows;
+
+                let matrix = [];
+                result.rows.forEach(row => {
+                    let matrixRow = row.mcr_data;
+                    matrix.push(matrixRow);
+                });
+                taxa[key].mcrMatrix = matrix;
+            });
+
+            queryPromises.push(queryPromise);
+        }
+
+        await Promise.all(queryPromises);
+
+        console.log(JSON.stringify(taxa, null, 2));
+
+        this.app.releaseDbConnection(pgClient);
     }
 
     siteHasModuleMethods(site) {

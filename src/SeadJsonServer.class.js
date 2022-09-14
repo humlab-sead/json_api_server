@@ -13,7 +13,7 @@ const res = require('express/lib/response');
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.16.6";
+const appVersion = "1.16.7";
 
 class SeadJsonServer {
     constructor() {
