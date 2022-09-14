@@ -916,12 +916,52 @@ class SeadJsonServer {
 
         let queryPromises = [];
         let methods = [];
+        for(let key in methodIds) {
+            let methodId = methodIds[key];
+            let methodResult = await pgClient.query('SELECT * FROM tbl_methods WHERE method_id=$1', [methodId]);
+            let method = methodResult.rows[0];
+
+            //The below unit_id's which is hardcoded based on method_id is temporary - SHOULD be included in the db instead, so when it is, just remove this series of if-statements
+            if(methodId == 109) {
+                //pH (H2O) - there's no unit for ph in the db atm
+            }
+            if(methodId == 107) {
+                //µS (H2O) - something about conductivity, these scientists man, they burn it, they pour acid over it, and they electrocute it... I'm surprised they're not trying to smash it with a rock as well
+                //there doesn't seem to be any units for that fits, in the current sead db
+            }
+            if(methodId == 74) {
+                //Total phosphates citric acid - assume it's ppm/micrograms
+                method.unit_id = 18;
+            }
+            if(methodId == 37) {
+                //Phosphate degrees - db says: "The amount of phosphate is specified as mg P2O5/100g dry soil.""
+                method.unit_id = 17; //let's say it's just mg for now, which is true enough
+            }
+            if(methodId == 33) {
+                //MS - assume the unit is milligrams
+                method.unit_id = 17;
+            }
+            if(methodId == 32) {
+                //LOI - assume the unit is a percentage
+                method.unit_id = 23;
+            }
+
+            if(parseInt(method.unit_id)) {
+                let methodUnitRes = await pgClient.query('SELECT * FROM tbl_units WHERE unit_id=$1', [method.unit_id]);
+                let unit = methodUnitRes.rows[0];
+                method.unit = unit;
+            }
+
+            methods.push(method);
+        }
+        /*
         methodIds.forEach(methodId => {
             let promise = pgClient.query('SELECT * FROM tbl_methods WHERE method_id=$1', [methodId]).then(method => {
                 methods.push(method.rows[0]);
             });
             queryPromises.push(promise);
         });
+        */
 
         await Promise.all(queryPromises).then(() => {
             this.releaseDbConnection(pgClient);
