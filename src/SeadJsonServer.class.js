@@ -13,7 +13,7 @@ const res = require('express/lib/response');
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.16.7";
+const appVersion = "1.16.8";
 
 class SeadJsonServer {
     constructor() {
@@ -818,7 +818,9 @@ class SeadJsonServer {
                 `;
 
                 let sampleGroupsDescType = await pgClient.query(sql, [site.sample_groups[key].descriptions[key2].sample_group_description_id]);
-                site.sample_groups[key].descriptions[key2].description_type = sampleGroupsDescType.rows;
+                site.sample_groups[key].descriptions[key2].type_id = sampleGroupsDescType.rows[0].sample_group_description_type_id;
+                site.sample_groups[key].descriptions[key2].type_name = sampleGroupsDescType.rows[0].type_name;
+                site.sample_groups[key].descriptions[key2].type_description = sampleGroupsDescType.rows[0].type_description;
             }
 
             let sampleGroupSamplingContext = await pgClient.query('SELECT * FROM tbl_sample_group_sampling_contexts WHERE sampling_context_id=$1', [site.sample_groups[key].sampling_context_id]);
