@@ -13,7 +13,7 @@ const res = require('express/lib/response');
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.16.8";
+const appVersion = "1.16.9";
 
 class SeadJsonServer {
     constructor() {
@@ -643,12 +643,15 @@ class SeadJsonServer {
         await this.fetchDatasets(site);
         if(verbose) console.timeEnd("Fetched datasets for site "+siteId);
         
+        if(verbose) console.time("Fetched analysis entities prep methods for site "+siteId);
+        await this.fetchAnalysisEntitiesPrepMethods(site);
+        if(verbose) console.timeEnd("Fetched analysis entities prep methods for site "+siteId);
+
         if(verbose) console.time("Fetched analysis methods for site "+siteId);
         await this.fetchAnalysisMethods(site);
         if(verbose) console.timeEnd("Fetched analysis methods for site "+siteId);
 
         //tbl_site_other_records
-
 
         if(fetchMethodSpecificData) {
             if(verbose) console.time("Fetched method specific data for site "+siteId);
@@ -656,11 +659,11 @@ class SeadJsonServer {
             if(verbose) console.timeEnd("Fetched method specific data for site "+siteId);
         }
 
-        if(verbose) console.timeEnd("Done fetching site "+siteId);
-
-        if(verbose) console.time("Done processing data for site "+siteId);
+        if(verbose) console.time("Done post-processing primary data for site "+siteId);
         this.postProcessSiteData(site);
-        if(verbose) console.timeEnd("Done processing data for site "+siteId);
+        if(verbose) console.timeEnd("Done post-processing primary data for site "+siteId);
+
+        if(verbose) console.timeEnd("Done fetching site "+siteId);
 
         if(this.useSiteCaching) {
             //Store in cache
@@ -671,9 +674,9 @@ class SeadJsonServer {
     }
 
     getAnalysisMethodByMethodId(site, method_id) {
-        for(let key in site.analysis_methods) {
-            if(site.analysis_methods[key].method_id == method_id) {
-                return site.analysis_methods[key];
+        for(let key in site.lookup_tables.analysis_methods) {
+            if(site.lookup_tables.analysis_methods[key].method_id == method_id) {
+                return site.lookup_tables.analysis_methods[key];
             }
         }
     }
@@ -969,7 +972,7 @@ class SeadJsonServer {
             this.releaseDbConnection(pgClient);
         });
         
-        site.analysis_methods = methods;
+        site.lookup_tables.analysis_methods = methods;
 
         return site;
     }
@@ -1070,6 +1073,48 @@ class SeadJsonServer {
         });
 
         return site;
+    }
+
+    async fetchAnalysisEntitiesPrepMethods(site) {
+        let pgClient = await this.getDbConnection();
+        if(!pgClient) {
+            return false;
+        }
+
+        let sql = `SELECT * FROM tbl_analysis_entity_prep_methods WHERE analysis_entity_id=$1`;
+        let prepMethodIds = [];
+        for(let sgKey in site.sample_groups) {
+            let sampleGroup = site.sample_groups[sgKey];
+            for(let psKey in sampleGroup.physical_samples) {
+                let sample = sampleGroup.physical_samples[psKey];
+                for(let aeKey in sample.analysis_entities) {
+                    let analysisEntity = sample.analysis_entities[aeKey];
+                    let result = await pgClient.query(sql, [analysisEntity.analysis_entity_id]);
+                    analysisEntity.prepMethods = [];
+                    result.rows.forEach(method => {
+                        if(analysisEntity.prepMethods.indexOf(method.method_id) === -1) {
+                            analysisEntity.prepMethods.push(method.method_id);
+                        }
+                        if(prepMethodIds.indexOf(method.method_id) === -1) {
+                            prepMethodIds.push(method.method_id);
+                        }
+                    });
+                }
+            }
+        }
+
+        //Also feth metadata about each prep method and store in lookup table
+        if(typeof site.lookup_tables.prep_methods == "undefined") {
+            site.lookup_tables.prep_methods = [];
+        }
+        for(let key in prepMethodIds) {
+            let methodId = prepMethodIds[key];
+            let sql = `SELECT * FROM tbl_methods WHERE method_id=$1`;
+            let result = await pgClient.query(sql, [methodId]);
+            site.lookup_tables.prep_methods.push(result.rows[0]);
+        }
+
+        this.releaseDbConnection(pgClient);
     }
 
     async fetchPhysicalSamples(site) {

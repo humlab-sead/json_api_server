@@ -8,8 +8,8 @@ class MeasuredValuesModule {
     }
 
     siteHasModuleMethods(site) {
-        for(let key in site.analysis_methods) {
-            if(this.moduleMethodGroups.includes(site.analysis_methods[key].method_group_id)) {
+        for(let key in site.lookup_tables.analysis_methods) {
+            if(this.moduleMethodGroups.includes(site.lookup_tables.analysis_methods[key].method_group_id)) {
                 return true;
             }
         }
