@@ -13,7 +13,7 @@ const res = require('express/lib/response');
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.16.10";
+const appVersion = "1.16.11";
 
 class SeadJsonServer {
     constructor() {
@@ -697,6 +697,7 @@ class SeadJsonServer {
         let analysisEntities = [];
         for(let sgKey in site.sample_groups) {
             let sampleGroup = site.sample_groups[sgKey];
+            sampleGroup.datasets = []; //Will use this further down
             for(let sampleKey in sampleGroup.physical_samples) {
                 let sample = sampleGroup.physical_samples[sampleKey];
                 for(let aeKey in sample.analysis_entities) {
@@ -710,6 +711,25 @@ class SeadJsonServer {
                 if(dataset.dataset_id == datasetAes.dataset_id) {
                     dataset.analysis_entities = datasetAes.analysis_entities;
                 }
+            });
+        });
+
+        //Link sample_groups to analyses via their physical_samples_ids and analysis_entities
+        //this is just to make it more convenient/performant for the client since this requires a lot of looping to figure out
+        site.sample_groups.forEach(sampleGroup => {
+            //For each sample_group, check which datasets it can be linked to
+            datasets.forEach(dataset => {
+                dataset.analysis_entities.forEach(datasetAe => {
+                    sampleGroup.physical_samples.forEach(physicalSample => {
+                        physicalSample.analysis_entities.forEach(sgAe => {
+                            if(datasetAe.analysis_entity_id == sgAe.analysis_entity_id) {
+                                if(!sampleGroup.datasets.includes(dataset.dataset_id)) {
+                                    sampleGroup.datasets.push(dataset.dataset_id);
+                                }
+                            }
+                        });
+                    });
+                });
             });
         });
 
