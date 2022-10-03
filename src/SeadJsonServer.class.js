@@ -9,11 +9,12 @@ const { MongoClient } = require('mongodb');
 const DendrochronologyModule = require('./Modules/DendrochronologyModule.class');
 const AbundanceModule = require('./Modules/AbundanceModule.class');
 const MeasuredValuesModule = require('./Modules/MeasuredValuesModule.class');
+const EcoCodes = require("./EcoCodes.class");
 const res = require('express/lib/response');
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.16.11";
+const appVersion = "1.17.0-dev";
 
 class SeadJsonServer {
     constructor() {
@@ -35,6 +36,7 @@ class SeadJsonServer {
         this.expressApp.use(bodyParser.json());
         this.setupDatabase().then(() => {
             this.setupEndpoints();
+            this.ecoCodes = new EcoCodes(this);
 
             this.modules = [];
             this.modules.push(new AbundanceModule(this));
@@ -47,7 +49,7 @@ class SeadJsonServer {
         this.setupMongoDb().then(() => {
             console.log('Connected to MongoDB');
         });
-
+        
     }
 
     async setupMongoDb() {
