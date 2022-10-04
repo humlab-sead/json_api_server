@@ -23,7 +23,7 @@ class DendrochronologyModule {
                 });
             }
             catch(error) {
-                console.error("Couldn't connect to database");
+                console.error("Couldn't connect to postgres database");
                 console.error(error);
                 return res.send(JSON.stringify({
                     error: "Internal server error"

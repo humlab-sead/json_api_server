@@ -56,9 +56,11 @@ class EcoCodes {
 
 
     async getEcoCodesForSite(siteId, aggregationMode = "numberOfSpecies") {
-        let ecoCodeSiteBundle = await this.getEcocodeBundlesFromCache(siteId);
-        if(ecoCodeSiteBundle) {
-            return ecoCodeSiteBundle;
+        if(this.app.useEcoCodeCaching) {
+            let ecoCodeSiteBundle = await this.getEcocodeBundlesFromCache(siteId);
+            if(ecoCodeSiteBundle) {
+                return ecoCodeSiteBundle;
+            }
         }
 
         let site = await this.app.getSiteFromCache(siteId);
@@ -129,8 +131,10 @@ class EcoCodes {
             ecocode_bundles: ecocodeBundles
         };
 
-        this.saveEcocodeBundlesToCache(bundleObject);
-
+        if(this.app.useEcoCodeCaching) {
+            this.saveEcocodeBundlesToCache(bundleObject);
+        }
+        
         return bundleObject;
     }
 

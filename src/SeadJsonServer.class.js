@@ -14,7 +14,7 @@ const res = require('express/lib/response');
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.17.0";
+const appVersion = "1.17.1";
 
 class SeadJsonServer {
     constructor() {
@@ -24,6 +24,7 @@ class SeadJsonServer {
         this.useSiteCaching = typeof(process.env.USE_SITE_CACHE) != "undefined" ? process.env.USE_SITE_CACHE == "true" : true;
         this.useQueryCaching = typeof(process.env.USE_QUERY_CACHE) != "undefined" ? process.env.USE_QUERY_CACHE == "true" : true;
         this.useTaxonCaching = typeof(process.env.USE_TAXON_CACHE) != "undefined" ? process.env.USE_TAXON_CACHE == "true" : true;
+        this.useEcoCodeCaching = typeof(process.env.USE_ECOCODE_CACHE) != "undefined" ? process.env.USE_ECOCODE_CACHE == "true" : true;
         this.useStaticDbConnection = typeof(process.env.USE_SINGLE_PERSISTENT_DBCON) != "undefined" ? process.env.USE_SINGLE_PERSISTENT_DBCON == "true" : false;
         this.staticDbConnection = null;
         console.log("Starting up SEAD Data Server "+appVersion);
@@ -130,7 +131,7 @@ class SeadJsonServer {
                 return res.send(JSON.stringify(datasets));
             }
             catch(error) {
-                console.error("Couldn't connect to database");
+                console.error("Couldn't connect to postgres database");
                 console.error(error);
                 return res.send(JSON.stringify({
                     error: "Internal server error"
@@ -1386,9 +1387,9 @@ class SeadJsonServer {
                 database: process.env.POSTGRES_DATABASE,
                 password:process.env.POSTGRES_PASS,
                 port: process.env.POSTGRES_PORT,
-                max: 200,
+                max: process.env.POSTGRES_MAX_CONNECTIONS,
                 idleTimeoutMillis: 30000,
-                connectionTimeoutMillis: 5000,
+                connectionTimeoutMillis: 10000,
             });
 
             if(this.useStaticDbConnection) {
@@ -1405,6 +1406,24 @@ class SeadJsonServer {
         }
     };
 
+    async getDbConnectionOLD() {
+        if(this.useStaticDbConnection) {
+            return this.staticDbConnection;
+        }
+        else {
+            let dbcon = false;
+            try {
+                dbcon = await this.pgPool.connect();
+            }
+            catch(error) {
+                console.error("Couldn't connect to postgres database");
+                console.error(error);
+                return false;
+            }
+            return dbcon;
+        }
+    }
+
     async getDbConnection() {
         if(this.useStaticDbConnection) {
             return this.staticDbConnection;
@@ -1415,8 +1434,25 @@ class SeadJsonServer {
                 dbcon = await this.pgPool.connect();
             }
             catch(error) {
-                console.error("Couldn't connect to database");
-                console.error(error);
+                if(error.code == '53300') {
+                    //This means that all connection slots are currently taken, so we need to wait and try again later
+                    dbcon = await new Promise((resolve, reject) => {
+                        setTimeout(async () => {
+                            let result = await this.getDbConnection();
+                            if(result !== false) {
+                                resolve(result);
+                            }
+                            else {
+                                reject();
+                            }
+                        }, 500);
+                    });
+                    
+                }
+                else {
+                    console.error("Couldn't connect to postgres database");
+                    console.error(error);
+                }
                 return false;
             }
             return dbcon;
