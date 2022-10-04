@@ -98,6 +98,12 @@ class EcoCodes {
                     let promise = this.getEcoCodesForTaxon(abundance.taxon_id);
                     fetchPromises.push(promise);
                     promise.then(ecoCodes => {
+                        if(ecoCodes === false) {
+                            return {
+                                status: "error",
+                                msg: "Could not get eco codes for taxon "+abundance.taxon_id
+                            };
+                        }
                         ecoCodes.ecocodes.forEach(ecoCode => {
                             let bundleFound = false;
                             for(let bundleKey in ecocodeBundles) {

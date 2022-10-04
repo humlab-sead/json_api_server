@@ -12,9 +12,8 @@ const MeasuredValuesModule = require('./Modules/MeasuredValuesModule.class');
 const EcoCodes = require("./EcoCodes.class");
 const res = require('express/lib/response');
 
-
 const appName = "sead-json-api-server";
-const appVersion = "1.17.1";
+const appVersion = "1.17.2-dev";
 
 class SeadJsonServer {
     constructor() {
