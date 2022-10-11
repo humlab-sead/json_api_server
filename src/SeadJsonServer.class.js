@@ -13,7 +13,7 @@ const EcoCodes = require("./EcoCodes.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.17.3";
+const appVersion = "1.17.4";
 
 class SeadJsonServer {
     constructor() {
@@ -50,7 +50,6 @@ class SeadJsonServer {
         this.setupMongoDb().then(() => {
             console.log('Connected to MongoDB');
         });
-        
     }
 
     async setupMongoDb() {

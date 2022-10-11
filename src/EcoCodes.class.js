@@ -19,6 +19,69 @@ class EcoCodes {
                 res.send(JSON.stringify(ecoCodes, null, 2));
             }
         });
+
+        this.app.expressApp.get('/ecocodes/site/:siteid/samples', async (req, res) => {
+            let siteId = parseInt(req.params.siteid);
+            if(siteId) {
+                let ecoCodes = await this.getEcoCodesForSiteGroupedBySample(siteId);
+                res.header("Content-type", "application/json");
+                res.send(JSON.stringify(ecoCodes, null, 2));
+            }
+        });
+
+        this.app.expressApp.get('/preload/ecocodes/:flushCache?', async (req, res) => {
+            console.log(req.path);
+            if(req.params.flushCache) {
+                //await this.flushEcocodeCache(); //not implemented
+            }
+            await this.preloadAllSiteEcocodes();
+            res.send("Preload of ecocodes complete");
+        });
+    }
+
+    async preloadAllSiteEcocodes() {
+        let pgClient = await this.app.getDbConnection();
+        if(!pgClient) {
+            return false;
+        }
+
+        console.time("Preload of ecocodes complete");
+        console.log("Preloading ecocodes");
+
+        let siteData = await pgClient.query('SELECT * FROM tbl_sites ORDER BY site_id');
+        this.app.releaseDbConnection(pgClient);
+
+        console.log("Will fetch ecocodes data for "+siteData.rows.length+" sites");
+
+        let siteIds = [];
+        for(let key in siteData.rows) {
+            siteIds.push(siteData.rows[key].site_id);
+        }
+
+        let maxConcurrentFetches = parseInt(process.env.MAX_CONCURRENT_FETCHES);
+        maxConcurrentFetches = isNaN(maxConcurrentFetches) == false ? maxConcurrentFetches : 10;
+
+        let pendingFetches = 0;
+
+        await new Promise((resolve, reject) => {
+            const fetchCheckInterval = setInterval(() => {
+                if(siteIds.length > 0 && pendingFetches < maxConcurrentFetches) {
+                    pendingFetches++;
+                    let siteId = siteIds.shift();
+                    console.time("Fetched ecocodes for site "+siteId);
+                    this.getEcoCodesForSite(siteId).then(() => {
+                        console.timeEnd("Fetched ecocodes for site "+siteId);
+                        pendingFetches--;
+                    });
+                }
+                if(siteIds.length == 0) {
+                    clearInterval(fetchCheckInterval);
+                    resolve();
+                }
+            }, 100);
+        });
+
+        console.timeEnd("Preload of ecocodes complete");
     }
 
     async getEcoCodesForTaxon(taxonId) {
@@ -54,8 +117,164 @@ class EcoCodes {
         return taxon;
     }
 
+    async getEcoCodesForSites(siteIds) {
 
-    async getEcoCodesForSite(siteId, aggregationMode = "numberOfSpecies") {
+    }
+
+    async getEcoCodesForSample(physicalSampleId) {
+        let pgClient = await this.app.getDbConnection();
+        if(!pgClient) {
+            return false;
+        }
+
+        //1. select * from tbl_analysis_entities where physical_sample_id=39065 and dataset_id=34569
+        let sql = `
+        SELECT * from tbl_analysis_entities 
+        LEFT JOIN tbl_datasets ON tbl_datasets.dataset_id=tbl_analysis_entities.dataset_id
+        WHERE physical_sample_id=$1 AND tbl_datasets.method_id=3`;
+        let result = await pgClient.query(sql, [physicalSampleId]);
+        
+        let promises = [];
+        result.rows.forEach(row => {
+            //2. select * from tbl_abundances where analysis_entity_id=147992 - this will get the abundances as well as the taxon_id's
+            promises.push(pgClient.query("SELECT * FROM tbl_abundances WHERE analysis_entity_id=$1", [row.analysis_entity_id]));
+        });
+        let taxaAbundancesResult = await Promise.all(promises);
+        this.app.releaseDbConnection(pgClient);
+
+        taxaAbundancesResult.rows.forEach(taxonAbundance => {
+            taxonAbundance.taxon_id;
+            taxonAbundance.abundance;
+            taxonAbundance.abundance_element_id;
+            this.getEcoCodesForTaxon(taxonAbundance.taxon_id).then(taxonEcoCodes => {
+                
+            });
+        });
+    }
+
+    async getEcoCodesForSiteGroupedBySample(siteId) {
+        /* - no caching for this so far, the code below is for the per-site eco codes
+        if(this.app.useEcoCodeCaching) {
+            let ecoCodeSiteBundle = await this.getEcocodeBundlesFromCache(siteId);
+            if(ecoCodeSiteBundle) {
+                return ecoCodeSiteBundle;
+            }
+        }
+        */
+
+        let site = await this.app.getSiteFromCache(siteId);
+        if(!site) {
+            //If we don't have this site cached we give up on this request (at the moment!), but should perhaps be handled better in the future
+            console.warn("Site "+siteId+" is not cached");
+            return [];
+        }
+        
+        //Filter out only abundance counting datasets
+        let datasets = site.datasets.filter(dataset => {
+            return dataset.method_id == 3; //method_id 3 is paleoentomology
+        });
+
+        //aggregation modes: "numberOfSpecies" (per eco code) or "countOfAbundace" (per eco code)
+
+        /*
+        {
+            api_source: <version>,
+            samples: [
+                {
+                    physical_sample_id: ,
+                    ecocodes: [
+                        {
+                            ecocode_id,
+                            species: 3,
+                            abundance: 32 //This is, obviously, the aggregated abundance of all the specices that can be linked to this ecocode, obviously. Again, obviously (obviously).
+                        },
+                    ],
+                }
+            ]
+        }
+        */
+
+        let fetchPromises = [];
+
+        let sampleIds = [];
+        let sampleEcoCodes = [];
+
+        datasets.forEach(dataset => {
+            dataset.analysis_entities.forEach(ae => {
+                if(!sampleIds.includes(ae.physical_sample_id)) {
+                    sampleIds.push(ae.physical_sample_id);
+                }
+            })
+        });
+
+        sampleIds.forEach(sampleId => {
+            sampleEcoCodes.push({
+                physical_sample_id: sampleId,
+                ecocodes: []
+            });
+        });
+        
+        sampleEcoCodes.forEach(sampleEcoCode => {
+            datasets.forEach(dataset => {
+                dataset.analysis_entities.forEach(ae => {
+                    if(ae.physical_sample_id == sampleEcoCode.physical_sample_id) {
+                        ae.abundances.forEach(abundance => {
+                            
+                            abundance.taxon_id;
+                            abundance.abundance;
+
+                            let promise = this.getEcoCodesForTaxon(abundance.taxon_id);
+                            fetchPromises.push(promise);
+                            promise.then(ecoCodes => {
+                                if(ecoCodes === false) {
+                                    return {
+                                        status: "error",
+                                        msg: "Could not get eco codes for taxon "+abundance.taxon_id
+                                    };
+                                }
+                                ecoCodes.ecocodes.forEach(ecoCode => {
+                                    let bundleFound = false;
+                                    for(let bundleKey in sampleEcoCode.ecocodes) {
+                                        if(sampleEcoCode.ecocodes[bundleKey].ecocode.ecocode_definition_id == ecoCode.ecocode_definition_id) {
+                                            bundleFound = true;
+                                            if(!sampleEcoCode.ecocodes[bundleKey].taxa.includes(abundance.taxon_id)) {
+                                                sampleEcoCode.ecocodes[bundleKey].taxa.push(abundance.taxon_id);
+                                            }
+                                            sampleEcoCode.ecocodes[bundleKey].abundance += abundance.abundance;
+                                        }
+                                    }
+                                    if(!bundleFound) {
+                                        sampleEcoCode.ecocodes.push({
+                                            ecocode: ecoCode,
+                                            taxa: [abundance.taxon_id],
+                                            abundance: abundance.abundance
+                                        });
+                                    }
+                                });
+                            });
+                        });
+                    }
+                })
+            });
+        });
+
+
+        await Promise.all(fetchPromises);
+
+        let bundleObject = {
+            api_source: this.app.appName+"-"+this.app.appVersion,
+            site_id: siteId,
+            ecocode_bundles: sampleEcoCodes
+        };
+
+        if(this.app.useEcoCodeCaching) {
+            //this.saveEcocodeBundlesToCache(bundleObject);
+        }
+        
+        return bundleObject;
+    }
+
+    async getEcoCodesForSite(siteId, groupBySample = false) {
         if(this.app.useEcoCodeCaching) {
             let ecoCodeSiteBundle = await this.getEcocodeBundlesFromCache(siteId);
             if(ecoCodeSiteBundle) {
@@ -90,8 +309,11 @@ class EcoCodes {
         }
         */
 
-        let ecocodeBundles = [];
+        
+
         let fetchPromises = [];
+        let ecocodeBundles = [];
+    
         datasets.forEach(dataset => {
             dataset.analysis_entities.forEach(ae => {
                 ae.abundances.forEach(abundance => {
@@ -128,6 +350,7 @@ class EcoCodes {
                 });
             });
         });
+        
 
         await Promise.all(fetchPromises);
 
@@ -169,7 +392,7 @@ class EcoCodes {
 
         //Check that this cached version of the site was generated by the same server version as we are running
         //If not, it will be re-generated using the (hopefully) newer version
-        if(ecoCodeBundle && ecoCodeBundle.api_source == this.app.appName+"-"+this.app.appVersion) {
+        if(ecoCodeBundle && (ecoCodeBundle.api_source == this.app.appName+"-"+this.app.appVersion || this.acceptCacheVersionMismatch)) {
             return ecoCodeBundle;
         }
         return false;
