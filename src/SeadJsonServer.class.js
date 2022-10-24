@@ -9,11 +9,13 @@ const { MongoClient } = require('mongodb');
 const DendrochronologyModule = require('./Modules/DendrochronologyModule.class');
 const AbundanceModule = require('./Modules/AbundanceModule.class');
 const MeasuredValuesModule = require('./Modules/MeasuredValuesModule.class');
+const CeramicsModule = require('./Modules/CeramicsModule.class');
+
 const EcoCodes = require("./EcoCodes.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.17.4";
+const appVersion = "1.18.0";
 
 class SeadJsonServer {
     constructor() {
@@ -43,6 +45,7 @@ class SeadJsonServer {
             this.modules.push(new AbundanceModule(this));
             this.modules.push(new DendrochronologyModule(this));
             this.modules.push(new MeasuredValuesModule(this));
+            this.modules.push(new CeramicsModule(this));
 
             this.run();
         });
