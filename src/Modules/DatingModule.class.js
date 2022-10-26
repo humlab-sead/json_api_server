@@ -65,7 +65,7 @@ class DatingModule {
             sampleGroup.physical_samples.forEach(physicalSample => {
                 physicalSample.analysis_entities.forEach(analysisEntity => {
                     let promise = pgClient.query(sql, [analysisEntity.analysis_entity_id]).then(values => {
-                        analysisEntity.dating_values = values.rows;
+                        analysisEntity.dating_values = values.rows[0];
                     });
                     queryPromises.push(promise);
                 });
