@@ -10,6 +10,7 @@ const DendrochronologyModule = require('./Modules/DendrochronologyModule.class')
 const AbundanceModule = require('./Modules/AbundanceModule.class');
 const MeasuredValuesModule = require('./Modules/MeasuredValuesModule.class');
 const CeramicsModule = require('./Modules/CeramicsModule.class');
+const DatingModule = require('./Modules/DatingModule.class');
 
 const EcoCodes = require("./EcoCodes.class");
 const res = require('express/lib/response');
@@ -46,6 +47,7 @@ class SeadJsonServer {
             this.modules.push(new DendrochronologyModule(this));
             this.modules.push(new MeasuredValuesModule(this));
             this.modules.push(new CeramicsModule(this));
+            this.modules.push(new DatingModule(this));
 
             this.run();
         });
