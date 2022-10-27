@@ -110,7 +110,7 @@ class DatingModule {
                 }
 
                 if(ae.dating_values) {
-                    dataGroup.data_points.push(ae.dating_values);
+                    dataGroup.data_points.push(ae);
                 }
             }
         }
