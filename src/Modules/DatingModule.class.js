@@ -79,8 +79,41 @@ class DatingModule {
         return site;
     }
 
+    getDataGroupByMethod(dataGroups, methodId) {
+        for(let key in dataGroups) {
+            if(dataGroups[key].method_id == methodId) {
+                return dataGroups[key];
+            }
+        }
+        return null;
+    }
+
     postProcessSiteData(site) {
-        return site;
+        //Here we are going to group the datasets which belong together (refers to the same analysis method) into "data_groups"
+        let dataGroups = [];
+
+        for(let dsKey in site.datasets) {
+            let dataset = site.datasets[dsKey];
+
+            for(let aeKey in dataset.analysis_entities) {
+                let ae = dataset.analysis_entities[aeKey];
+
+                let dataGroup = this.getDataGroupByMethod(dataGroups, dataset.method_id);
+                if(dataGroup == null) {
+                    dataGroup = {
+                        method_id: dataset.method_id,
+                        data_points: [],
+                        type: "dating_values",
+                    };
+                    dataGroups.push(dataGroup);
+                }
+
+                if(ae.dating_values) {
+                    dataGroup.data_points.push(ae.dating_values);
+                }
+            }
+        }
+        return site.data_groups = dataGroups.concat(site.data_groups);
     }
 }
 
