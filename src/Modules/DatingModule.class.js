@@ -102,6 +102,7 @@ class DatingModule {
                 if(dataGroup == null) {
                     dataGroup = {
                         method_id: dataset.method_id,
+                        method_group_id: dataset.method_group_id,
                         data_points: [],
                         type: "dating_values",
                     };
