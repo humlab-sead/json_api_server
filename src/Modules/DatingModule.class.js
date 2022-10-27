@@ -1,14 +1,14 @@
 class DatingModule {
     constructor(app) {
         this.name = "Dating";
-        this.moduleMethods = [155]; //155 is probably not the only one...
+        this.moduleMethodGroups = [19, 20];
         this.app = app;
         this.expressApp = this.app.expressApp;
     }
 
     siteHasModuleMethods(site) {
         for(let key in site.lookup_tables.analysis_methods) {
-            if(this.moduleMethods.includes(site.lookup_tables.analysis_methods[key].method_id)) {
+            if(this.moduleMethodGroups.includes(site.lookup_tables.analysis_methods[key].method_group_id)) {
                 return true;
             }
         }
@@ -54,7 +54,7 @@ class DatingModule {
         tbl_location_types.description AS age_location_desc
         FROM public.tbl_relative_dates
         LEFT JOIN tbl_relative_ages ON tbl_relative_ages.relative_age_id = tbl_relative_dates.relative_age_id
-        lEFT JOIN tbl_relative_age_types ON tbl_relative_age_types.relative_age_type_id = tbl_relative_ages.relative_age_type_id
+        LEFT JOIN tbl_relative_age_types ON tbl_relative_age_types.relative_age_type_id = tbl_relative_ages.relative_age_type_id
         LEFT JOIN tbl_locations ON tbl_locations.location_id = tbl_relative_ages.location_id
         LEFT JOIN tbl_location_types ON tbl_location_types.location_type_id = tbl_locations.location_type_id
         WHERE analysis_entity_id=$1;
