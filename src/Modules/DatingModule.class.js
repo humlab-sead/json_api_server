@@ -74,9 +74,8 @@ class DatingModule {
         WHERE tbl_analysis_entities.analysis_entity_id=$1;
         `;
         
-
         let queryPromises = [];
-
+        
         site.sample_groups.forEach(sampleGroup => {
             sampleGroup.physical_samples.forEach(physicalSample => {
                 physicalSample.analysis_entities.forEach(analysisEntity => {

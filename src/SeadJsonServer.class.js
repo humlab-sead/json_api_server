@@ -16,7 +16,7 @@ const EcoCodes = require("./EcoCodes.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.18.6";
+const appVersion = "1.19.0";
 
 class SeadJsonServer {
     constructor() {
@@ -1316,6 +1316,23 @@ class SeadJsonServer {
         if(this.cacheStorageMethod == "file") {
             fs.writeFileSync("taxa_cache/taxon_"+taxon.taxon_id+".json", JSON.stringify(taxon, null, 2));
         }
+    }
+
+    async getObjectFromCache(collection, identifierObject) {
+        let foundObject = null;
+        let findResult = await this.mongo.collection(collection).find(identifierObject).toArray();
+        if(findResult.length > 0) {
+            foundObject = findResult[0];
+        }
+        if(foundObject && (foundObject.api_source == appName+"-"+appVersion || this.acceptCacheVersionMismatch)) {
+            return foundObject;
+        }
+        return false;
+    }
+
+    async saveObjectToCache(collection, identifierObject, saveObject) {
+        await this.mongo.collection(collection).deleteOne(identifierObject);
+        this.mongo.collection(collection).insertOne(saveObject);
     }
 
     async getSiteFromCache(siteId) {
