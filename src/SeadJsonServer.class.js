@@ -16,7 +16,7 @@ const EcoCodes = require("./EcoCodes.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.19.0";
+const appVersion = "1.19.1";
 
 class SeadJsonServer {
     constructor() {

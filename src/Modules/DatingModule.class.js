@@ -183,19 +183,22 @@ class DatingModule {
             for(let aeKey in dataset.analysis_entities) {
                 let ae = dataset.analysis_entities[aeKey];
 
-                let dataGroup = this.getDataGroupByMethod(dataGroups, dataset.method_id);
-                if(dataGroup == null) {
-                    dataGroup = {
-                        method_id: dataset.method_id,
-                        method_group_id: dataset.method_group_id,
-                        data_points: [],
-                        type: "dating_values",
-                    };
-                    dataGroups.push(dataGroup);
-                }
+                //check here if we should be handling this dataset
+                if(this.moduleMethodGroups.includes(dataset.method_group_id)) {
+                    let dataGroup = this.getDataGroupByMethod(dataGroups, dataset.method_id);
+                    if(dataGroup == null) {
+                        dataGroup = {
+                            method_id: dataset.method_id,
+                            method_group_id: dataset.method_group_id,
+                            data_points: [],
+                            type: "dating_values",
+                        };
+                        dataGroups.push(dataGroup);
+                    }
 
-                if(ae.dating_values) {
-                    dataGroup.data_points.push(ae);
+                    if(ae.dating_values) {
+                        dataGroup.data_points.push(ae);
+                    }
                 }
             }
         }
