@@ -87,7 +87,7 @@ class DatingModule {
                     let specialTreatment = false;
                     for(let key in site.datasets) {
                         if(analysisEntity.dataset_id == site.datasets[key].dataset_id) {
-                            if(site.datasets[key].method_id == 151) {
+                            if(site.datasets[key].method_id == 151 || site.datasets[key].method_id == 148) { //this is horrible
                                 //This needs special treatment
                                 specialTreatment = true;
                             }
