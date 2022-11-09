@@ -3,7 +3,7 @@ const fs = require('fs');
 class DatingModule {
     constructor(app) {
         this.name = "Dating";
-        this.moduleMethodGroups = [19, 20, 151]; //should maybe include 21 as well...
+        this.moduleMethodGroups = [19, 20, 151, 3]; //should maybe include 21 as well...
         this.app = app;
         this.expressApp = this.app.expressApp;
     }
