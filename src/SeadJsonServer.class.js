@@ -13,10 +13,11 @@ const CeramicsModule = require('./Modules/CeramicsModule.class');
 const DatingModule = require('./Modules/DatingModule.class');
 
 const EcoCodes = require("./EcoCodes.class");
+const SiteTime = require("./SiteTime.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.19.4";
+const appVersion = "1.19.5-dev";
 
 class SeadJsonServer {
     constructor() {
@@ -40,14 +41,18 @@ class SeadJsonServer {
         this.expressApp.use(bodyParser.json());
         this.setupDatabase().then(() => {
             this.setupEndpoints();
-            this.ecoCodes = new EcoCodes(this);
+            
 
             this.modules = [];
             this.modules.push(new AbundanceModule(this));
             this.modules.push(new DendrochronologyModule(this));
             this.modules.push(new MeasuredValuesModule(this));
             this.modules.push(new CeramicsModule(this));
-            this.modules.push(new DatingModule(this));
+            let datingModule = new DatingModule(this)
+            this.modules.push(datingModule);
+
+            this.ecoCodes = new EcoCodes(this);
+            this.siteTime = new SiteTime(this, datingModule);
 
             this.run();
         });
@@ -1331,7 +1336,7 @@ class SeadJsonServer {
     }
 
     async saveObjectToCache(collection, identifierObject, saveObject) {
-        await this.mongo.collection(collection).deleteOne(identifierObject);
+        await this.mongo.collection(collection).deleteMany(identifierObject);
         this.mongo.collection(collection).insertOne(saveObject);
     }
 
