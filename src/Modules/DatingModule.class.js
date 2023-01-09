@@ -3,7 +3,8 @@ const fs = require('fs');
 class DatingModule {
     constructor(app) {
         this.name = "Dating";
-        this.moduleMethodGroups = [19, 20, 151, 3]; //should maybe include 21 as well...
+        this.moduleMethodGroups = [19, 20, 3]; //should maybe include 21 as well...
+        this.c14StdMethodIds = [151, 148, 38];
         this.app = app;
         this.expressApp = this.app.expressApp;
     }
@@ -87,7 +88,7 @@ class DatingModule {
                     let specialTreatment = false;
                     for(let key in site.datasets) {
                         if(analysisEntity.dataset_id == site.datasets[key].dataset_id) {
-                            if(site.datasets[key].method_id == 151 || site.datasets[key].method_id == 148 || site.datasets[key].method_id == 38) { //this is horrible
+                            if(this.c14StdMethodIds.includes(site.datasets[key].method_id)) {
                                 //This needs special treatment
                                 specialTreatment = true;
                             }
@@ -137,6 +138,32 @@ class DatingModule {
         });
 
         return site;
+    }
+
+    getNormalizedDatingSpanFromDataGroup(dataGroup) {
+        let older = null;
+        let younger = null;
+        let type = "";
+        if(this.c14StdMethodIds.includes(dataGroup.method_id)) {
+            type = "c14std";
+            dataGroup.data_points.forEach(dp => {
+                older = parseInt(dp.dating_values.age) - parseInt(dp.dating_values.error_older);
+                younger = parseInt(dp.dating_values.cal_age_younger) + parseInt(dp.dating_values.error_younger);
+            });
+        }
+        else {
+            type = "modern";
+            dataGroup.data_points.forEach(dp => {
+                older = parseInt(dp.dating_values.cal_age_older);
+                younger = parseInt(dp.dating_values.cal_age_younger);
+            });
+        }
+
+        return {
+            type: type,
+            older: older,
+            younger: younger
+        }
     }
 
     async fetchDatingLab(site, datingLabId) {
