@@ -4,11 +4,13 @@ class Taxa {
 
         this.app.expressApp.post('/taxa', async (req, res) => {
             let siteIds = req.body;
+            siteIds = JSON.parse(siteIds);
             if(typeof siteIds != "object") {
                 res.status(400);
                 res.send("Bad input - should be an array of site IDs");
                 return;
             }
+            
             siteIds.forEach(siteId => {
                 if(!parseInt(siteId)) {
                     res.status(400);
