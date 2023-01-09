@@ -26,32 +26,55 @@ class Taxa {
 
     //This function is entirely untested - it hasn't been run even once, at all, so have fun with that! :)
     async fetchTaxaForSites(sites) {
-        console.log("figuring out taxa for:")
-        console.log(sites);
-
         let taxonList = [];
 
+        let sitePromises = [];
         sites.forEach(siteId => {
-            let site = this.app.getObjectFromCache("sites", { site_id: siteId });
-            if(site) {
-                site.datasets.forEach(dataset => {
-                    if(dataset.method_id == 3) { //this is an abundance counting dataset
-                        dataset.analysis_entities.forEach(ae => {
-                            ae.abundances.forEach(abundance => {
-                                taxonList.push(abundance.taxon_id);
+            let sitePromise = this.app.getObjectFromCache("sites", { site_id: siteId });
+            sitePromises.push(sitePromise);
+            sitePromise.then(site => {
+                if(site) {
+                    site.datasets.forEach(dataset => {
+                        if(dataset.method_id == 3) { //this is an abundance counting dataset
+                            dataset.analysis_entities.forEach(ae => {
+                                ae.abundances.forEach(abundance => {
+                                    taxonList.push(abundance.taxon_id);
+                                });
                             });
-                        });
-                    }
-                });
-            }
+                        }
+                    });
+                }
+            });
         });
+
+        await Promise.all(sitePromises);
 
         //Make them unique
         taxonList = taxonList.filter((value, index, self) => {
             return self.indexOf(value) === index;
         });
+        
+        //Also fetch the names for these species
+        let taxaPromises = [];
+        let taxa = [];
+        taxonList.forEach(taxonId => {
+            let taxonPromise = this.app.getObjectFromCache("taxa", { taxon_id: taxonId });
+            taxaPromises.push(taxonPromise);
+            taxonPromise.then(taxon => {
+                if(taxon) {
+                    taxa.push({
+                        taxonId: taxonId,
+                        order: taxon.order.order_name,
+                        family: taxon.family.family_name,
+                        genus: taxon.genus.genus_name
+                    });
+                }
+            });
+        });
 
-        return taxonList;
+        await Promise.all(taxaPromises);
+        
+        return taxa;
     }
 }
 
