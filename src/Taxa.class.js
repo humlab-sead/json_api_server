@@ -30,7 +30,8 @@ class Taxa {
 
     //This function is entirely untested - it hasn't been run even once, at all, so have fun with that! :)
     async fetchTaxaForSites(sites) {
-        let cacheId = crypto.createHash('sha256', JSON.stringify(sites)).digest('hex');
+        let cacheId = crypto.createHash('sha256');
+        cacheId = cacheId.update(JSON.stringify(sites)).digest('hex');
         let identifierObject = { cache_id: cacheId };
 
         let taxaCached = await this.app.getObjectFromCache("site_taxa_cache", identifierObject);
