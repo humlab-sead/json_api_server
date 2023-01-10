@@ -18,7 +18,7 @@ const Taxa = require("./Taxa.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.19.7";
+const appVersion = "1.19.8";
 
 class SeadJsonServer {
     constructor() {
