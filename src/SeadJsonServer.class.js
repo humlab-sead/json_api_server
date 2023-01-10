@@ -18,7 +18,7 @@ const Taxa = require("./Taxa.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.19.6";
+const appVersion = "1.19.7";
 
 class SeadJsonServer {
     constructor() {
@@ -1351,6 +1351,7 @@ class SeadJsonServer {
     }
 
     async saveObjectToCache(collection, identifierObject, saveObject) {
+        saveObject.api_source = appName+"-"+appVersion;
         await this.mongo.collection(collection).deleteMany(identifierObject);
         this.mongo.collection(collection).insertOne(saveObject);
     }
