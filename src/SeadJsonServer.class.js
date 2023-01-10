@@ -18,7 +18,7 @@ const Taxa = require("./Taxa.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.19.5";
+const appVersion = "1.19.6";
 
 class SeadJsonServer {
     constructor() {
@@ -27,7 +27,7 @@ class SeadJsonServer {
         this.cacheStorageMethod = typeof(process.env.CACHE_STORAGE_METHOD) != "undefined" ? process.env.CACHE_STORAGE_METHOD : "file";
         this.useSiteCaching = typeof(process.env.USE_SITE_CACHE) != "undefined" ? process.env.USE_SITE_CACHE == "true" : true;
         this.useQueryCaching = typeof(process.env.USE_QUERY_CACHE) != "undefined" ? process.env.USE_QUERY_CACHE == "true" : true;
-        this.useTaxonCaching = typeof(process.env.USE_TAXON_CACHE) != "undefined" ? process.env.USE_TAXON_CACHE == "true" : true;
+        this.useTaxaCaching = typeof(process.env.USE_TAXA_CACHE) != "undefined" ? process.env.USE_TAXA_CACHE == "true" : true;
         this.useEcoCodeCaching = typeof(process.env.USE_ECOCODE_CACHE) != "undefined" ? process.env.USE_ECOCODE_CACHE == "true" : true;
         this.useStaticDbConnection = typeof(process.env.USE_SINGLE_PERSISTENT_DBCON) != "undefined" ? process.env.USE_SINGLE_PERSISTENT_DBCON == "true" : false;
         this.acceptCacheVersionMismatch = typeof(process.env.ACCEPT_CACHE_VERSION_MISMATCH) != "undefined" ? process.env.ACCEPT_CACHE_VERSION_MISMATCH == "true" : false;
@@ -246,7 +246,7 @@ class SeadJsonServer {
     async getTaxon(taxonId, verbose = true) {
         if(verbose) console.log("Request for taxon", taxonId);
         let taxon = null;
-        if(this.useTaxonCaching) {
+        if(this.useTaxaCaching) {
             taxon = await this.getTaxonFromCache(taxonId);
             if(taxon) {
                 return taxon;
@@ -389,7 +389,7 @@ class SeadJsonServer {
 
         this.releaseDbConnection(pgClient);
 
-        if(this.useTaxonCaching) {
+        if(this.useTaxaCaching) {
             //Store in cache
             this.saveTaxonToCache(taxon);
         }
