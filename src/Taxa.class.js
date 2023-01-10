@@ -66,9 +66,9 @@ class Taxa {
                 if(taxon) {
                     taxa.push({
                         taxonId: taxonId,
-                        order: taxon.order.order_name,
                         family: taxon.family.family_name,
-                        genus: taxon.genus.genus_name
+                        genus: taxon.genus.genus_name,
+                        species: taxon.species
                     });
                 }
             });
