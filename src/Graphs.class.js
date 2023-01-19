@@ -6,7 +6,6 @@ class Graphs {
 
         this.app.expressApp.post('/graphs/analysis_methods', async (req, res) => {
             let siteIds = req.body;
-            console.log(siteIds);
             if(typeof siteIds != "object") {
                 res.status(400);
                 res.send("Bad input - should be an array of site IDs");
@@ -23,7 +22,7 @@ class Graphs {
 
             let analysisMethods = await this.fetchAnalysisMethodsSummaryForSites(siteIds);
             res.header("Content-type", "application/json");
-            res.send(JSON.stringify(analysisMethods, null, 2));
+            res.end(JSON.stringify(analysisMethods, null, 2));
         });
     }
 
@@ -34,7 +33,7 @@ class Graphs {
 
         let cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
         if(cachedData !== false) {
-            return cachedData.data;
+            return cachedData;
         }
         
         let query = { site_id : { $in : siteIds } };

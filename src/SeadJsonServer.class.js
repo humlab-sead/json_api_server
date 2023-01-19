@@ -19,7 +19,7 @@ const Graphs = require("./Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.19.9";
+const appVersion = "1.19.10";
 
 class SeadJsonServer {
     constructor() {
