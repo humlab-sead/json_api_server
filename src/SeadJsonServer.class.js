@@ -19,7 +19,7 @@ const Graphs = require("./Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.19.10";
+const appVersion = "1.20.0";
 
 class SeadJsonServer {
     constructor() {
@@ -1079,11 +1079,22 @@ class SeadJsonServer {
             return false;
         }
 
+        let methods = [];
         let queryPromises = [];
         site.sample_groups.forEach(sampleGroup => {
             
             let promise = pgClient.query('SELECT * FROM tbl_methods WHERE method_id=$1', [sampleGroup.method_id]).then(method => {
-                sampleGroup.sampling_method = method.rows[0];
+                sampleGroup.sampling_method_id = method.rows[0].method_id;
+                let found = false;
+                for(let key in methods) {
+                    if(methods[key].method_id == method.rows[0].method_id) {
+                        found = true;
+                    }
+                }
+                if(!found) {
+                    methods.push(method.rows[0]);
+                }
+                
             });
             queryPromises.push(promise);
         });
@@ -1091,6 +1102,8 @@ class SeadJsonServer {
         await Promise.all(queryPromises).then(() => {
             this.releaseDbConnection(pgClient);
         });
+
+        site.lookup_tables.sampling_methods = methods;
 
         return site;
     }
