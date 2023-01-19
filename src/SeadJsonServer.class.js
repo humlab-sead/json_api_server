@@ -15,6 +15,7 @@ const DatingModule = require('./Modules/DatingModule.class');
 const EcoCodes = require("./EcoCodes.class");
 const SiteTime = require("./SiteTime.class");
 const Taxa = require("./Taxa.class");
+const Graphs = require("./Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
@@ -55,6 +56,7 @@ class SeadJsonServer {
             this.ecoCodes = new EcoCodes(this);
             this.siteTime = new SiteTime(this, datingModule);
             this.taxa = new Taxa(this);
+            this.graphs = new Graphs(this);
 
             this.run();
         });
