@@ -90,9 +90,14 @@ class Graphs {
                             methodMeta = site.lookup_tables.sampling_methods[key];
                         }
                     }
-
-                    methodMeta.sample_groups_count = 1;
-                    methods.push(methodMeta);
+                    if(methodMeta == null) {
+                        console.warn("Could not find metadata for sampling method", sg.method_id, "in site data for site", site.site_id);
+                    }
+                    else {
+                        methodMeta.sample_groups_count = 1;
+                        methods.push(methodMeta);
+                    }
+                    
                 }
             })
         });
