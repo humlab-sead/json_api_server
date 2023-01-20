@@ -32,6 +32,7 @@ class SeadJsonServer {
         this.useEcoCodeCaching = typeof(process.env.USE_ECOCODE_CACHE) != "undefined" ? process.env.USE_ECOCODE_CACHE == "true" : true;
         this.useStaticDbConnection = typeof(process.env.USE_SINGLE_PERSISTENT_DBCON) != "undefined" ? process.env.USE_SINGLE_PERSISTENT_DBCON == "true" : false;
         this.acceptCacheVersionMismatch = typeof(process.env.ACCEPT_CACHE_VERSION_MISMATCH) != "undefined" ? process.env.ACCEPT_CACHE_VERSION_MISMATCH == "true" : false;
+        this.allCachingDisabled = typeof(process.env.FORCE_DISABLE_ALL_CACHES) != "undefined" ? process.env.FORCE_DISABLE_ALL_CACHES == "true" : false;
         this.staticDbConnection = null;
         console.log("Starting up SEAD Data Server "+appVersion);
         if(this.useSiteCaching) {
@@ -573,7 +574,7 @@ class SeadJsonServer {
                     clearInterval(fetchCheckInterval);
                     resolve();
                 }
-            }, 100);
+            }, 10);
         });
 
         console.timeEnd("Preload of taxa complete");
@@ -1355,6 +1356,9 @@ class SeadJsonServer {
     }
 
     async getObjectFromCache(collection, identifierObject) {
+        if(this.allCachingDisabled) {
+            return false;
+        }
         let foundObject = null;
         let findResult = await this.mongo.collection(collection).find(identifierObject).toArray();
         if(findResult.length > 0) {
@@ -1379,6 +1383,9 @@ class SeadJsonServer {
     }
 
     async saveObjectToCache(collection, identifierObject, saveObject) {
+        if(this.allCachingDisabled) {
+            return false;
+        }
         saveObject.api_source = appName+"-"+appVersion;
         await this.mongo.collection(collection).deleteMany(identifierObject);
         this.mongo.collection(collection).insertOne(saveObject);
