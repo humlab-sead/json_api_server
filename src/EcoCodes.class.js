@@ -160,7 +160,7 @@ class EcoCodes {
             }
         }
 
-        let site = await this.app.getSiteFromCache(siteId);
+        let site = await this.app.getObjectFromCache("sites", { site_id: siteId });
         if(!site) {
             //If we don't have this site cached we give up on this request (at the moment!), but should perhaps be handled better in the future
             console.warn("Site "+siteId+" is not cached");
@@ -280,7 +280,7 @@ class EcoCodes {
             }
         }
 
-        let site = await this.app.getSiteFromCache(siteId);
+        let site = await this.getObjectFromCache("sites", { site_id: siteId });
         if(!site) {
             //If we don't have this site cached we give up on this request (at the moment!), but should perhaps be handled better in the future
             console.warn("Site "+siteId+" is not cached");
