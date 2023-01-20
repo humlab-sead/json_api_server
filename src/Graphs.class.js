@@ -73,7 +73,9 @@ class Graphs {
         let methods = [];
         sites.forEach(site => {
             site.sample_groups.forEach(sg => {
-
+                if(typeof sg.method_id == "undefined"  || sg.method_id == null) {
+                    console.log("No sample method!", site.site_id);
+                }
                 let foundMethod = false;
                 for(let key in methods) {
                     if(methods[key].method_id == sg.method_id) {
@@ -83,9 +85,9 @@ class Graphs {
                 }
                 if(!foundMethod) {
                     let methodMeta = null;
-                    for(let key in site.lookup_tables.sample_methods) {
-                        if(site.lookup_tables.sample_methods[key].method_id == sg.method_id) {
-                            methodMeta = site.lookup_tables.sample_methods[key];
+                    for(let key in site.lookup_tables.sampling_methods) {
+                        if(site.lookup_tables.sampling_methods[key].method_id == sg.method_id) {
+                            methodMeta = site.lookup_tables.sampling_methods[key];
                         }
                     }
 
