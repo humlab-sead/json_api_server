@@ -19,7 +19,7 @@ const Graphs = require("./Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.20.5";
+const appVersion = "1.20.6";
 
 class SeadJsonServer {
     constructor() {
@@ -1319,14 +1319,17 @@ class SeadJsonServer {
         }
     }
 
-    async getObjectFromCache(collection, identifierObject) {
+    async getObjectFromCache(collection, identifierObject, findMany = false) {
         if(this.allCachingDisabled) {
             return false;
         }
         let foundObject = null;
         let findResult = await this.mongo.collection(collection).find(identifierObject).toArray();
-        if(findResult.length > 0) {
+        if(findResult.length > 0 && findMany == false) {
             foundObject = findResult[0];
+        }
+        else if(findMany) {
+            return findResult;
         }
 
         if(foundObject && (this.checkVersionMatch(foundObject.api_source, appName+"-"+appVersion) || this.acceptCacheVersionMismatch)) {

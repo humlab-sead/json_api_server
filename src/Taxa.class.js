@@ -6,7 +6,6 @@ class Taxa {
 
         this.app.expressApp.post('/taxa', async (req, res) => {
             let siteIds = req.body;
-            //siteIds = JSON.parse(siteIds);
             if(typeof siteIds != "object") {
                 res.status(400);
                 res.send("Bad input - should be an array of site IDs");
@@ -28,9 +27,9 @@ class Taxa {
 
     }
 
-    async fetchTaxaForSites(sites) {
+    async fetchTaxaForSites(siteIds) {
         let cacheId = crypto.createHash('sha256');
-        cacheId = cacheId.update(JSON.stringify(sites)).digest('hex');
+        cacheId = cacheId.update(JSON.stringify(siteIds)).digest('hex');
         let identifierObject = { cache_id: cacheId };
 
         let taxaCached = await this.app.getObjectFromCache("site_taxa_cache", identifierObject);
@@ -38,41 +37,38 @@ class Taxa {
             return taxaCached.taxa;
         }
 
+        let query = {
+            $and: [
+                { site_id: { $in : siteIds }},
+                { "datasets.method_id": 3 },
+            ]
+        }
+        let sites = await this.app.getObjectFromCache("sites", query, true);
+
         let taxonList = [];
 
         let sitePromises = [];
-        sites.forEach(siteId => {
-            let sitePromise = this.app.getObjectFromCache("sites", { site_id: siteId });
-            sitePromises.push(sitePromise);
-            sitePromise.then(site => {
-                if(site) {
-                    site.datasets.forEach(dataset => {
-                        if(dataset.method_id == 3) { //this is an abundance counting dataset
-                            dataset.analysis_entities.forEach(ae => {
-                                ae.abundances.forEach(abundance => {
-                                    let foundTaxon = false;
-                                    for(let key in taxonList) {
-                                        if(taxonList[key].taxonId == abundance.taxon_id) {
-                                            foundTaxon = true;
-                                            taxonList[key].abundance += abundance.abundance;
-                                        }
-                                    }
-                                    if(foundTaxon === false) {
-                                        taxonList.push({
-                                            taxonId: abundance.taxon_id,
-                                            abundance: abundance.abundance
-                                        });
-                                    }
+        sites.forEach(site => {
+            site.datasets.forEach(dataset => {
+                if(dataset.method_id == 3) { //this is an abundance counting dataset
+                    dataset.analysis_entities.forEach(ae => {
+                        ae.abundances.forEach(abundance => {
+                            let foundTaxon = false;
+                            for(let key in taxonList) {
+                                if(taxonList[key].taxonId == abundance.taxon_id) {
+                                    foundTaxon = true;
+                                    taxonList[key].abundance += abundance.abundance;
+                                }
+                            }
+                            if(foundTaxon === false) {
+                                taxonList.push({
+                                    taxonId: abundance.taxon_id,
+                                    abundance: abundance.abundance
                                 });
-                            });
-                        }
+                            }
+                        });
                     });
                 }
-                else {
-                    console.error("No cached entry for site "+siteId);
-                }
-            }).catch((error) => {
-                console.error(error);
             });
         });
 
