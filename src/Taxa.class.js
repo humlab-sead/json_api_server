@@ -68,6 +68,11 @@ class Taxa {
                         }
                     });
                 }
+                else {
+                    console.error("No cached entry for site "+siteId);
+                }
+            }).catch((error) => {
+                console.error(error);
             });
         });
 
@@ -88,6 +93,9 @@ class Taxa {
                         genus: taxonData.genus.genus_name,
                         species: taxonData.species
                     });
+                }
+                else {
+                    console.warn("Failed fetching taxon, no entry for taxon_id "+taxon.taxonId);
                 }
             });
         });
