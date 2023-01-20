@@ -45,9 +45,9 @@ class Taxa {
         }
         let sites = await this.app.getObjectFromCache("sites", query, true);
 
+        let taxonIds = [];
         let taxonList = [];
 
-        let sitePromises = [];
         sites.forEach(site => {
             site.datasets.forEach(dataset => {
                 if(dataset.method_id == 3) { //this is an abundance counting dataset
@@ -65,42 +65,41 @@ class Taxa {
                                     taxonId: abundance.taxon_id,
                                     abundance: abundance.abundance
                                 });
+                                taxonIds.push(abundance.taxon_id);
                             }
                         });
                     });
                 }
             });
         });
-
-        await Promise.all(sitePromises);
         
         //Also fetch the names for these species
-        let taxaPromises = [];
         let taxa = [];
-        taxonList.forEach(taxon => {
-            let taxonPromise = this.app.getObjectFromCache("taxa", { taxon_id: taxon.taxonId });
-            taxaPromises.push(taxonPromise);
-            taxonPromise.then(taxonData => {
-                if(taxonData) {
-                    taxa.push({
-                        taxonId: taxon.taxonId,
-                        abundance: taxon.abundance,
-                        family: taxonData.family.family_name,
-                        genus: taxonData.genus.genus_name,
-                        species: taxonData.species
-                    });
-                }
-                else {
-                    console.warn("Failed fetching taxon, no entry for taxon_id "+taxon.taxonId);
-                }
+        let taxaObjects = await this.app.getObjectFromCache("taxa", { taxon_id: { $in : taxonIds }}, true);
+
+        taxonList.forEach(taxonListItem => {
+            let taxonData = this.getTaxonById(taxaObjects, taxonListItem.taxonId);
+            taxa.push({
+                taxonId: taxonListItem.taxonId,
+                abundance: taxonListItem.abundance,
+                family: taxonData.family.family_name,
+                genus: taxonData.genus.genus_name,
+                species: taxonData.species
             });
         });
-
-        await Promise.all(taxaPromises);
 
         this.app.saveObjectToCache("site_taxa_cache", identifierObject, { cache_id: cacheId, taxa: taxa });
         
         return taxa;
+    }
+
+    getTaxonById(taxa, taxonId) {
+        for(let key in taxa) {
+            if(taxa[key].taxon_id == taxonId) {
+                return taxa[key];
+            }
+        }
+        return false;
     }
 }
 
