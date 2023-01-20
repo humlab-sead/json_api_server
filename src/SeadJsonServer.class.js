@@ -19,7 +19,7 @@ const Graphs = require("./Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.20.4";
+const appVersion = "1.20.5";
 
 class SeadJsonServer {
     constructor() {
@@ -44,7 +44,7 @@ class SeadJsonServer {
         this.expressApp.use(bodyParser.json());
         this.setupDatabase().then(() => {
             this.setupEndpoints();
-            
+
             this.modules = [];
             this.modules.push(new AbundanceModule(this));
             this.modules.push(new DendrochronologyModule(this));
@@ -83,8 +83,12 @@ class SeadJsonServer {
 
     setupEndpoints() {
         this.expressApp.all('*', (req, res, next) => {
-            console.log("Request:", req.method, req.path);
+            console.log("Request: "+req.method+" "+req.path+" initiating");
+            console.time("Request: "+req.method+" "+req.path+" completed");
             next();
+            res.addListener("close", () => {
+                console.timeEnd("Request: "+req.method+" "+req.path+" completed");
+            });
         });
 
         this.expressApp.get('/version', async (req, res) => {
