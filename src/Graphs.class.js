@@ -83,7 +83,7 @@ class Graphs {
                 }
                 if(!foundMethod) {
                     let methodMeta = null;
-                    for(let key in site.lookup_tables.analysis_methods) {
+                    for(let key in site.lookup_tables.sample_methods) {
                         if(site.lookup_tables.sample_methods[key].method_id == sg.method_id) {
                             methodMeta = site.lookup_tables.sample_methods[key];
                         }
