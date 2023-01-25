@@ -19,7 +19,7 @@ const Graphs = require("./Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.20.8";
+const appVersion = "1.21.0";
 
 class SeadJsonServer {
     constructor() {
@@ -50,7 +50,7 @@ class SeadJsonServer {
             this.modules.push(new DendrochronologyModule(this));
             this.modules.push(new MeasuredValuesModule(this));
             this.modules.push(new CeramicsModule(this));
-            let datingModule = new DatingModule(this)
+            const datingModule = new DatingModule(this);
             this.modules.push(datingModule);
 
             this.ecoCodes = new EcoCodes(this);
@@ -829,7 +829,7 @@ class SeadJsonServer {
         `;
         let siteBiblioRef = await pgClient.query(sql, [site.site_id]);
         site.biblio = siteBiblioRef.rows;
-        
+
         this.releaseDbConnection(pgClient);
         
         return site;
@@ -1071,6 +1071,7 @@ class SeadJsonServer {
             let promise = pgClient.query(sql, [datasetId]).then(datasetRes => {
                 if(datasetRes.rows.length > 0) {
                     let dataset = datasetRes.rows[0];
+                    dataset.contacts = [];
                     datasets.push(dataset);
                     if(dataset.biblio_id) {
                         pgClient.query("SELECT * FROM tbl_biblio WHERE biblio_id=$1", [dataset.biblio_id]).then(dsBiblio => {
@@ -1088,6 +1089,49 @@ class SeadJsonServer {
         });
         
         site.datasets = datasets;
+
+        //Fetch dataset contacts and associated information
+        sql = `
+        SELECT tbl_dataset_contacts.* FROM tbl_sites
+        JOIN tbl_sample_groups ON tbl_sample_groups.site_id = tbl_sites.site_id
+        JOIN tbl_physical_samples ON tbl_physical_samples.sample_group_id=tbl_sample_groups.sample_group_id
+        JOIN tbl_analysis_entities ON tbl_analysis_entities.physical_sample_id=tbl_physical_samples.physical_sample_id
+        JOIN tbl_datasets ON tbl_datasets.dataset_id=tbl_analysis_entities.dataset_id
+        JOIN tbl_dataset_contacts ON tbl_dataset_contacts.dataset_id=tbl_datasets.dataset_id
+        WHERE tbl_sites.site_id=$1
+        `;
+        let datasetContacts = await pgClient.query(sql, [site.site_id]);
+        
+        let uniqueDatasetContacts = new Set();
+        let uniqueDatasetContactTypes = new Set();
+
+        //Now we have to match these dataset_contacts with the datasets
+        datasetContacts.rows.forEach(dsContact => {
+            uniqueDatasetContactTypes.add(dsContact.contact_type_id);
+            uniqueDatasetContacts.add(dsContact.contact_id);
+            site.datasets.forEach(ds => {
+                if(ds.dataset_id == dsContact.dataset_id) {
+                    ds.contacts.push({
+                        contact_id: dsContact.contact_id,
+                        contact_type_id: dsContact.contact_type_id
+                    });
+                }
+            });
+        });
+
+        site.lookup_tables.dataset_contact_types = [];
+        uniqueDatasetContactTypes.forEach(async contactTypeId => {
+            sql = `SELECT * FROM tbl_contact_types WHERE contact_type_id=$1`;
+            let contactTypeRef = await pgClient.query(sql, [contactTypeId]);
+            site.lookup_tables.dataset_contact_types.push(contactTypeRef.rows[0]);
+        });
+
+        site.lookup_tables.dataset_contacts = [];
+        uniqueDatasetContacts.forEach(async contactId => {
+            sql = `SELECT * FROM tbl_contacts WHERE contact_id=$1`;
+            let contactRef = await pgClient.query(sql, [contactId]);
+            site.lookup_tables.dataset_contacts.push(contactRef.rows[0]);
+        });
 
         return site;
     }
