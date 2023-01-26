@@ -145,7 +145,44 @@ class EcoCodes {
 
         let ecocodes = [];
 
+        //timespan
+        let timeBinsNum = 10;
+        let timeBins = [];
+
+        //Find out what the max/min (oldest/youngest) points are in this total timespan
+        bundles.sort((a, b) => {
+            if(a.site_age_summary.oldest > b.site_age_summary.oldest) {
+                return 1;
+            }
+            if(a.site_age_summary.oldest < b.site_age_summary.oldest) {
+                return -1;
+            }
+        });
+        let oldest = bundles[0].site_age_summary.oldest;
+        
+        bundles.sort((a, b) => {
+            if(a.site_age_summary.youngest < b.site_age_summary.youngest) {
+                return 1;
+            }
+            if(a.site_age_summary.youngest > b.site_age_summary.youngest) {
+                return -1;
+            }
+        });
+        let youngest = bundles[0].site_age_summary.youngest;
+
+        let binSize = (oldest - youngest) / timeBinsNum;
+
+        for(let i = 0; i < timeBinsNum; i++) {
+            timeBins.push({
+                older: oldest - (binSize * i),
+                younger: (oldest - (binSize * i)) - binSize,
+                ecocodes: []
+            });
+        }
+
         bundles.forEach(bundle => {
+            //bin these by time
+
             //bundle.ecocode_bundles
         });
     }
@@ -336,8 +373,6 @@ class EcoCodes {
         }
         */
 
-        
-
         let fetchPromises = [];
         let ecocodeBundles = [];
     
@@ -384,6 +419,7 @@ class EcoCodes {
         let bundleObject = {
             api_source: this.app.appName+"-"+this.app.appVersion,
             site_id: siteId,
+            site_age_summary: site.age_summary,
             ecocode_bundles: ecocodeBundles
         };
 

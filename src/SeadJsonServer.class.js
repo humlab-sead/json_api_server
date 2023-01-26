@@ -6,20 +6,20 @@ const { Pool } = require('pg');
 const crypto = require('crypto');
 const zip = new require('node-zip')();
 const { MongoClient } = require('mongodb');
-const DendrochronologyModule = require('./Modules/DendrochronologyModule.class');
-const AbundanceModule = require('./Modules/AbundanceModule.class');
-const MeasuredValuesModule = require('./Modules/MeasuredValuesModule.class');
-const CeramicsModule = require('./Modules/CeramicsModule.class');
-const DatingModule = require('./Modules/DatingModule.class');
+const DendrochronologyModule = require('./DataFetchingModules/DendrochronologyModule.class');
+const AbundanceModule = require('./DataFetchingModules/AbundanceModule.class');
+const MeasuredValuesModule = require('./DataFetchingModules/MeasuredValuesModule.class');
+const CeramicsModule = require('./DataFetchingModules/CeramicsModule.class');
+const DatingModule = require('./DataFetchingModules/DatingModule.class');
 
-const EcoCodes = require("./EcoCodes.class");
-const SiteTime = require("./SiteTime.class");
-const Taxa = require("./Taxa.class");
-const Graphs = require("./Graphs.class");
+const EcoCodes = require("./EndpointModules/EcoCodes.class");
+const SiteTime = require("./EndpointModules/SiteTime.class");
+const Taxa = require("./EndpointModules/Taxa.class");
+const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.22.0";
+const appVersion = "1.22.0-dev";
 
 class SeadJsonServer {
     constructor() {
@@ -45,14 +45,17 @@ class SeadJsonServer {
         this.setupDatabase().then(() => {
             this.setupEndpoints();
 
-            this.modules = [];
-            this.modules.push(new AbundanceModule(this));
-            this.modules.push(new DendrochronologyModule(this));
-            this.modules.push(new MeasuredValuesModule(this));
-            this.modules.push(new CeramicsModule(this));
+            //These are the data fetching modules
+            //they have some requirements on them regarding methods they need to implement
+            this.dataFetchingModules = [];
+            this.dataFetchingModules.push(new AbundanceModule(this));
+            this.dataFetchingModules.push(new DendrochronologyModule(this));
+            this.dataFetchingModules.push(new MeasuredValuesModule(this));
+            this.dataFetchingModules.push(new CeramicsModule(this));
             const datingModule = new DatingModule(this);
-            this.modules.push(datingModule);
+            this.dataFetchingModules.push(datingModule);
 
+            //These are the endpoint modules, they have no implementation requirements
             this.ecoCodes = new EcoCodes(this);
             this.siteTime = new SiteTime(this, datingModule);
             this.taxa = new Taxa(this);
@@ -187,6 +190,16 @@ class SeadJsonServer {
             }
             await this.preloadAllTaxa();
             res.send("Preload of taxa complete");
+        });
+
+        this.expressApp.get('/preload/all', async (req, res) => {
+            console.log(req.path);
+            console.time("Preload of all data complete");
+            await this.preloadAllSites(); // collection: sites
+            await this.preloadAllTaxa(); // collection: taxa
+            await this.ecoCodes.preloadAllSiteEcocodes(); 
+            console.timeEnd("Preload of all data complete");
+            res.send("Preload of all data complete");
         });
 
         this.expressApp.get('/flushSiteCache', async (req, res) => {
@@ -787,8 +800,8 @@ class SeadJsonServer {
         })
 
         //Here we give each module a chance to modify the data structure now that everything is fetched
-        for(let key in this.modules) {
-            let module = this.modules[key];
+        for(let key in this.dataFetchingModules) {
+            let module = this.dataFetchingModules[key];
             module.postProcessSiteData(site);
         }
         return site;
@@ -936,8 +949,8 @@ class SeadJsonServer {
     async fetchMethodSpecificData(site, verbose = true) {
         let fetchPromises = [];
         
-        for(let key in this.modules) {
-            let module = this.modules[key];
+        for(let key in this.dataFetchingModules) {
+            let module = this.dataFetchingModules[key];
             //if(verbose) console.time("Fetched method "+module.name);
 
             //This should get "data_groups", a data_group has data structured in tabular form, like:

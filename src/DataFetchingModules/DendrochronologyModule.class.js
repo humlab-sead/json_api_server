@@ -1,6 +1,6 @@
 const fs = require('fs');
 const crypto = require('crypto');
-const DendroLib = require('../DendroLib.class');
+const DendroLib = require('../Lib/DendroLib.class');
 
 class DendrochronologyModule {
     constructor(app) {
