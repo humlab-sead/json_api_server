@@ -37,6 +37,27 @@ class EcoCodes {
             await this.preloadAllSiteEcocodes();
             res.send("Preload of ecocodes complete");
         });
+
+        this.app.expressApp.post('/ecocodes/sites/abundance', async (req, res) => {
+            let siteIds = req.body;
+            if(typeof siteIds != "object") {
+                res.status(400);
+                res.send("Bad input - should be an array of site IDs");
+                return;
+            }
+            
+            siteIds.forEach(siteId => {
+                if(!parseInt(siteId)) {
+                    res.status(400);
+                    res.send("Bad input - should be an array of site IDs");
+                    return;
+                }
+            });
+
+            let data = await this.fetchEcoCodesForSites(siteIds);
+            res.header("Content-type", "application/json");
+            res.end(JSON.stringify(data, null, 2));
+        });
     }
 
     async preloadAllSiteEcocodes() {
@@ -117,8 +138,16 @@ class EcoCodes {
         return taxon;
     }
 
-    async getEcoCodesForSites(siteIds) {
+    async fetchEcoCodesForSites(siteIds) {
+        console.log("getEcoCodesForSites");
 
+        let bundles = await this.app.getObjectFromCache("site_ecocode_bundles", { site_id : { $in : siteIds } }, true);
+
+        let ecocodes = [];
+
+        bundles.forEach(bundle => {
+            //bundle.ecocode_bundles
+        });
     }
 
     async getEcoCodesForSample(physicalSampleId) {
