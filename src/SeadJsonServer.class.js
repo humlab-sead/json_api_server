@@ -19,7 +19,7 @@ const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.22.0-dev";
+const appVersion = "1.22.1";
 
 class SeadJsonServer {
     constructor() {
@@ -33,6 +33,8 @@ class SeadJsonServer {
         this.useStaticDbConnection = typeof(process.env.USE_SINGLE_PERSISTENT_DBCON) != "undefined" ? process.env.USE_SINGLE_PERSISTENT_DBCON == "true" : false;
         this.acceptCacheVersionMismatch = typeof(process.env.ACCEPT_CACHE_VERSION_MISMATCH) != "undefined" ? process.env.ACCEPT_CACHE_VERSION_MISMATCH == "true" : false;
         this.allCachingDisabled = typeof(process.env.FORCE_DISABLE_ALL_CACHES) != "undefined" ? process.env.FORCE_DISABLE_ALL_CACHES == "true" : false;
+        this.maxConcurrentFetches = parseInt(process.env.MAX_CONCURRENT_FETCHES) ? parseInt(process.env.MAX_CONCURRENT_FETCHES) : process.env.MAX_CONCURRENT_FETCHES = 1;
+        
         this.staticDbConnection = null;
         console.log("Starting up SEAD Data Server "+appVersion);
         if(this.useSiteCaching) {
@@ -180,7 +182,7 @@ class SeadJsonServer {
                 await this.flushSiteCache();
             }
             await this.preloadAllSites();
-            res.send("Preload of sites complete");
+            res.end("Preload of sites complete");
         });
 
         this.expressApp.get('/preload/taxa/:flushCache?', async (req, res) => {
@@ -572,20 +574,20 @@ class SeadJsonServer {
             taxonIds.push(taxaData.rows[key].taxon_id);
         }
 
-        let maxConcurrentFetches = parseInt(process.env.MAX_CONCURRENT_FETCHES);
-        maxConcurrentFetches = isNaN(maxConcurrentFetches) == false ? maxConcurrentFetches : 10;
-
         let pendingFetches = 0;
 
         await new Promise((resolve, reject) => {
             const fetchCheckInterval = setInterval(() => {
-                if(taxonIds.length > 0 && pendingFetches < maxConcurrentFetches) {
+                if(taxonIds.length > 0 && pendingFetches < this.maxConcurrentFetches) {
                     pendingFetches++;
                     let taxonId = taxonIds.shift();
                     console.time("Fetched taxon "+taxonId);
                     this.getTaxon(taxonId, false).then(() => {
                         console.timeEnd("Fetched taxon "+taxonId);
                         pendingFetches--;
+                    }).catch(error => {
+                        console.log("Failed fetching taxon "+taxonId);
+                        console.log(error);
                     });
                 }
                 if(taxonIds.length == 0) {
@@ -617,14 +619,11 @@ class SeadJsonServer {
             siteIds.push(siteData.rows[key].site_id);
         }
 
-        let maxConcurrentFetches = parseInt(process.env.MAX_CONCURRENT_FETCHES);
-        maxConcurrentFetches = isNaN(maxConcurrentFetches) == false ? maxConcurrentFetches : 10;
-
         let pendingFetches = 0;
 
         await new Promise((resolve, reject) => {
             const fetchCheckInterval = setInterval(() => {
-                if(siteIds.length > 0 && pendingFetches < maxConcurrentFetches) {
+                if(siteIds.length > 0 && pendingFetches < this.maxConcurrentFetches) {
                     pendingFetches++;
                     let siteId = siteIds.shift();
                     console.time("Fetched site "+siteId);
@@ -638,7 +637,7 @@ class SeadJsonServer {
                     clearInterval(fetchCheckInterval);
                     resolve();
                 }
-            }, 100);
+            }, 10);
         });
 
         console.timeEnd("Preload of sites complete");
@@ -1128,10 +1127,21 @@ class SeadJsonServer {
             uniqueDatasetContacts.add(dsContact.contact_id);
             site.datasets.forEach(ds => {
                 if(ds.dataset_id == dsContact.dataset_id) {
-                    ds.contacts.push({
-                        contact_id: dsContact.contact_id,
-                        contact_type_id: dsContact.contact_type_id
+                    //don't add if we already have this
+                    let found = false;
+                    ds.contacts.forEach(contact => {
+                        if(contact.contact_id == dsContact.contact_id && contact.contact_type_id == dsContact.contact_type_id) {
+                            found = true;
+                        }
                     });
+
+                    if(!found) {
+                        ds.contacts.push({
+                            contact_id: dsContact.contact_id,
+                            contact_type_id: dsContact.contact_type_id
+                        });
+                    }
+                    
                 }
             });
         });

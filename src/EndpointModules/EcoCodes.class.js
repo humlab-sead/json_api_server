@@ -7,7 +7,7 @@ class EcoCodes {
             if(taxonId) {
                 let ecoCodes = await this.getEcoCodesForTaxon(taxonId);
                 res.header("Content-type", "application/json");
-                res.send(JSON.stringify(ecoCodes, null, 2));
+                res.end(JSON.stringify(ecoCodes, null, 2));
             }
         });
 
@@ -16,7 +16,7 @@ class EcoCodes {
             if(siteId) {
                 let ecoCodes = await this.getEcoCodesForSite(siteId);
                 res.header("Content-type", "application/json");
-                res.send(JSON.stringify(ecoCodes, null, 2));
+                res.end(JSON.stringify(ecoCodes, null, 2));
             }
         });
 
@@ -25,7 +25,7 @@ class EcoCodes {
             if(siteId) {
                 let ecoCodes = await this.getEcoCodesForSiteGroupedBySample(siteId);
                 res.header("Content-type", "application/json");
-                res.send(JSON.stringify(ecoCodes, null, 2));
+                res.end(JSON.stringify(ecoCodes, null, 2));
             }
         });
 
@@ -35,7 +35,7 @@ class EcoCodes {
                 //await this.flushEcocodeCache(); //not implemented
             }
             await this.preloadAllSiteEcocodes();
-            res.send("Preload of ecocodes complete");
+            res.end("Preload of ecocodes complete");
         });
 
         this.app.expressApp.post('/ecocodes/sites/abundance', async (req, res) => {
@@ -79,14 +79,11 @@ class EcoCodes {
             siteIds.push(siteData.rows[key].site_id);
         }
 
-        let maxConcurrentFetches = parseInt(process.env.MAX_CONCURRENT_FETCHES);
-        maxConcurrentFetches = isNaN(maxConcurrentFetches) == false ? maxConcurrentFetches : 10;
-
         let pendingFetches = 0;
 
         await new Promise((resolve, reject) => {
             const fetchCheckInterval = setInterval(() => {
-                if(siteIds.length > 0 && pendingFetches < maxConcurrentFetches) {
+                if(siteIds.length > 0 && pendingFetches < this.app.maxConcurrentFetches) {
                     pendingFetches++;
                     let siteId = siteIds.shift();
                     console.time("Fetched ecocodes for site "+siteId);
