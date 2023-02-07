@@ -1,6 +1,6 @@
 {
-  "name": "seaddataserver",
-  "version": "1.0.0",
+  "name": "sead_json_server",
+  "version": "0.0.0",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -9,20 +9,21 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/humlab-sead/seaddataserver.git"
+    "url": "git+https://github.com/humlab-sead/sead_json_server.git"
   },
   "author": "Johan von Boer",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/humlab-sead/seaddataserver/issues"
+    "url": "https://github.com/humlab-sead/sead_json_server/issues"
   },
-  "homepage": "https://github.com/humlab-sead/seaddataserver#readme",
+  "homepage": "https://github.com/humlab-sead/sead_json_server#readme",
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^8.6.0",
     "express": "^4.17.1",
     "mongodb": "^4.3.1",
     "node-zip": "^1.1.1",
-    "pg": "^8.4.2"
+    "pg": "^8.4.2",
+    "google-auth-library": "^5.2.0"
   }
 }
