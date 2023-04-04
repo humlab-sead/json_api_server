@@ -19,7 +19,7 @@ const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.22.1";
+const appVersion = "1.22.2";
 
 class SeadJsonServer {
     constructor() {
@@ -413,9 +413,20 @@ class SeadJsonServer {
         let sql = `SELECT 
         tbl_species_associations.*,
         tbl_species_association_types.association_description,
-        tbl_species_association_types.association_type_name
+        tbl_species_association_types.association_type_name,
+		tbl_taxa_tree_master.genus_id,
+		tbl_taxa_tree_master.species,
+		tbl_taxa_tree_genera.family_id,
+		tbl_taxa_tree_genera.genus_name,
+		tbl_taxa_tree_families.order_id,
+		tbl_taxa_tree_families.family_name,
+		tbl_taxa_tree_orders.order_name
         FROM tbl_species_associations
-        LEFT JOIN tbl_species_association_types ON tbl_species_association_types.association_type_id = tbl_species_associations.association_type_id
+        JOIN tbl_species_association_types ON tbl_species_association_types.association_type_id = tbl_species_associations.association_type_id
+        JOIN tbl_taxa_tree_master ON tbl_taxa_tree_master.taxon_id=tbl_species_associations.taxon_id
+		JOIN tbl_taxa_tree_genera ON tbl_taxa_tree_genera.genus_id=tbl_taxa_tree_master.genus_id
+		JOIN tbl_taxa_tree_families ON tbl_taxa_tree_families.family_id=tbl_taxa_tree_genera.family_id
+		JOIN tbl_taxa_tree_orders ON tbl_taxa_tree_orders.order_id=tbl_taxa_tree_families.order_id
         WHERE tbl_species_associations.taxon_id=$1
         `;
         let speciesAssociationsRes = await pgClient.query(sql, [taxonId]);
