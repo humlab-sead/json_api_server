@@ -19,7 +19,7 @@ const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.22.6";
+const appVersion = "1.22.7";
 
 class SeadJsonServer {
     constructor() {
@@ -341,7 +341,7 @@ class SeadJsonServer {
         tbl_biblio.year AS biblio_year,
         tbl_biblio.authors AS biblio_authors,
         tbl_biblio.full_reference AS biblio_full_reference,
-        tbl_biblio.notes AS biblio_notes,
+        tbl_biblio.notes AS biblio_notes
         FROM tbl_rdb
         JOIN tbl_rdb_codes ON tbl_rdb_codes.rdb_code_id=tbl_rdb.rdb_code_id
         JOIN tbl_rdb_systems ON tbl_rdb_systems.rdb_system_id=tbl_rdb_codes.rdb_system_id
