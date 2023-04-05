@@ -19,7 +19,7 @@ const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.22.4";
+const appVersion = "1.22.5";
 
 class SeadJsonServer {
     constructor() {
@@ -322,6 +322,28 @@ class SeadJsonServer {
         for(let key in taxon.ecocodes) {
             taxon.ecocodes[key].definition.ecocode_group = await this.fetchFromTable("tbl_ecocode_groups", "ecocode_group_id", taxon.ecocodes[key].definition.ecocode_group_id);
         }
+
+        //fetch rdb status
+        let rdbSql = `SELECT 
+        tbl_rdb.*,
+        tbl_rdb_codes.rdb_category,
+        tbl_rdb_codes.rdb_definition,
+        tbl_rdb_codes.rdb_system_id,
+        tbl_rdb_systems.rdb_system_id,
+        tbl_rdb_systems.rdb_system,
+        tbl_locations.location_name,
+        tbl_locations.location_type_id,
+        tbl_location_types.location_type,
+        tbl_location_types.description AS location_type_description
+        FROM tbl_rdb
+        JOIN tbl_rdb_codes ON tbl_rdb_codes.rdb_code_id=tbl_rdb.rdb_code_id
+        JOIN tbl_rdb_systems ON tbl_rdb_systems.rdb_system_id=tbl_rdb_codes.rdb_system_id
+        JOIN tbl_locations ON tbl_locations.location_id=tbl_rdb.location_id
+        JOIN tbl_location_types ON tbl_location_types.location_type_id=tbl_locations.location_type_id
+        WHERE taxon_id=$1
+        `;
+        let speciesRdb = await pgClient.query(rdbSql, [taxonId]);
+        taxon.rdb = speciesRdb.rows;
 
         //tbl_taxa_images
         taxon.images = await this.fetchFromTable("tbl_taxa_images", "taxon_id", taxonId);
