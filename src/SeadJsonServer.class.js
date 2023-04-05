@@ -19,7 +19,7 @@ const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.22.5";
+const appVersion = "1.22.6";
 
 class SeadJsonServer {
     constructor() {
@@ -331,15 +331,23 @@ class SeadJsonServer {
         tbl_rdb_codes.rdb_system_id,
         tbl_rdb_systems.rdb_system_id,
         tbl_rdb_systems.rdb_system,
+        tbl_rdb_systems.biblio_id AS rdb_system_biblio_id,
         tbl_locations.location_name,
         tbl_locations.location_type_id,
         tbl_location_types.location_type,
-        tbl_location_types.description AS location_type_description
+        tbl_location_types.description AS location_type_description,
+        tbl_biblio.bugs_reference,
+        tbl_biblio.title AS biblio_title,
+        tbl_biblio.year AS biblio_year,
+        tbl_biblio.authors AS biblio_authors,
+        tbl_biblio.full_reference AS biblio_full_reference,
+        tbl_biblio.notes AS biblio_notes,
         FROM tbl_rdb
         JOIN tbl_rdb_codes ON tbl_rdb_codes.rdb_code_id=tbl_rdb.rdb_code_id
         JOIN tbl_rdb_systems ON tbl_rdb_systems.rdb_system_id=tbl_rdb_codes.rdb_system_id
         JOIN tbl_locations ON tbl_locations.location_id=tbl_rdb.location_id
         JOIN tbl_location_types ON tbl_location_types.location_type_id=tbl_locations.location_type_id
+        JOIN tbl_biblio ON tbl_biblio.biblio_id=tbl_rdb_systems.biblio_id
         WHERE taxon_id=$1
         `;
         let speciesRdb = await pgClient.query(rdbSql, [taxonId]);
