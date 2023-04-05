@@ -19,7 +19,7 @@ const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.22.3";
+const appVersion = "1.22.4";
 
 class SeadJsonServer {
     constructor() {
@@ -437,6 +437,12 @@ class SeadJsonServer {
         for(let key in speciesAssociationsRes.rows) {
             let associatedTaxon = speciesAssociationsRes.rows[key];
             let associatedTaxonObject = {
+                "association_type_id": associatedTaxon.association_type_id,
+                "association_type_name": associatedTaxon.association_type_name,
+                "association_description": associatedTaxon.association_description,
+                "referencing_type": associatedTaxon.referencing_type,
+                "biblio_id": associatedTaxon.biblio_id,
+
                 "taxon_id": associatedTaxon.taxon_id,
                 "genus_id": associatedTaxon.genus_id,
                 "species": associatedTaxon.species,
