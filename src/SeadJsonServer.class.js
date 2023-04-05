@@ -19,7 +19,7 @@ const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.22.2";
+const appVersion = "1.22.3";
 
 class SeadJsonServer {
     constructor() {
@@ -420,7 +420,8 @@ class SeadJsonServer {
 		tbl_taxa_tree_genera.genus_name,
 		tbl_taxa_tree_families.order_id,
 		tbl_taxa_tree_families.family_name,
-		tbl_taxa_tree_orders.order_name
+		tbl_taxa_tree_orders.order_name,
+        tbl_taxa_tree_orders.record_type_id
         FROM tbl_species_associations
         JOIN tbl_species_association_types ON tbl_species_association_types.association_type_id = tbl_species_associations.association_type_id
         JOIN tbl_taxa_tree_master ON tbl_taxa_tree_master.taxon_id=tbl_species_associations.taxon_id
@@ -430,7 +431,31 @@ class SeadJsonServer {
         WHERE tbl_species_associations.taxon_id=$1
         `;
         let speciesAssociationsRes = await pgClient.query(sql, [taxonId]);
-        taxon.species_associations = speciesAssociationsRes.rows;
+
+        //Return associated taxa in the same format as in the site reports
+        taxon.species_associations = [];
+        for(let key in speciesAssociationsRes.rows) {
+            let associatedTaxon = speciesAssociationsRes.rows[key];
+            let associatedTaxonObject = {
+                "taxon_id": associatedTaxon.taxon_id,
+                "genus_id": associatedTaxon.genus_id,
+                "species": associatedTaxon.species,
+                "genus": {
+                    "genus_id": associatedTaxon.genus_id,
+                    "genus_name": associatedTaxon.genus_name
+                },
+                "family": {
+                    "family_id": associatedTaxon.family_id,
+                    "family_name": associatedTaxon.family_name
+                },
+                "order": {
+                    "order_id": associatedTaxon.order_id,
+                    "order_name": associatedTaxon.order_name,
+                    "record_type_id": associatedTaxon.record_type_id
+                }
+            }
+            taxon.species_associations.push(associatedTaxonObject);
+        }
 
         //tbl_biblio
 
