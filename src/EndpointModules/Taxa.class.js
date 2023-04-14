@@ -25,6 +25,40 @@ class Taxa {
             res.send(JSON.stringify(taxaList, null, 2));
         });
 
+        this.app.expressApp.get('/taxa/preload/:flushCache?', async (req, res) => {
+
+        });
+
+        this.app.expressApp.get('/taxon_distribution/:taxon_id', async (req, res) => {
+            this.fetchDistributionForTaxon(req.params.taxon_id).then(distribution => {
+                res.header("Content-type", "application/json");
+                res.send(JSON.stringify(distribution, null, 2));
+            });
+        });
+
+    }
+
+    fetchDistributionForAllTaxa() {
+        
+    }
+
+    async fetchDistributionForTaxon(taxonId) {
+        taxonId = parseInt(taxonId);
+
+        let sites = await this.app.mongo.collection("sites").find({ "datasets.analysis_entities.abundances.taxon_id": taxonId }).toArray();
+
+        //return just the site IDs, lng, lat, name
+        let sitesMetadata = [];
+        sites.forEach(site => {
+            sitesMetadata.push({
+                site_id: site.site_id,
+                site_name: site.site_name,
+                lng: site.longitude_dd,
+                lat: site.latitude_dd
+            })
+        });
+        
+        return sitesMetadata;
     }
 
     async fetchTaxaForSites(siteIds) {
