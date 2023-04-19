@@ -54,13 +54,24 @@ class Taxa {
                     dataset.analysis_entities.forEach(ae => {
                         ae.abundances.forEach(abundance => {
                             if(abundance.taxon_id == taxonId) {
-                                abundances.push({
-                                    site_id: site.site_id,
-                                    site_name: site.site_name,
-                                    lng: site.longitude_dd,
-                                    lat: site.latitude_dd,
-                                    abundance: abundance.abundance
-                                });
+                                //Check if we already have this site in the list
+                                let foundSite = false;
+                                for(let key in abundances) {
+                                    if(abundances[key].site_id == site.site_id) {
+                                        foundSite = true;
+                                        abundances[key].abundance += abundance.abundance;
+                                    }
+                                }
+
+                                if(foundSite === false) {
+                                    abundances.push({
+                                        site_id: site.site_id,
+                                        site_name: site.site_name,
+                                        lng: site.longitude_dd,
+                                        lat: site.latitude_dd,
+                                        abundance: abundance.abundance
+                                    });
+                                }
                             }
                         });
                     });
