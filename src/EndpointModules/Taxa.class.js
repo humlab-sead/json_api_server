@@ -47,18 +47,28 @@ class Taxa {
 
         let sites = await this.app.mongo.collection("sites").find({ "datasets.analysis_entities.abundances.taxon_id": taxonId }).toArray();
 
-        //return just the site IDs, lng, lat, name
-        let sitesMetadata = [];
+        let abundances = [];
         sites.forEach(site => {
-            sitesMetadata.push({
-                site_id: site.site_id,
-                site_name: site.site_name,
-                lng: site.longitude_dd,
-                lat: site.latitude_dd
-            })
+            site.datasets.forEach(dataset => {
+                if(dataset.method_id == 3) { //this is an abundance counting dataset
+                    dataset.analysis_entities.forEach(ae => {
+                        ae.abundances.forEach(abundance => {
+                            if(abundance.taxon_id == taxonId) {
+                                abundances.push({
+                                    site_id: site.site_id,
+                                    site_name: site.site_name,
+                                    lng: site.longitude_dd,
+                                    lat: site.latitude_dd,
+                                    abundance: abundance.abundance
+                                });
+                            }
+                        });
+                    });
+                }
+            });
         });
         
-        return sitesMetadata;
+        return abundances;
     }
 
     async fetchTaxaForSites(siteIds) {
