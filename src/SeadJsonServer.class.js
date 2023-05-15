@@ -13,13 +13,13 @@ const CeramicsModule = require('./DataFetchingModules/CeramicsModule.class');
 const DatingModule = require('./DataFetchingModules/DatingModule.class');
 
 const EcoCodes = require("./EndpointModules/EcoCodes.class");
-const SiteTime = require("./EndpointModules/SiteTime.class");
+const Chronology = require("./EndpointModules/Chronology.class");
 const Taxa = require("./EndpointModules/Taxa.class");
 const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.22.10";
+const appVersion = "1.23.0";
 
 class SeadJsonServer {
     constructor() {
@@ -34,7 +34,7 @@ class SeadJsonServer {
         this.acceptCacheVersionMismatch = typeof(process.env.ACCEPT_CACHE_VERSION_MISMATCH) != "undefined" ? process.env.ACCEPT_CACHE_VERSION_MISMATCH == "true" : false;
         this.allCachingDisabled = typeof(process.env.FORCE_DISABLE_ALL_CACHES) != "undefined" ? process.env.FORCE_DISABLE_ALL_CACHES == "true" : false;
         this.maxConcurrentFetches = parseInt(process.env.MAX_CONCURRENT_FETCHES) ? parseInt(process.env.MAX_CONCURRENT_FETCHES) : process.env.MAX_CONCURRENT_FETCHES = 1;
-        
+
         this.staticDbConnection = null;
         console.log("Starting up SEAD Data Server "+appVersion);
         if(this.useSiteCaching) {
@@ -59,7 +59,7 @@ class SeadJsonServer {
 
             //These are the endpoint modules, they have no implementation requirements
             this.ecoCodes = new EcoCodes(this);
-            this.siteTime = new SiteTime(this, datingModule);
+            this.chronology = new Chronology(this, datingModule);
             this.taxa = new Taxa(this);
             this.graphs = new Graphs(this);
 
@@ -773,9 +773,11 @@ class SeadJsonServer {
         await this.fetchAnalysisEntitiesPrepMethods(site);
         if(verbose) console.timeEnd("Fetched analysis entities prep methods for site "+siteId);
 
+        /*
         if(verbose) console.time("Fetched analysis entities ages for site "+siteId);
         await this.fetchAnalysisEntitiesAges(site);
         if(verbose) console.timeEnd("Fetched analysis entities ages for site "+siteId);
+        */
 
         if(verbose) console.time("Fetched analysis methods for site "+siteId);
         await this.fetchAnalysisMethods(site);
@@ -1565,7 +1567,6 @@ class SeadJsonServer {
         }
     }
 
-
     groupAnalysisEntitiesByDataset(analysisEntities) {
         let datasets = [];
 
@@ -1684,7 +1685,6 @@ class SeadJsonServer {
             console.log("Webserver started, listening at port", process.env.API_PORT),
         );
     }
-
 
     shutdown() {
         console.log("Shutdown called");

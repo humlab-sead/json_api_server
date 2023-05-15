@@ -38,10 +38,6 @@ class Taxa {
 
     }
 
-    fetchDistributionForAllTaxa() {
-        
-    }
-
     async fetchDistributionForTaxon(taxonId) {
         taxonId = parseInt(taxonId);
 

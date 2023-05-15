@@ -428,6 +428,7 @@ class EcoCodes {
     }
 
     insertIfUnique(ecocodes, ecocode) {
+
         let found = false;
         for(let key in ecocodes) {
             if(ecocodes[key].name == ecocode.name) {

@@ -166,6 +166,71 @@ class DatingModule {
         }
     }
 
+    getNormalizedDatingSpanFromDataset(dataset) {
+        let dating = {
+            older: null,
+            younger: null,
+            dataset_id: dataset.dataset_id
+        }
+
+        for(let aeKey in dataset.analysis_entities) {
+            let ae = dataset.analysis_entities[aeKey];
+            
+            if(ae.dating_values) {
+                let datingValues = ae.dating_values;
+
+                //c14
+                if(datingValues.c14_age_older && datingValues.c14_age_younger) {
+                    let olderValue = parseInt(datingValues.c14_age_older);
+                    let youngerValue = parseInt(datingValues.c14_age_younger);                    
+
+                    //dates are always BP so bigger is older
+                    if(olderValue > dating.older || dating.older == null) {
+                        dating.older = olderValue;
+                        dating.older_analysis_entity_id = ae.analysis_entity_id;
+                    }
+                    if(youngerValue < dating.younger || dating.younger == null) {
+                        dating.younger = youngerValue;
+                        dating.younger_analysis_entity_id = ae.analysis_entity_id;
+                    }
+                }
+
+                //cal
+                if(datingValues.cal_age_older && datingValues.cal_age_younger) {
+                    let olderValue = parseInt(datingValues.cal_age_older);
+                    let youngerValue = parseInt(datingValues.cal_age_younger);
+
+                    if(olderValue > dating.older || dating.older == null) {
+                        dating.older = olderValue;
+                        dating.older_analysis_entity_id = ae.analysis_entity_id;
+                    }
+                    if(youngerValue < dating.younger || dating.younger == null) {
+                        dating.younger = youngerValue;
+                        dating.younger_analysis_entity_id = ae.analysis_entity_id;
+                    }
+                }
+
+                //other
+                if(datingValues.age && datingValues.error_older && datingValues.error_younger) {
+                    let olderValue = parseInt(datingValues.age) - parseInt(datingValues.error_older);
+                    let youngerValue = parseInt(datingValues.age) + parseInt(datingValues.error_younger);
+
+
+                    if(olderValue > dating.older || dating.older == null) {
+                        dating.older = olderValue;
+                        dating.older_analysis_entity_id = ae.analysis_entity_id;
+                    }
+                    if(youngerValue < dating.younger || dating.younger == null) {
+                        dating.younger = youngerValue;
+                        dating.younger_analysis_entity_id = ae.analysis_entity_id;
+                    }
+                }
+            }
+        }
+
+        return dating;
+    }
+
     async fetchDatingLab(site, datingLabId) {
         let pgClient = await this.app.getDbConnection();
         if(!pgClient) {
@@ -229,8 +294,39 @@ class DatingModule {
                 }
             }
         }
+
+        //now figure out the chronology overview
+        this.fetchSiteTimeData(site);
+
         return site.data_groups = dataGroups.concat(site.data_groups);
     }
+
+    async fetchSiteTimeData(site) {
+        let siteDatingObject = {
+            age_older: null,
+            older_dataset_id: null,
+            older_analysis_entity_id: null,
+            age_younger: null,
+            younger_dataset_id: null,
+            younger_analysis_entity_id: null,
+        }
+        site.datasets.forEach(dataset => {
+            let ages = this.getNormalizedDatingSpanFromDataset(dataset);
+            if(ages.older > siteDatingObject.age_older || siteDatingObject.age_older == null) {
+                siteDatingObject.age_older = ages.older;
+                siteDatingObject.older_dataset_id = ages.dataset_id;
+                siteDatingObject.older_analysis_entity_id = ages.older_analysis_entity_id;
+            }
+            if(ages.younger < siteDatingObject.age_younger || siteDatingObject.age_younger == null) {
+                siteDatingObject.age_younger = ages.younger;
+                siteDatingObject.younger_dataset_id = ages.dataset_id;
+                siteDatingObject.younger_analysis_entity_id = ages.younger_analysis_entity_id;
+            }
+        });
+
+        site.chronology_extremes = siteDatingObject;
+    }
+    
 }
 
 module.exports = DatingModule;
