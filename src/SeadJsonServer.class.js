@@ -19,7 +19,7 @@ const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.24.2";
+const appVersion = "1.24.3";
 
 class SeadJsonServer {
     constructor() {
@@ -385,7 +385,7 @@ class SeadJsonServer {
                                 codeExists = true;
                             }
                         });
-                        if(!codeExists) {
+                        if(!codeExists && ecocodeRow.ecocode_system_id == system.ecocode_system_id) {
                             group.codes.push({
                                 ecocode_id: ecocodeRow.ecocode_id,
                                 name: ecocodeRow.ecocode_name,
