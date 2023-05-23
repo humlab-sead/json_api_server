@@ -19,7 +19,7 @@ const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.24.0";
+const appVersion = "1.24.1";
 
 class SeadJsonServer {
     constructor() {
@@ -316,6 +316,7 @@ class SeadJsonServer {
         tbl_ecocode_definitions.name AS ecocode_name,
         tbl_ecocode_definitions.definition AS ecocode_definition,
         tbl_ecocode_definitions.notes AS ecocode_notes,
+        tbl_ecocode_systems.ecocode_system_id as system_id,
         tbl_ecocode_systems.definition as system_definition,
         tbl_ecocode_systems.name as system_name,
         tbl_ecocode_systems.notes as system_notes
