@@ -19,7 +19,7 @@ const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.23.0";
+const appVersion = "1.24.0";
 
 class SeadJsonServer {
     constructor() {
@@ -308,20 +308,97 @@ class SeadJsonServer {
         let orderRes = await this.fetchFromTable("tbl_taxa_tree_orders", "order_id", taxon.family.order_id);
         taxon.order = orderRes[0];
 
-        //Fetch ecocodes
-        taxon.ecocodes = await this.fetchFromTable("tbl_ecocodes", "taxon_id", taxonId);
 
-        for(let key in taxon.ecocodes) {
-            let ecocode = taxon.ecocodes[key];
+        let ecocodeSql = `
+        SELECT 
+        tbl_ecocodes.*,
+        tbl_ecocode_definitions.abbreviation AS ecocode_abbreviation,
+        tbl_ecocode_definitions.name AS ecocode_name,
+        tbl_ecocode_definitions.definition AS ecocode_definition,
+        tbl_ecocode_definitions.notes AS ecocode_notes,
+        tbl_ecocode_systems.definition as system_definition,
+        tbl_ecocode_systems.name as system_name,
+        tbl_ecocode_systems.notes as system_notes
+        FROM tbl_ecocodes
+        JOIN tbl_ecocode_definitions ON tbl_ecocode_definitions.ecocode_definition_id=tbl_ecocodes.ecocode_definition_id
+        JOIN tbl_ecocode_groups ON tbl_ecocode_groups.ecocode_group_id=tbl_ecocode_definitions.ecocode_group_id
+        JOIN tbl_ecocode_systems ON tbl_ecocode_systems.ecocode_system_id=tbl_ecocode_groups.ecocode_system_id
+        WHERE taxon_id=$1`;
+        let ecocodeRes = await pgClient.query(ecocodeSql, [taxonId]);
 
-            rows = await this.fetchFromTable("tbl_ecocode_definitions", "ecocode_definition_id", ecocode.ecocode_definition_id);
-            ecocode.definition = rows[0];
-        }
+        let ecocodes = {
+            systems: [],
+        };
+        ecocodeRes.rows.forEach(ecocodeRow => {
+            //if system doesn't already exist in the array, add it
+            let systemExists = false;
+            ecocodes.systems.forEach(system => {
+                if(system.ecocode_system_id == ecocodeRow.ecocode_system_id) {
+                    systemExists = true;
+                }
+            });
+            if(!systemExists) {
+                ecocodes.systems.push({
+                    ecocode_system_id: ecocodeRow.ecocode_system_id,
+                    name: ecocodeRow.system_name,
+                    definition: ecocodeRow.system_definition,
+                    notes: ecocodeRow.system_notes,
+                    groups: []
+                });
+            }
+        });
 
-        //tbl_ecocode_groups
-        for(let key in taxon.ecocodes) {
-            taxon.ecocodes[key].definition.ecocode_group = await this.fetchFromTable("tbl_ecocode_groups", "ecocode_group_id", taxon.ecocodes[key].definition.ecocode_group_id);
-        }
+        //now add the groups to each system
+        ecocodes.systems.forEach(system => {
+            ecocodeRes.rows.forEach(ecocodeRow => {
+                if(ecocodeRow.ecocode_system_id == system.ecocode_system_id) {
+                    //if group doesn't already exist in the array, add it
+                    let groupExists = false;
+                    system.groups.forEach(group => {
+                        if(group.ecocode_group_id == ecocodeRow.ecocode_group_id) {
+                            groupExists = true;
+                        }
+                    });
+                    if(!groupExists) {
+                        system.groups.push({
+                            ecocode_group_id: ecocodeRow.ecocode_group_id,
+                            name: ecocodeRow.ecocode_group_name,
+                            definition: ecocodeRow.ecocode_group_definition,
+                            notes: ecocodeRow.ecocode_group_notes,
+                            codes: []
+                        });
+                    }
+                }
+            });
+        });
+
+        //now add the codes to each group
+        ecocodes.systems.forEach(system => {
+            system.groups.forEach(group => {
+                ecocodeRes.rows.forEach(ecocodeRow => {
+                    if(ecocodeRow.ecocode_group_id == group.ecocode_group_id) {
+                        //if code doesn't already exist in the array, add it
+                        let codeExists = false;
+                        group.codes.forEach(code => {
+                            if(code.ecocode_id == ecocodeRow.ecocode_id) {
+                                codeExists = true;
+                            }
+                        });
+                        if(!codeExists) {
+                            group.codes.push({
+                                ecocode_id: ecocodeRow.ecocode_id,
+                                name: ecocodeRow.ecocode_name,
+                                abbreviation: ecocodeRow.ecocode_abbreviation,
+                                definition: ecocodeRow.ecocode_definition,
+                                notes: ecocodeRow.ecocode_notes
+                            });
+                        }
+                    }
+                });
+            });
+        });
+
+        taxon.ecocodes = ecocodes;
 
         //fetch rdb status
         let rdbSql = `SELECT 

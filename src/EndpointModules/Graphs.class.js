@@ -25,6 +25,27 @@ class Graphs {
             res.end(JSON.stringify(analysisMethods, null, 2));
         });
 
+        this.app.expressApp.post('/graphs/temporal_distributon', async (req, res) => {
+            let siteIds = req.body;
+            if(typeof siteIds != "object") {
+                res.status(400);
+                res.send("Bad input - should be an array of site IDs");
+                return;
+            }
+            
+            siteIds.forEach(siteId => {
+                if(!parseInt(siteId)) {
+                    res.status(400);
+                    res.send("Bad input - should be an array of site IDs");
+                    return;
+                }
+            });
+
+            let chartData = await this.fetchTemporalDistributionSummaryForSites(siteIds);
+            res.header("Content-type", "application/json");
+            res.end(JSON.stringify(chartData, null, 2));
+        });
+
         this.app.expressApp.post('/graphs/sample_methods', async (req, res) => {
             let siteIds = req.body;
             if(typeof siteIds != "object") {
@@ -109,6 +130,40 @@ class Graphs {
 
         this.app.saveObjectToCache("graph_cache", identifierObject, resultObject);
 
+        return resultObject;
+    }
+
+    async fetchTemporalDistributionSummaryForSites(siteIds) {
+        let cacheId = crypto.createHash('sha256');
+        cacheId = cacheId.update('analysismethods'+JSON.stringify(siteIds)).digest('hex');
+        let identifierObject = { cache_id: cacheId };
+
+        let cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
+        if(cachedData !== false) {
+            return cachedData;
+        }
+
+
+        let datingMethods = [];
+
+        let query = { site_id : { $in : siteIds } };
+        let sites = await this.app.mongo.collection('sites').find(query).toArray();
+        sites.forEach(site => {
+            site.datasets.forEach(dataset => {
+                //find out if this is a dataset with dating_values
+                if(datingMethods.includes(dataset.method_id)) {
+                    dataset.analysis_entities.forEach(ae => {
+                        ae.dating_values
+                    });
+                }
+
+            });
+        });
+
+        let resultObject = {
+            cache_id: cacheId,
+            datasets: []
+        }
         return resultObject;
     }
 
