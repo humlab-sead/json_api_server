@@ -70,66 +70,50 @@ class Graphs {
 
     async fetchSampleMethodsSummaryForSites(siteIds) {
         let cacheId = crypto.createHash('sha256');
-        cacheId = cacheId.update('samplemethods'+JSON.stringify(siteIds)).digest('hex');
+        cacheId = cacheId.update('samplemethods' + JSON.stringify(siteIds)).digest('hex');
         let identifierObject = { cache_id: cacheId };
-
+      
         let cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
-        if(cachedData !== false) {
-            return cachedData;
+        if (cachedData !== false) {
+          return cachedData;
         }
 
-        let query = { site_id : { $in : siteIds } };
-        /*
-        let query = {
-            $and: [
-                { site_id: { $in : siteIds }},
-                { "sample_groups.sampling_context.descriptions.sample_description_type_id": 30 }
-                //{ "sample_groups.physical_samples.descriptions.sample_description_type_id": 30 }
-            ]
-            
-        };
-        */
-
-        let sites = await this.app.mongo.collection('sites').find(query).toArray();
-        let methods = [];
-        sites.forEach(site => {
-            site.sample_groups.forEach(sg => {
-                if(typeof sg.method_id == "undefined"  || sg.method_id == null) {
-                    console.log("No sample method!", site.site_id);
+        let pipeline = [
+            { $match: { site_id: { $in: siteIds } } },
+            { $unwind: "$sample_groups" },
+            {
+              $group: {
+                _id: "$sample_groups.method_id",
+                sample_groups_count: { $sum: 1 },
+                method_meta: {
+                  $first: {
+                    $filter: {
+                      input: "$lookup_tables.sampling_methods",
+                      cond: { $eq: ["$$this.method_id", "$sample_groups.method_id"] }
+                    }
+                  }
                 }
-                let foundMethod = false;
-                for(let key in methods) {
-                    if(methods[key].method_id == sg.method_id) {
-                        foundMethod = true;
-                        methods[key].sample_groups_count++;
-                    }
-                }
-                if(!foundMethod) {
-                    let methodMeta = null;
-                    for(let key in site.lookup_tables.sampling_methods) {
-                        if(site.lookup_tables.sampling_methods[key].method_id == sg.method_id) {
-                            methodMeta = site.lookup_tables.sampling_methods[key];
-                        }
-                    }
-                    if(methodMeta == null) {
-                        console.warn("Could not find metadata for sampling method", sg.method_id, "in site data for site", site.site_id);
-                    }
-                    else {
-                        methodMeta.sample_groups_count = 1;
-                        methods.push(methodMeta);
-                    }
-                    
-                }
-            })
-        });
-
+              }
+            },
+            {
+              $project: {
+                method_id: "$_id",
+                _id: 0,
+                sample_groups_count: 1,
+                method_meta: { $arrayElemAt: ["$method_meta", 0] }
+              }
+            }
+        ];
+      
+        let methods = await this.app.mongo.collection('sites').aggregate(pipeline).toArray();
+      
         let resultObject = {
-            cache_id: cacheId,
-            sample_methods_sample_groups: methods
-        }
+          cache_id: cacheId,
+          sample_methods_sample_groups: methods
+        };
 
         this.app.saveObjectToCache("graph_cache", identifierObject, resultObject);
-
+      
         return resultObject;
     }
 
@@ -171,47 +155,53 @@ class Graphs {
         let cacheId = crypto.createHash('sha256');
         cacheId = cacheId.update('analysismethods'+JSON.stringify(siteIds)).digest('hex');
         let identifierObject = { cache_id: cacheId };
-
+      
         let cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
-        if(cachedData !== false) {
-            return cachedData;
+        if (cachedData !== false) {
+          return cachedData;
         }
-        
-        let query = { site_id : { $in : siteIds } };
-        let sites = await this.app.mongo.collection('sites').find(query).toArray();
-
-        let methods = [];
-        sites.forEach(site => {
-            site.datasets.forEach(dataset => {
-
-                let foundMethod = false;
-                for(let key in methods) {
-                    if(methods[key].method_id == dataset.method_id) {
-                        foundMethod = true;
-                        methods[key].dataset_count++;
-                    }
+      
+        let pipeline = [
+          { $match: { site_id: { $in: siteIds } } },
+          { $unwind: "$datasets" },
+          {
+            $group: {
+              _id: "$datasets.method_id",
+              dataset_count: { $sum: 1 },
+              method_meta: {
+                $first: {
+                  $filter: {
+                    input: "$lookup_tables.analysis_methods",
+                    cond: { $eq: ["$$this.method_id", "$datasets.method_id"] }
+                  }
                 }
-                if(!foundMethod) {
-                    let methodMeta = null;
-                    for(let key in site.lookup_tables.analysis_methods) {
-                        if(site.lookup_tables.analysis_methods[key].method_id == dataset.method_id) {
-                            methodMeta = site.lookup_tables.analysis_methods[key];
-                        }
-                    }
-
-                    methodMeta.dataset_count = 1;
-                    methods.push(methodMeta);
-                }
-            })
-        });
-
+              }
+            }
+          },
+          {
+            $project: {
+              method_id: "$_id",
+              _id: 0,
+              dataset_count: 1,
+              method_meta: { $arrayElemAt: ["$method_meta", 0] }
+            }
+          }
+        ];
+      
+        let sites = await this.app.mongo.collection('sites').aggregate(pipeline).toArray();
+      
+        let methods = sites.map(site => ({
+          ...site.method_meta,
+          dataset_count: site.dataset_count
+        }));
+      
         let resultObject = {
-            cache_id: cacheId,
-            analysis_methods_datasets: methods
-        }
-
+          cache_id: cacheId,
+          analysis_methods_datasets: methods
+        };
+      
         this.app.saveObjectToCache("graph_cache", identifierObject, resultObject);
-
+      
         return resultObject;
     }
     

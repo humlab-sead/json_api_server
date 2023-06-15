@@ -1,11 +1,14 @@
+const Taxa = require('./Taxa.class.js');
+
 class EcoCodes {
     constructor(app) {
         this.app = app;
+        this.taxaModule = new Taxa(app);
 
         this.app.expressApp.get('/ecocodes/taxon/:taxonid', async (req, res) => {
             let taxonId = parseInt(req.params.taxonid);
             if(taxonId) {
-                let ecoCodes = await this.getEcoCodesForTaxon(taxonId);
+                let ecoCodes = await this.fetchEcoCodesForTaxon(taxonId);
                 res.header("Content-type", "application/json");
                 res.end(JSON.stringify(ecoCodes, null, 2));
             }
@@ -38,7 +41,7 @@ class EcoCodes {
             res.end("Preload of ecocodes complete");
         });
 
-        this.app.expressApp.post('/ecocodes/sites/abundance', async (req, res) => {
+        this.app.expressApp.post('/ecocodes/sites/:aggregationType', async (req, res) => {
             let siteIds = req.body;
             if(typeof siteIds != "object") {
                 res.status(400);
@@ -54,7 +57,7 @@ class EcoCodes {
                 }
             });
 
-            let data = await this.fetchEcoCodesForSites(siteIds);
+            let data = await this.fetchEcoCodesForSites(siteIds, req.params.aggregationType);
             res.header("Content-type", "application/json");
             res.end(JSON.stringify(data, null, 2));
         });
@@ -102,7 +105,7 @@ class EcoCodes {
         console.timeEnd("Preload of ecocodes complete");
     }
 
-    async getEcoCodesForTaxon(taxonId) {
+    async fetchEcoCodesForTaxon(taxonId) {
         let pgClient = await this.app.getDbConnection();
         if(!pgClient) {
             return false;
@@ -135,7 +138,73 @@ class EcoCodes {
         return taxon;
     }
 
-    async fetchEcoCodesForSites(siteIds) {
+    async fetchEcoCodesForSites(siteIds, aggregationType = "abundance") {
+        //aggregationType can be "abundance" or "species"
+        //an abundance aggregation will give us the ecocodes based on the abundance weight of each species
+        //a species aggregation ignores abundance and just gives us the aggregated ecocodes considering only the species included, not their abundance
+
+
+        //fetch the list of aggregated species for all our sites
+        //this will only give us the most abundant species, which in turn will give us a less accurate ecocode chart,
+        //but it will hopefully be good enough and we will need to do it this way for performance reasons
+        
+        let topTaxa = await this.taxaModule.fetchTaxaForSites(siteIds, 20);
+
+        let promises = [];
+        for(let key in topTaxa) {
+            let taxon = topTaxa[key];
+            let p = this.fetchEcoCodesForTaxon(taxon.taxon_id).then(taxonEcoCodes => {
+                taxon.ecocodes = taxonEcoCodes.ecocodes;
+            });
+            promises.push(p);
+        }
+
+        await Promise.all(promises);
+
+        //now we have the top 20 taxa for each site, and the ecocodes for each of those taxa
+        //we need to aggregate the ecocodes for each site
+
+        let aggregatedEcocodes = [];
+
+        for (let taxon of topTaxa) {
+            let ecocodes = taxon.ecocodes;
+    
+            if (aggregationType === "abundance") {
+                // Aggregating based on abundance
+                for (let ecoCode of ecocodes) {
+                    let existingEcocode = aggregatedEcocodes.find(e => e.ecocode_definition_id === ecoCode.ecocode_definition_id);
+                    if (existingEcocode) {
+                        existingEcocode.species += 1;
+                        existingEcocode.abundance += taxon.abundance;
+                    } else {
+                        aggregatedEcocodes.push({
+                            ecocode_definition_id: ecoCode.ecocode_definition_id,
+                            species: 1,
+                            abundance: taxon.abundance
+                        });
+                    }
+                }
+            } else if (aggregationType === "species") {
+                // Aggregating based on species
+                for (let ecoCode of ecocodes) {
+                    let existingEcocode = aggregatedEcocodes.find(e => e.ecocode_definition_id === ecoCode.ecocode_definition_id);
+                    if (existingEcocode) {
+                        existingEcocode.species += 1;
+                    } else {
+                        aggregatedEcocodes.push({
+                            ecocode_definition_id: ecoCode.ecocode_definition_id,
+                            species: 1,
+                            abundance: 0
+                        });
+                    }
+                }
+            }
+        }
+    
+        return aggregatedEcocodes;
+    }
+
+    async fetchEcoCodesForSitesOLD(siteIds) {
         console.log("getEcoCodesForSites");
 
         let bundles = await this.app.getObjectFromCache("site_ecocode_bundles", { site_id : { $in : siteIds } }, true);
@@ -209,7 +278,7 @@ class EcoCodes {
             taxonAbundance.taxon_id;
             taxonAbundance.abundance;
             taxonAbundance.abundance_element_id;
-            this.getEcoCodesForTaxon(taxonAbundance.taxon_id).then(taxonEcoCodes => {
+            this.fetchEcoCodesForTaxon(taxonAbundance.taxon_id).then(taxonEcoCodes => {
                 
             });
         });
@@ -284,7 +353,7 @@ class EcoCodes {
                             abundance.taxon_id;
                             abundance.abundance;
 
-                            let promise = this.getEcoCodesForTaxon(abundance.taxon_id);
+                            let promise = this.fetchEcoCodesForTaxon(abundance.taxon_id);
                             fetchPromises.push(promise);
                             promise.then(ecoCodes => {
                                 if(ecoCodes === false) {
@@ -376,7 +445,7 @@ class EcoCodes {
         datasets.forEach(dataset => {
             dataset.analysis_entities.forEach(ae => {
                 ae.abundances.forEach(abundance => {
-                    let promise = this.getEcoCodesForTaxon(abundance.taxon_id);
+                    let promise = this.fetchEcoCodesForTaxon(abundance.taxon_id);
                     fetchPromises.push(promise);
                     promise.then(ecoCodes => {
                         if(ecoCodes === false) {
@@ -426,6 +495,50 @@ class EcoCodes {
         
         return bundleObject;
     }
+
+    async getAggregatedEcoCodes() {
+        const aggregationPipeline = [
+          {
+            $match: {
+              "datasets.method_id": 3 // Filter abundance counting datasets (method_id 3 is paleoentomology)
+            }
+          },
+          { $unwind: "$datasets" },
+          { $unwind: "$datasets.analysis_entities" },
+          { $unwind: "$datasets.analysis_entities.abundances" },
+          {
+            $group: {
+              _id: "$datasets.analysis_entities.abundances.taxon_id",
+              abundance: { $sum: "$datasets.analysis_entities.abundances.abundance" },
+              ecocodes: {
+                $push: {
+                  ecocode_id: "$datasets.analysis_entities.abundances.ecocode_id",
+                  species: 3, // Assuming species count is always 3
+                  abundance: "$datasets.analysis_entities.abundances.abundance"
+                }
+              }
+            }
+          },
+          {
+            $group: {
+              _id: null,
+              ecocodes: { $push: "$ecocodes" }
+            }
+          },
+          {
+            $project: {
+              _id: 0,
+              api_source: "<version>", // Set your desired API source version here
+              ecocodes: 1
+            }
+          }
+        ];
+      
+        const aggregatedEcoCodes = await YourMongoCollection.aggregate(aggregationPipeline).toArray();
+      
+        return aggregatedEcoCodes[0]; // Assuming there's only one result (for all sites)
+      }
+      
 
     insertIfUnique(ecocodes, ecocode) {
 

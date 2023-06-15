@@ -19,7 +19,7 @@ const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.24.5";
+const appVersion = "1.25.0";
 
 class SeadJsonServer {
     constructor() {
@@ -29,11 +29,13 @@ class SeadJsonServer {
         this.useSiteCaching = typeof(process.env.USE_SITE_CACHE) != "undefined" ? process.env.USE_SITE_CACHE == "true" : true;
         this.useQueryCaching = typeof(process.env.USE_QUERY_CACHE) != "undefined" ? process.env.USE_QUERY_CACHE == "true" : true;
         this.useTaxaCaching = typeof(process.env.USE_TAXA_CACHE) != "undefined" ? process.env.USE_TAXA_CACHE == "true" : true;
+        this.useTaxaSummaryCacheing = typeof(process.env.USE_TAXA_SUMMARY_CACHE) != "undefined" ? process.env.USE_TAXA_SUMMARY_CACHE == "true" : true;
         this.useEcoCodeCaching = typeof(process.env.USE_ECOCODE_CACHE) != "undefined" ? process.env.USE_ECOCODE_CACHE == "true" : true;
         this.useStaticDbConnection = typeof(process.env.USE_SINGLE_PERSISTENT_DBCON) != "undefined" ? process.env.USE_SINGLE_PERSISTENT_DBCON == "true" : false;
         this.acceptCacheVersionMismatch = typeof(process.env.ACCEPT_CACHE_VERSION_MISMATCH) != "undefined" ? process.env.ACCEPT_CACHE_VERSION_MISMATCH == "true" : false;
         this.allCachingDisabled = typeof(process.env.FORCE_DISABLE_ALL_CACHES) != "undefined" ? process.env.FORCE_DISABLE_ALL_CACHES == "true" : false;
         this.maxConcurrentFetches = parseInt(process.env.MAX_CONCURRENT_FETCHES) ? parseInt(process.env.MAX_CONCURRENT_FETCHES) : process.env.MAX_CONCURRENT_FETCHES = 1;
+        
 
         this.staticDbConnection = null;
         console.log("Starting up SEAD Data Server "+appVersion);
@@ -251,7 +253,7 @@ class SeadJsonServer {
             let taxonId = parseInt(req.params.taxonId);
             if(!taxonId) {
                 console.log(req.path, "Bad request");
-                res.statusCode(400);
+                res.status(400);
                 res.send("Bad request");
                 return;
             }
