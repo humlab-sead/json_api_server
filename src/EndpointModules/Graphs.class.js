@@ -66,8 +66,81 @@ class Graphs {
             res.header("Content-type", "application/json");
             res.end(JSON.stringify(data, null, 2));
         });
+
+        this.app.expressApp.post('/graphs/ecocodes', async (req, res) => {
+          let siteIds = req.body;
+          if(typeof siteIds != "object") {
+              res.status(400);
+              res.send("Bad input - should be an array of site IDs");
+              return;
+          }
+
+          this.fetchEcocodesSummaryForSites(siteIds).then(data => {
+            res.header("Content-type", "application/json");
+            res.end(JSON.stringify(data, null, 2));
+          });
+
+        });
     }
 
+    async fetchEcocodesSummaryForSites(siteIds) {
+      let cacheId = crypto.createHash('sha256');
+      cacheId = cacheId.update('ecocodes' + JSON.stringify(siteIds)).digest('hex');
+      let identifierObject = { cache_id: cacheId };
+      
+      let cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
+      if(cachedData !== false) {
+        return cachedData;
+      }
+      
+      let pipeline = [
+        { $match: { site_id: { $in: siteIds } } },
+        { $unwind: "$ecocode_bundles" },
+        {
+          $group: {
+            _id: "$ecocode_bundles.ecocode.abbreviation",
+            totalAbundance: { $sum: "$ecocode_bundles.abundance" },
+            ecocodeDefinitionId: { $first: "$ecocode_bundles.ecocode.ecocode_definition_id" },
+            ecocodeName: { $first: "$ecocode_bundles.ecocode.name" }
+          }
+        },
+        {
+          $group: {
+            _id: "$ecocodeDefinitionId",
+            ecocodes: {
+              $push: {
+                ecocode_definition_id: "$ecocodeDefinitionId",
+                abbreviation: "$_id",
+                name: "$ecocodeName",
+                totalAbundance: "$totalAbundance"
+              }
+            }
+          }
+        }
+      ];
+    
+      let ecocodesGroups = await this.app.mongo.collection('site_ecocode_bundles').aggregate(pipeline).toArray();
+      
+      let ecocodes = [];
+      ecocodesGroups.forEach(group => {
+        ecocodes.push({
+          ecocode_definition_id: group._id,
+          abbreviation: group.ecocodes[0].abbreviation,
+          name: group.ecocodes[0].name,
+          totalAbundance: group.ecocodes[0].totalAbundance
+        });
+      });
+
+      let resultObject = {
+        cache_id: cacheId,
+        ecocode_groups: ecocodes
+      };
+    
+      this.app.saveObjectToCache("graph_cache", identifierObject, resultObject);
+    
+      return resultObject;
+    }
+    
     async fetchSampleMethodsSummaryForSites(siteIds) {
         let cacheId = crypto.createHash('sha256');
         cacheId = cacheId.update('samplemethods' + JSON.stringify(siteIds)).digest('hex');

@@ -63,6 +63,13 @@ class EcoCodes {
         });
     }
 
+    async flushEcocodeCache() {
+        console.log("Flushing ecocode cache");
+        if(this.cacheStorageMethod == "mongo") {
+            await this.mongo.collection('site_ecocode_bundles').deleteMany({});
+        }
+    }
+
     async preloadAllSiteEcocodes() {
         let pgClient = await this.app.getDbConnection();
         if(!pgClient) {

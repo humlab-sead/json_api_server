@@ -19,7 +19,7 @@ const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.25.0";
+const appVersion = "1.26.0";
 
 class SeadJsonServer {
     constructor() {
@@ -194,6 +194,15 @@ class SeadJsonServer {
             }
             await this.preloadAllTaxa();
             res.send("Preload of taxa complete");
+        });
+
+        this.expressApp.get('/preload/ecocodes/:flushCache?', async (req, res) => {
+            console.log(req.path);
+            if(req.params.flushCache) {
+                await this.ecoCodes.flushEcocodeCache();
+            }
+            await this.ecoCodes.preloadAllSiteEcocodes(); 
+            res.send("Preload of ecocodes complete");
         });
 
         this.expressApp.get('/preload/all', async (req, res) => {
