@@ -4,7 +4,7 @@ class DatingModule {
     constructor(app) {
         this.name = "Dating";
         this.moduleMethodGroups = [19, 20, 3]; //should maybe include 21 as well...
-        this.c14StdMethodIds = [151, 148, 38];
+        this.c14StdMethodIds = [151, 148, 38, 150];
         this.app = app;
         this.expressApp = this.app.expressApp;
     }
