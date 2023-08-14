@@ -20,7 +20,7 @@ class Taxa {
                 }
             });
 
-            let taxaList = await this.fetchTaxaForSites(siteIds);
+            let taxaList = await this.fetchTaxaForSites(siteIds, 20);
             res.header("Content-type", "application/json");
             res.send(JSON.stringify(taxaList, null, 2));
         });
