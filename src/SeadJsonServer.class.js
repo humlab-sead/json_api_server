@@ -19,7 +19,7 @@ const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.27.2";
+const appVersion = "1.28.0";
 
 class SeadJsonServer {
     constructor() {
@@ -896,12 +896,65 @@ class SeadJsonServer {
         return site;
     }
 
+    async fetchMethodByMethodId(method_id) {
+        let pgClient = await this.getDbConnection();
+        if(!pgClient) {
+            return false;
+        }
+        let sql = `SELECT tbl_methods.*,
+        tbl_units.description AS unit_desc,
+        tbl_units.unit_id,
+        tbl_units.unit_abbrev,
+        tbl_units.unit_name
+        FROM tbl_methods
+        JOIN tbl_units ON tbl_units.unit_id=tbl_methods.unit_id
+        WHERE method_id=$1
+        `;
+        let res = await pgClient.query(sql, [method_id]);
+
+        if(res.rows.length == 0) {
+            console.warn("No method found for method_id", method_id);
+            return false;
+        }
+
+        let method = {
+            method_id: res.rows[0].method_id,
+            biblio_id: res.rows[0].biblio_id,
+            method_name: res.rows[0].method_name,
+            description: res.rows[0].description,
+            method_abbrev_or_alt_name: res.rows[0].method_abbrev_or_alt_name,
+            method_group_id: res.rows[0].method_group_id,
+            record_type_id: res.rows[0].record_type_id,
+        };
+        if(parseInt(res.rows[0].unit_id)) {
+            method.unit = {
+                unit_id: res.rows[0].unit_id,
+                description: res.rows[0].unit_desc,
+                unit_abbrev: res.rows[0].unit_abbrev,
+                unit_name: res.rows[0].unit_name
+            }
+        }
+
+        this.releaseDbConnection(pgClient);
+        return method;
+    }
+
+    getCoordinateMethodByMethodId(site, method_id) {
+        for(let key in site.lookup_tables.coordinate_methods) {
+            if(site.lookup_tables.coordinate_methods[key].method_id == method_id) {
+                return site.lookup_tables.coordinate_methods[key];
+            }
+        }
+        return false;
+    }
+
     getAnalysisMethodByMethodId(site, method_id) {
         for(let key in site.lookup_tables.analysis_methods) {
             if(site.lookup_tables.analysis_methods[key].method_id == method_id) {
                 return site.lookup_tables.analysis_methods[key];
             }
         }
+        return false;
     }
 
     getSampleNameBySampleId(site, physical_sample_id) {
@@ -1552,13 +1605,91 @@ class SeadJsonServer {
                     }
                 }
 
-            }
+                //fetch sample coordinates for those which have local (or global) coordinate positioning
+                sql = `SELECT
+                tbl_sample_coordinates.measurement::float,
+                tbl_sample_coordinates.accuracy,
+                tbl_coordinate_method_dimensions.dimension_id,
+                tbl_coordinate_method_dimensions.method_id AS coordinate_method_id,
+                tbl_coordinate_method_dimensions.limit_upper AS dimension_limit_upper,
+                tbl_coordinate_method_dimensions.limit_lower AS dimension_limit_lower
+                FROM tbl_sample_coordinates
+                JOIN tbl_coordinate_method_dimensions ON tbl_sample_coordinates.coordinate_method_dimension_id = tbl_coordinate_method_dimensions.coordinate_method_dimension_id
+                WHERE tbl_sample_coordinates.physical_sample_id=$1`;
 
+                let sampleCoordinates = await pgClient.query(sql, [sample.physical_sample_id]);
+                sample.coordinates = sampleCoordinates.rows;
+
+                for(let key in sample.coordinates) {
+                    //find dimensions in lookup tables, and if not found, fetch them
+                    let dimension = this.getDimensionByDimensionId(site, sample.coordinates[key].dimension_id);
+                    if(!dimension) {
+                        dimension = await this.fetchDimension(sample.coordinates[key].dimension_id);
+                        site.lookup_tables.dimensions.push(dimension);
+                    }
+                }
+
+                if(typeof site.lookup_tables.coordinate_methods == "undefined") {
+                    site.lookup_tables.coordinate_methods = [];
+                }
+                for(let key in sample.coordinates) {
+                    let method = this.getCoordinateMethodByMethodId(site, sample.coordinates[key].coordinate_method_id);
+                    if(!method) {
+                        method = await this.fetchMethodByMethodId(sample.coordinates[key].coordinate_method_id);
+                        site.lookup_tables.coordinate_methods.push(method);
+                    }
+                }
+            }
         }
         
         this.releaseDbConnection(pgClient);
-
         return site;
+    }
+
+    async fetchDimension(dimension_id) {
+        let pgClient = await this.getDbConnection();
+        if(!pgClient) {
+            return false;
+        }
+
+        let dimension = null;
+
+        let sql = `SELECT *
+        FROM tbl_dimensions
+        WHERE dimension_id=$1
+        `;
+        let res = await pgClient.query(sql, [dimension_id]);
+        this.releaseDbConnection(pgClient);
+        if(res.rows.length > 0) {
+            dimension = res.rows[0];
+        }
+        else {
+            console.warn("Dimension with id "+dimension_id+" not found in db");
+        }
+        
+        return dimension;
+    }
+
+    getDimensionByDimensionId(site, dimension_id) {
+        if(typeof site.lookup_tables.dimensions == "undefined") {
+            site.lookup_tables.dimensions = [];
+        }
+        for(let key in site.lookup_tables.dimensions) {
+            if(site.lookup_tables.dimensions[key].dimension_id == dimension_id) {
+                return site.lookup_tables.dimensions[key];
+            }
+        }
+        return null;
+    }
+
+    fetchMethod(site, method_id) {
+        let method = null;
+        site.lookup_tables.analysis_methods.forEach(m => {
+            if(m.method_id == method_id) {
+                method = m;
+            }
+        });
+        return method;
     }
 
     async fetchUnit(unit_id) {
