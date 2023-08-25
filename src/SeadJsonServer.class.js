@@ -19,7 +19,7 @@ const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.28.0";
+const appVersion = "1.28.1";
 
 class SeadJsonServer {
     constructor() {
@@ -36,7 +36,6 @@ class SeadJsonServer {
         this.allCachingDisabled = typeof(process.env.FORCE_DISABLE_ALL_CACHES) != "undefined" ? process.env.FORCE_DISABLE_ALL_CACHES == "true" : false;
         this.maxConcurrentFetches = parseInt(process.env.MAX_CONCURRENT_FETCHES) ? parseInt(process.env.MAX_CONCURRENT_FETCHES) : process.env.MAX_CONCURRENT_FETCHES = 1;
         
-
         this.staticDbConnection = null;
         console.log("Starting up SEAD Data Server "+appVersion);
         if(this.useSiteCaching) {
@@ -820,6 +819,7 @@ class SeadJsonServer {
 
         let pgClient = await this.getDbConnection();
         if(!pgClient) {
+            console.error("Failed to get Postgres DB connection!");
             return false;
         }
         if(verbose) console.time("Fetched basic site data for site "+siteId);
@@ -907,7 +907,7 @@ class SeadJsonServer {
         tbl_units.unit_abbrev,
         tbl_units.unit_name
         FROM tbl_methods
-        JOIN tbl_units ON tbl_units.unit_id=tbl_methods.unit_id
+        LEFT JOIN tbl_units ON tbl_units.unit_id=tbl_methods.unit_id
         WHERE method_id=$1
         `;
         let res = await pgClient.query(sql, [method_id]);
@@ -1863,6 +1863,12 @@ class SeadJsonServer {
 
     async getDbConnection() {
         if(this.useStaticDbConnection) {
+            //check health of postgres connection
+            let healthCheck = await this.staticDbConnection.query("SELECT 1");
+            if(healthCheck.rows[0]['?column?'] != 1) {
+                console.warn("Static postgres connection is not healthy, attempting to reconnect.");
+                this.staticDbConnection = await this.pgPool.connect();
+            }
             return this.staticDbConnection;
         }
         else {
