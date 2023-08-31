@@ -1,4 +1,4 @@
-# SEAD JSON server
+# SEAD JSON API Server (JAS)
 
 This server provides a REST API like `/site/1` which outputs all the information related to that site in an hierarchical JSON format.
 
