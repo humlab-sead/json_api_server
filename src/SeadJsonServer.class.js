@@ -19,7 +19,7 @@ const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.30.0";
+const appVersion = "1.30.1";
 
 class SeadJsonServer {
     constructor() {
@@ -1279,7 +1279,10 @@ class SeadJsonServer {
             let datasetRes = await pgClient.query(sql, [datasetId]);
             if(datasetRes.rows.length > 0) {
                 let dataset = datasetRes.rows[0];
-                //dataset.contacts = [];
+
+                let datasetContactsRes = await pgClient.query("SELECT contact_id FROM tbl_dataset_contacts WHERE dataset_id=$1", [dataset.dataset_id]);
+                dataset.contacts = datasetContactsRes.rows;
+
                 datasets.push(dataset);
                 if(dataset.biblio_id) {
                     let dsBib = await pgClient.query("SELECT * FROM tbl_biblio WHERE biblio_id=$1", [dataset.biblio_id]);
