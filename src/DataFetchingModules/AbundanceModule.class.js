@@ -338,6 +338,7 @@ class AbundanceModule {
                 
                 let dataGroup = {
                     id: dataset.dataset_id,
+                    dataset_id: dataset.dataset_id,
                     dataset_name: dataset.dataset_name,
                     method_id: dataset.method_id,
                     method_group_id: dataset.method_group_id,
