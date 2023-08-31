@@ -2,6 +2,8 @@
 
 This server provides a REST API like `/site/1` which outputs all the information related to that site in an hierarchical JSON format.
 
+This server also acts as the backend for a number of result section charts.
+
 Since a MongoDB is used as a backend storage/cache for the JSON documents, the server can also accept simple queries like below.
 
 To find which site has the analysis_entity 131350:
