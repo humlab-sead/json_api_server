@@ -19,7 +19,7 @@ const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.29.0";
+const appVersion = "1.30.0";
 
 class SeadJsonServer {
     constructor() {
@@ -218,43 +218,6 @@ class SeadJsonServer {
             console.log(req.path);
             await this.flushSiteCache();
             res.send("Flush of site cache complete");
-        });
-
-        this.expressApp.get('/dataset/:datasetId', async (req, res) => {
-            let dataset = {
-                dataset_id: req.params.datasetId
-            };
-
-            const pgClient = await this.getDbConnection();
-            if(!pgClient) {
-                return false;
-            }
-        
-            let data = await pgClient.query('SELECT * FROM tbl_datasets WHERE dataset_id=$1', [req.params.datasetId]);
-            dataset = data.rows[0];
-        
-            let method = await pgClient.query('SELECT * FROM tbl_methods WHERE method_id=$1', [data.rows[0].method_id]);
-            dataset.method = method.rows[0];
-        
-            let ae = await pgClient.query('SELECT * FROM tbl_analysis_entities WHERE dataset_id=$1', [dataset.dataset_id]);
-            dataset.analysis_entities = ae.rows;
-            
-            this.releaseDbConnection(pgClient);
-        
-            if(dataset.biblio_id != null) {
-                dataset.biblio = await fetchBiblioByDatasetId(dataset.dataset_id);
-            }
-        
-            //If dataset belongs to certain methods, it might include dating data, so fetch it
-            if(datingMethodGroups.includes(dataset.method.method_group_id)) {
-                if(dataset.analysis_entities.length > 0) {
-                    await fetchDatingToPeriodData(dataset.analysis_entities);
-                }
-            }
-            
-            await fetchPhysicalSamplesByAnalysisEntities(dataset.analysis_entities);
-        
-            res.send(dataset);
         });
 
         this.expressApp.get('/taxon/:taxonId', async (req, res) => {
@@ -1301,7 +1264,6 @@ class SeadJsonServer {
             })
         });
 
-        let queryPromises = [];
         let datasets = [];
         let sql = `
         SELECT
@@ -1311,30 +1273,39 @@ class SeadJsonServer {
         LEFT JOIN tbl_methods ON tbl_datasets.method_id = tbl_methods.method_id
         WHERE dataset_id=$1
         `;
-        datasetIds.forEach(datasetId => {
-            let promise = pgClient.query(sql, [datasetId]).then(datasetRes => {
-                if(datasetRes.rows.length > 0) {
-                    let dataset = datasetRes.rows[0];
-                    dataset.contacts = [];
-                    datasets.push(dataset);
-                    if(dataset.biblio_id) {
-                        pgClient.query("SELECT * FROM tbl_biblio WHERE biblio_id=$1", [dataset.biblio_id]).then(dsBiblio => {
-                            dataset.biblio = dsBiblio.rows;
-                        });
+
+        for(let key in datasetIds) {
+            let datasetId = datasetIds[key];
+            let datasetRes = await pgClient.query(sql, [datasetId]);
+            if(datasetRes.rows.length > 0) {
+                let dataset = datasetRes.rows[0];
+                //dataset.contacts = [];
+                datasets.push(dataset);
+                if(dataset.biblio_id) {
+                    let dsBib = await pgClient.query("SELECT * FROM tbl_biblio WHERE biblio_id=$1", [dataset.biblio_id]);
+                    //dataset.biblio = dsBib.rows;
+                    if(typeof site.lookup_tables.biblio == "undefined") {
+                        site.lookup_tables.biblio = [];
                     }
                     
+                    dsBib.rows.forEach(biblio => {
+                        let biblioFound = false;
+                        for(let bKey in site.lookup_tables.biblio) {
+                            if(site.lookup_tables.biblio[bKey].biblio_id == biblio.biblio_id) {
+                                biblioFound = true;
+                            }
+                        }
+                        if(!biblioFound) {
+                            site.lookup_tables.biblio.push(biblio);
+                        }
+                    });
                 }
-            });
-            queryPromises.push(promise);
-        });
-
-        await Promise.all(queryPromises).then(() => {
-            this.releaseDbConnection(pgClient);
-        });
+            }
+        }
         
         site.datasets = datasets;
 
-        //Fetch dataset contacts and associated information
+        //Fetch dataset contacts and associated information, note that dataset contacts are different from dataset references!
         sql = `
         SELECT DISTINCT ON (tbl_dataset_contacts.contact_id) tbl_dataset_contacts.*,
         tbl_contact_types.contact_type_name AS contact_type,
@@ -1359,7 +1330,9 @@ class SeadJsonServer {
         `;
 
         let datasetContacts = await pgClient.query(sql, [site.site_id]);
-        site.dataset_contacts = datasetContacts.rows;
+        site.lookup_tables.dataset_contacts = datasetContacts.rows;
+
+        this.releaseDbConnection(pgClient);
 
         return site;
     }

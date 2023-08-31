@@ -184,9 +184,12 @@ class DendrochronologyModule {
         soq.season_or_qualifier_type AS season,
         dl.dendro_lookup_id,
         dl.description AS dendro_lookup_description,
-        tbl_sites.site_id
+        tbl_sites.site_id,
+		tbl_datasets.dataset_id,
+		tbl_datasets.biblio_id
         FROM tbl_physical_samples ps
         JOIN tbl_analysis_entities ae ON ps.physical_sample_id = ae.physical_sample_id
+		JOIN tbl_datasets ON tbl_datasets.dataset_id=ae.dataset_id
         JOIN tbl_dendro_dates dd ON ae.analysis_entity_id = dd.analysis_entity_id
         LEFT JOIN tbl_season_or_qualifier soq ON soq.season_or_qualifier_id = dd.season_or_qualifier_id
         LEFT JOIN tbl_age_types at ON at.age_type_id = dd.age_type_id
