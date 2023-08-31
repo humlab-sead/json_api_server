@@ -19,7 +19,7 @@ const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.28.1";
+const appVersion = "1.29.0";
 
 class SeadJsonServer {
     constructor() {
@@ -864,6 +864,10 @@ class SeadJsonServer {
         await this.fetchAnalysisEntitiesPrepMethods(site);
         if(verbose) console.timeEnd("Fetched analysis entities prep methods for site "+siteId);
 
+        if(verbose) console.time("Fetched other records for site "+siteId);
+        await this.fetchSiteOtherRecords(site);
+        if(verbose) console.timeEnd("Fetched other records for site "+siteId);
+
         /*
         if(verbose) console.time("Fetched analysis entities ages for site "+siteId);
         await this.fetchAnalysisEntitiesAges(site);
@@ -1024,13 +1028,19 @@ class SeadJsonServer {
         return site;
     }
 
-    async fetchSiteOtherRecords() {
+    async fetchSiteOtherRecords(site) {
         let pgClient = await this.getDbConnection();
         if(!pgClient) {
             return false;
         }
         let sql = `
-        SELECT * FROM tbl_site_other_records
+        SELECT 
+        tbl_site_other_records.biblio_id,
+        tbl_site_other_records.record_type_id,
+        tbl_site_other_records.description,
+        tbl_record_types.record_type_name,
+        tbl_record_types.record_type_description
+        FROM tbl_site_other_records
         INNER JOIN tbl_record_types ON tbl_record_types.record_type_id = tbl_site_other_records.record_type_id
         WHERE site_id=$1
         `;
@@ -1326,57 +1336,30 @@ class SeadJsonServer {
 
         //Fetch dataset contacts and associated information
         sql = `
-        SELECT tbl_dataset_contacts.* FROM tbl_sites
+        SELECT DISTINCT ON (tbl_dataset_contacts.contact_id) tbl_dataset_contacts.*,
+        tbl_contact_types.contact_type_name AS contact_type,
+        tbl_contact_types.description AS contact_type_description,
+        tbl_contacts.address_1 AS contact_address_1,
+        tbl_contacts.address_2 AS contact_address_2,
+        tbl_contacts.location_id AS contact_location_id,
+        tbl_contacts.email AS contact_email,
+        tbl_contacts.first_name AS contact_first_name,
+        tbl_contacts.last_name AS contact_last_name,
+        tbl_contacts.phone_number AS contact_phone,
+        tbl_contacts.url AS contact_url
+        FROM tbl_sites
         JOIN tbl_sample_groups ON tbl_sample_groups.site_id = tbl_sites.site_id
         JOIN tbl_physical_samples ON tbl_physical_samples.sample_group_id=tbl_sample_groups.sample_group_id
         JOIN tbl_analysis_entities ON tbl_analysis_entities.physical_sample_id=tbl_physical_samples.physical_sample_id
         JOIN tbl_datasets ON tbl_datasets.dataset_id=tbl_analysis_entities.dataset_id
         JOIN tbl_dataset_contacts ON tbl_dataset_contacts.dataset_id=tbl_datasets.dataset_id
+		JOIN tbl_contact_types ON tbl_contact_types.contact_type_id=tbl_dataset_contacts.contact_type_id
+		JOIN tbl_contacts ON tbl_contacts.contact_id=tbl_dataset_contacts.contact_id
         WHERE tbl_sites.site_id=$1
         `;
+
         let datasetContacts = await pgClient.query(sql, [site.site_id]);
-        
-        let uniqueDatasetContacts = new Set();
-        let uniqueDatasetContactTypes = new Set();
-
-        //Now we have to match these dataset_contacts with the datasets
-        datasetContacts.rows.forEach(dsContact => {
-            uniqueDatasetContactTypes.add(dsContact.contact_type_id);
-            uniqueDatasetContacts.add(dsContact.contact_id);
-            site.datasets.forEach(ds => {
-                if(ds.dataset_id == dsContact.dataset_id) {
-                    //don't add if we already have this
-                    let found = false;
-                    ds.contacts.forEach(contact => {
-                        if(contact.contact_id == dsContact.contact_id && contact.contact_type_id == dsContact.contact_type_id) {
-                            found = true;
-                        }
-                    });
-
-                    if(!found) {
-                        ds.contacts.push({
-                            contact_id: dsContact.contact_id,
-                            contact_type_id: dsContact.contact_type_id
-                        });
-                    }
-                    
-                }
-            });
-        });
-
-        site.lookup_tables.dataset_contact_types = [];
-        uniqueDatasetContactTypes.forEach(async contactTypeId => {
-            sql = `SELECT * FROM tbl_contact_types WHERE contact_type_id=$1`;
-            let contactTypeRef = await pgClient.query(sql, [contactTypeId]);
-            site.lookup_tables.dataset_contact_types.push(contactTypeRef.rows[0]);
-        });
-
-        site.lookup_tables.dataset_contacts = [];
-        uniqueDatasetContacts.forEach(async contactId => {
-            sql = `SELECT * FROM tbl_contacts WHERE contact_id=$1`;
-            let contactRef = await pgClient.query(sql, [contactId]);
-            site.lookup_tables.dataset_contacts.push(contactRef.rows[0]);
-        });
+        site.dataset_contacts = datasetContacts.rows;
 
         return site;
     }
