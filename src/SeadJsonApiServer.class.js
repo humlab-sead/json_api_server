@@ -19,7 +19,7 @@ const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.30.5";
+const appVersion = "1.30.6";
 
 class SeadJsonApiServer {
     constructor() {
@@ -99,7 +99,7 @@ class SeadJsonApiServer {
 
         this.expressApp.get('/version', async (req, res) => {
             let versionInfo = {
-                app: "Sead JSON Server",
+                app: "SEAD JSON API Server",
                 version: appVersion
             }
             res.send(JSON.stringify(versionInfo, null, 2));
