@@ -19,7 +19,7 @@ const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.30.3";
+const appVersion = "1.30.4";
 
 class SeadJsonServer {
     constructor() {
@@ -1324,7 +1324,7 @@ class SeadJsonServer {
         tbl_contacts.last_name AS contact_last_name,
         tbl_contacts.phone_number AS contact_phone,
         tbl_contacts.url AS contact_url,
-        tbl_locations.location_name AS contact_location_name,
+        tbl_locations.location_name AS contact_location_name
         FROM tbl_sites
         JOIN tbl_sample_groups ON tbl_sample_groups.site_id = tbl_sites.site_id
         JOIN tbl_physical_samples ON tbl_physical_samples.sample_group_id=tbl_sample_groups.sample_group_id
