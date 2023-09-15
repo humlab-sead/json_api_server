@@ -19,7 +19,7 @@ const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.30.6";
+const appVersion = "1.30.7";
 
 class SeadJsonApiServer {
     constructor() {
@@ -790,7 +790,9 @@ class SeadJsonApiServer {
         site = siteData.rows[0];
         site.data_groups = [];
         site.api_source = appName+"-"+appVersion;
-        site.lookup_tables = {};
+        site.lookup_tables = {
+            biblio: []
+        };
 
         if(verbose) console.timeEnd("Fetched basic site data for site "+siteId);
         this.releaseDbConnection(pgClient);
@@ -1075,6 +1077,21 @@ class SeadJsonApiServer {
 
             let sampleGroupsRefs = await pgClient.query(sql, [site.sample_groups[key].sample_group_id]);
             site.sample_groups[key].biblio = sampleGroupsRefs.rows;
+
+            if(typeof site.lookup_tables.biblio == "undefined") {
+                site.lookup_tables.biblio = [];
+            }
+            sampleGroupsRefs.rows.forEach(biblio => {
+                let found = false;
+                site.lookup_tables.biblio.forEach(existingBiblio => {
+                    if(existingBiblio.biblio_id == biblio.biblio_id) {
+                        found = true;
+                    }
+                })
+                if(!found) {
+                    site.lookup_tables.biblio.push(biblio);
+                }
+            });
         }
         
         for(let key in site.sample_groups) {
@@ -1289,10 +1306,6 @@ class SeadJsonApiServer {
                 datasets.push(dataset);
                 if(dataset.biblio_id) {
                     let dsBib = await pgClient.query("SELECT * FROM tbl_biblio WHERE biblio_id=$1", [dataset.biblio_id]);
-                    //dataset.biblio = dsBib.rows;
-                    if(typeof site.lookup_tables.biblio == "undefined") {
-                        site.lookup_tables.biblio = [];
-                    }
                     
                     dsBib.rows.forEach(biblio => {
                         let biblioFound = false;

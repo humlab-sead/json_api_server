@@ -94,7 +94,8 @@ class MeasuredValuesModule {
                                     sample_name: this.app.getSampleNameBySampleId(site, ae.physical_sample_id),
                                     label: ae.physical_sample_id,
                                     raw_value: measuredValue.measured_value,
-                                    value: value
+                                    value: value,
+                                    dataset_id: ae.dataset_id
                                 });
                             }
                         }
