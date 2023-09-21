@@ -19,7 +19,7 @@ const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.30.7";
+const appVersion = "1.30.8";
 
 class SeadJsonApiServer {
     constructor() {
@@ -1039,9 +1039,40 @@ class SeadJsonApiServer {
         let siteBiblioRef = await pgClient.query(sql, [site.site_id]);
         site.biblio = siteBiblioRef.rows;
 
+        if(typeof site.lookup_tables.biblio == "undefined") {
+            site.lookup_tables.biblio = [];
+        }
+
+        site.biblio.forEach(biblio => {
+            let found = false;
+            site.lookup_tables.biblio.forEach(existingBiblio => {
+                if(existingBiblio.biblio_id == biblio.biblio_id) {
+                    found = true;
+                }
+            })
+            if(!found) {
+                this.fetchBiblio(biblio.biblio_id).then(b => {
+                    site.lookup_tables.biblio.push(b);
+                });
+            }
+        });
+
         this.releaseDbConnection(pgClient);
         
         return site;
+    }
+
+    async fetchBiblio(biblioId) {
+        let pgClient = await this.getDbConnection();
+        if(!pgClient) {
+            return false;
+        }
+        let sql = `
+        SELECT * FROM tbl_biblio WHERE biblio_id=$1
+        `;
+        let biblio = await pgClient.query(sql, [biblioId]);
+        this.releaseDbConnection(pgClient);
+        return biblio.rows[0];
     }
 
     async fetchSampleGroups(site) {
