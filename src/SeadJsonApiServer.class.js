@@ -19,7 +19,7 @@ const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.30.8";
+const appVersion = "1.30.9";
 
 class SeadJsonApiServer {
     constructor() {
@@ -204,6 +204,12 @@ class SeadJsonApiServer {
             res.send("Preload of ecocodes complete");
         });
 
+        this.expressApp.get('/flush/graphcache', async (req, res) => {
+            console.log(req.path);
+            await this.flushGraphCache();
+            res.send("Flushed graph cache");
+        });
+
         this.expressApp.get('/preload/all', async (req, res) => {
             console.log(req.path);
             console.time("Preload of all data complete");
@@ -239,6 +245,12 @@ class SeadJsonApiServer {
             let taxonIds = await this.searchTaxa(req.params.attribute, req.params.value);
             res.header("Content-type", "application/json");
             res.send(JSON.stringify(taxonIds, null, 2));
+        });
+
+        this.expressApp.get('/getsiteswithsamplecoordinates', async (req, res) => {
+            let sites = await this.getSitesWithSampleCoordinates();
+            res.header("Content-type", "application/json");
+            res.send(JSON.stringify(sites, null, 2));
         });
     }
 
@@ -1824,6 +1836,33 @@ class SeadJsonApiServer {
         }
 
         return datasets;
+    }
+
+    async getSitesWithSampleCoordinates() {
+        let results = null;
+        try {
+            const pipeline = [
+                { "$unwind": "$sample_groups" },
+                { "$unwind": "$sample_groups.physical_samples" },
+                { "$match": { "sample_groups.physical_samples.coordinates.0": { "$exists": true } } },
+                { "$project": { "site_id": 1 } }
+            ];
+    
+            results = await this.mongo.collection("sites").aggregate(pipeline).toArray();
+            console.log(results);
+
+        } catch (e) {
+            console.error(e);
+        }
+
+        return results;
+    }
+
+    async flushGraphCache() {
+        console.log("Flushing graph cache");
+        if(this.cacheStorageMethod == "mongo") {
+            await this.mongo.collection('graph_cache').deleteMany({});
+        }
     }
 
     async setupDatabase() {
