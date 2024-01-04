@@ -19,7 +19,7 @@ const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.30.9";
+const appVersion = "1.30.10";
 
 class SeadJsonApiServer {
     constructor() {
@@ -1911,6 +1911,10 @@ class SeadJsonApiServer {
     async getDbConnection() {
         if(this.useStaticDbConnection) {
             //check health of postgres connection
+            if(!this.staticDbConnection) {
+                this.staticDbConnection = await this.pgPool.connect();
+            }
+
             let healthCheck = await this.staticDbConnection.query("SELECT 1");
             if(healthCheck.rows[0]['?column?'] != 1) {
                 console.warn("Static postgres connection is not healthy, attempting to reconnect.");
