@@ -1793,7 +1793,7 @@ class SeadJsonApiServer {
         if(typeof site.lookup_tables.coordinate_methods == "undefined") {
             site.lookup_tables.coordinate_methods = [];
         }
-        if(this.getCoordinateMethodByMethodId(site, method.method_id) == null) {
+        if(!this.getCoordinateMethodByMethodId(site, method.method_id)) {
             site.lookup_tables.coordinate_methods.push(method);
         }
     }
@@ -1802,7 +1802,7 @@ class SeadJsonApiServer {
         if(typeof site.lookup_tables.dimensions == "undefined") {
             site.lookup_tables.dimensions = [];
         }
-        if(this.getDimensionByDimensionId(site, dimension.dimension_id) == null) {
+        if(this.getDimensionByDimensionId(site, dimension.dimension_id)) {
             site.lookup_tables.dimensions.push(dimension);
         }
     }
