@@ -19,7 +19,7 @@ const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.30.10";
+const appVersion = "1.31.0";
 
 class SeadJsonApiServer {
     constructor() {
@@ -1096,9 +1096,57 @@ class SeadJsonApiServer {
         let sampleGroups = await pgClient.query('SELECT * FROM tbl_sample_groups WHERE site_id=$1', [site.site_id]);
         site.sample_groups = sampleGroups.rows;
 
+        let sampleGroupCoordinatesSql = `
+        SELECT *,
+        tbl_dimensions.method_group_id AS dimension_method_group_id,
+        tbl_coordinate_method_dimensions.method_id AS coordinate_method_id
+        FROM tbl_sample_group_coordinates
+        JOIN tbl_coordinate_method_dimensions ON tbl_sample_group_coordinates.coordinate_method_dimension_id=tbl_coordinate_method_dimensions.coordinate_method_dimension_id
+        JOIN tbl_methods ON tbl_methods.method_id=tbl_coordinate_method_dimensions.method_id
+        JOIN tbl_dimensions ON tbl_dimensions.dimension_id=tbl_coordinate_method_dimensions.dimension_id
+        JOIN tbl_units ON tbl_units.unit_id=tbl_dimensions.unit_id
+        WHERE sample_group_id=$1`;
+
         for(let key in site.sample_groups) {
-            let sampleGroupsCoords = await pgClient.query('SELECT * FROM tbl_sample_group_coordinates WHERE sample_group_id=$1', [site.sample_groups[key].sample_group_id]);
-            site.sample_groups[key].coordinates = sampleGroupsCoords.rows;
+            let sampleGroupsCoords = await pgClient.query(sampleGroupCoordinatesSql, [site.sample_groups[key].sample_group_id]);
+
+            site.sample_groups[key].coordinates = [];
+            sampleGroupsCoords.rows.forEach(sgCoord => {
+                site.sample_groups[key].coordinates.push({
+                    accuracy: sgCoord.position_accuracy,
+                    coordinate_method_id: sgCoord.coordinate_method_id,
+                    dimension_id: sgCoord.dimension_id,
+                    measurement: parseFloat(sgCoord.sample_group_position),
+                });
+
+                let coordMethod = this.getCoordinateMethodByMethodId(site, sgCoord.coordinate_method_id);
+                if(!coordMethod) {
+                    this.fetchMethodByMethodId(sgCoord.coordinate_method_id).then(method => {
+                        if(method) {
+                            this.addCoordinateMethodToLocalLookup(site, coordMethod);
+                        }
+                    })
+                }
+
+                let dimension = this.getDimensionByDimensionId(site, sgCoord.dimension_id);
+                if(!dimension) {
+                    this.fetchDimension(sgCoord.dimension_id).then(dimension => {
+                        if(dimension) {
+                            this.addDimensionToLocalLookup(site, dimension);
+                        }
+                    });
+                }
+
+                let unit = this.getUnitByUnitId(site, sgCoord.unit_id);
+                if(!unit) {
+                    this.fetchUnit(sgCoord.unit_id).then(unit => {
+                        if(unit) {
+                            this.addUnitToLocalLookup(site, unit);
+                        }
+                    });
+                }
+
+            });
         }
 
         for(let key in site.sample_groups) {
@@ -1161,8 +1209,6 @@ class SeadJsonApiServer {
             let sampleGroupNotes = await pgClient.query('SELECT * FROM tbl_sample_group_notes WHERE sample_group_id=$1', [site.sample_groups[key].sample_group_id]);
             site.sample_groups[key].notes = sampleGroupNotes.rows;
         }
-
-        
         
         this.releaseDbConnection(pgClient);
         
@@ -1615,7 +1661,7 @@ class SeadJsonApiServer {
                 
                 //If we have dimensions, then we need the units for these dimensions
                 for(let key in sample.dimensions) {
-                    let unit = this.getUnitFromLocalLookup(site, sample.dimensions[key].unit_id);
+                    let unit = this.getUnitByUnitId(site, sample.dimensions[key].unit_id);
                     if(!unit) {
                         this.fetchUnit(sample.dimensions[key].unit_id).then(unit => {
                             if(unit) {
@@ -1630,9 +1676,7 @@ class SeadJsonApiServer {
                 tbl_sample_coordinates.measurement::float,
                 tbl_sample_coordinates.accuracy,
                 tbl_coordinate_method_dimensions.dimension_id,
-                tbl_coordinate_method_dimensions.method_id AS coordinate_method_id,
-                tbl_coordinate_method_dimensions.limit_upper AS dimension_limit_upper,
-                tbl_coordinate_method_dimensions.limit_lower AS dimension_limit_lower
+                tbl_coordinate_method_dimensions.method_id AS coordinate_method_id
                 FROM tbl_sample_coordinates
                 JOIN tbl_coordinate_method_dimensions ON tbl_sample_coordinates.coordinate_method_dimension_id = tbl_coordinate_method_dimensions.coordinate_method_dimension_id
                 WHERE tbl_sample_coordinates.physical_sample_id=$1`;
@@ -1665,6 +1709,7 @@ class SeadJsonApiServer {
         this.releaseDbConnection(pgClient);
         return site;
     }
+
 
     async fetchDimension(dimension_id) {
         let pgClient = await this.getDbConnection();
@@ -1733,7 +1778,7 @@ class SeadJsonApiServer {
         return unit;
     }
 
-    getUnitFromLocalLookup(site, unit_id) {
+    getUnitByUnitId(site, unit_id) {
         if(typeof site.lookup_tables.units == "undefined") {
             site.lookup_tables.units = [];
         }
@@ -1745,11 +1790,29 @@ class SeadJsonApiServer {
         return null;
     }
 
+    addCoordinateMethodToLocalLookup(site, method) {
+        if(typeof site.lookup_tables.coordinate_methods == "undefined") {
+            site.lookup_tables.coordinate_methods = [];
+        }
+        if(this.getCoordinateMethodByMethodId(site, method.method_id) == null) {
+            site.lookup_tables.coordinate_methods.push(method);
+        }
+    }
+
+    addDimensionToLocalLookup(site, dimension) {
+        if(typeof site.lookup_tables.dimensions == "undefined") {
+            site.lookup_tables.dimensions = [];
+        }
+        if(this.getDimensionByDimensionId(site, dimension.dimension_id) == null) {
+            site.lookup_tables.dimensions.push(dimension);
+        }
+    }
+
     addUnitToLocalLookup(site, unit) {
         if(typeof site.lookup_tables.units == "undefined") {
             site.lookup_tables.units = [];
         }
-        if(this.getUnitFromLocalLookup(site, unit.unit_id) == null) {
+        if(this.getUnitByUnitId(site, unit.unit_id) == null) {
             site.lookup_tables.units.push(unit);
         }
     }
@@ -1913,6 +1976,14 @@ class SeadJsonApiServer {
             //check health of postgres connection
             if(!this.staticDbConnection) {
                 this.staticDbConnection = await this.pgPool.connect();
+
+                //handle errors gracefully
+                this.staticDbConnection.on('error', (err) => {
+                    console.error("Static postgres connection error");
+                    console.error(err);
+                    this.staticDbConnection = null;
+                    this.getDbConnection();
+                });
             }
 
             let healthCheck = await this.staticDbConnection.query("SELECT 1");
