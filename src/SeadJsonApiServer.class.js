@@ -19,7 +19,7 @@ const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.31.0";
+const appVersion = "1.31.1";
 
 class SeadJsonApiServer {
     constructor() {
@@ -906,15 +906,8 @@ class SeadJsonApiServer {
             method_abbrev_or_alt_name: res.rows[0].method_abbrev_or_alt_name,
             method_group_id: res.rows[0].method_group_id,
             record_type_id: res.rows[0].record_type_id,
+            unit_id: res.rows[0].unit_id,
         };
-        if(parseInt(res.rows[0].unit_id)) {
-            method.unit = {
-                unit_id: res.rows[0].unit_id,
-                description: res.rows[0].unit_desc,
-                unit_abbrev: res.rows[0].unit_abbrev,
-                unit_name: res.rows[0].unit_name
-            }
-        }
 
         this.releaseDbConnection(pgClient);
         return method;
@@ -1123,7 +1116,13 @@ class SeadJsonApiServer {
                 if(!coordMethod) {
                     this.fetchMethodByMethodId(sgCoord.coordinate_method_id).then(method => {
                         if(method) {
-                            this.addCoordinateMethodToLocalLookup(site, coordMethod);
+                            this.addCoordinateMethodToLocalLookup(site, method);
+                            if(parseInt(method.unit_id)) {
+                                this.fetchUnit(method.unit_id).then(unit => {
+                                    this.addUnitToLocalLookup(site, unit);
+                                });
+                                
+                            }
                         }
                     })
                 }
