@@ -1802,7 +1802,7 @@ class SeadJsonApiServer {
         if(typeof site.lookup_tables.dimensions == "undefined") {
             site.lookup_tables.dimensions = [];
         }
-        if(this.getDimensionByDimensionId(site, dimension.dimension_id)) {
+        if(!this.getDimensionByDimensionId(site, dimension.dimension_id)) {
             site.lookup_tables.dimensions.push(dimension);
         }
     }
