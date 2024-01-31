@@ -15,9 +15,13 @@ class CeramicsModule {
         return false;
     }
     
-    async fetchSiteData(site) {
+    async fetchSiteData(site, verbose = false) {
         if(!this.siteHasModuleMethods(site)) {
             return site;
+        }
+
+        if(verbose) {
+            console.log("Fetching ceramics data for site "+site.site_id);
         }
 
         let pgClient = await this.app.getDbConnection();

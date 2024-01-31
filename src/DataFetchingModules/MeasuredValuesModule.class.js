@@ -24,9 +24,13 @@ class MeasuredValuesModule {
     setupEndpoints() {
     }
 
-    async fetchSiteData(site) {
+    async fetchSiteData(site, verbose = false) {
         if(!this.siteHasModuleMethods(site)) {
             return site;
+        }
+
+        if(verbose) {
+            console.log("Fetching measured values data for site "+site.site_id);
         }
 
         let pgClient = await this.app.getDbConnection();

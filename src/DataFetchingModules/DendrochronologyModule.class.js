@@ -32,38 +32,15 @@ class DendrochronologyModule {
         });
 
         this.expressApp.post('/dendro/dating-histogram', async (req, res) => {
-            let data = false;
-            let cacheKeyString = this.app.appVersion+req.path+req.body.sites.join("");
-            if(this.app.useQueryCaching) {
-                data = this.readCache(cacheKeyString);
-                console.log(req.path+" - cache hit");
-            }
-            if(!data) {
-                data = await this.getDatingHistogramForSites(req.body.sites);
-                this.writeCache(cacheKeyString, data);
-                console.log(req.path+" - cache miss");
-            }
-
+            let data = await this.getDatingHistogramForSites(req.body.sites);
             res.send({
                 requestId: req.body.requestId,
                 categories: data
             });
-            
         });
 
         this.expressApp.post('/dendro/treespecies', async (req, res) => {
-            let data = false;
-            let cacheKeyString = this.app.appVersion+req.path+req.body.sites.join("");
-            if(this.app.useQueryCaching) {
-                data = this.readCache(cacheKeyString);
-                console.log(req.path+" - cache hit");
-            }
-            if(!data) {
-                data = await this.getTreeSpeciesForSites(req.body.sites);
-                this.writeCache(cacheKeyString, data);
-                console.log(req.path+" - cache miss");
-            }
-
+            let data = await this.getTreeSpeciesForSites(req.body.sites);
             res.send({
                 requestId: req.body.requestId,
                 categories: data
@@ -71,18 +48,7 @@ class DendrochronologyModule {
         });
 
         this.expressApp.post('/dendro/featuretypes', async (req, res) => {
-            let data = false;
-            let cacheKeyString = this.app.appVersion+req.path+req.body.sites.join("");
-            if(this.app.useQueryCaching) {
-                data = this.readCache(cacheKeyString);
-                console.log(req.path+" - cache hit");
-            }
-            if(!data) {
-                data = await this.getFeatureTypesForSites(req.body.sites);
-                this.writeCache(cacheKeyString, data);
-                console.log(req.path+" - cache miss");
-            }
-
+            let data = await this.getFeatureTypesForSites(req.body.sites);
             res.send({
                 requestId: req.body.requestId,
                 categories: data
@@ -109,10 +75,15 @@ class DendrochronologyModule {
         return data.rows;
     }
 
-    async fetchSiteData(site) {
+    async fetchSiteData(site, verbose = false) {
         if(!this.siteHasModuleMethods(site)) {
             return site;
         }
+
+        if(verbose) {
+            console.log("Fetching dendrochronology data for site "+site.site_id);
+        }
+
         let measurements = await this.getMeasurementsForSite(site.site_id);
         if(!site.data_groups) {
             site.data_groups = [];
@@ -123,7 +94,7 @@ class DendrochronologyModule {
             site.lookup_tables.dating_uncertainty = [];
         }
         site.lookup_tables.dating_uncertainty = await this.fetchDatingUncertainty(site);
-        site.lookup_tables.error_uncertainty = await this.fetchErrorUncertainty(site);
+        //site.lookup_tables.error_uncertainty = await this.fetchErrorUncertainty(site);
 
         return site;
     }
@@ -168,6 +139,8 @@ class DendrochronologyModule {
         let measurementRows = data.rows;
         site.measurements = data.rows;
 
+        //OLD
+        /*
         sql = `
         SELECT DISTINCT ps.physical_sample_id,
         ae.analysis_entity_id,
@@ -200,11 +173,41 @@ class DendrochronologyModule {
         LEFT JOIN tbl_sites ON tbl_sites.site_id = sg.site_id
         WHERE tbl_sites.site_id=$1
         `;
+        */
+        
+        //NEW
+        sql = `
+        SELECT DISTINCT ps.physical_sample_id,
+        ae.analysis_entity_id,
+        dl.name AS date_type,
+        ps.sample_name AS sample,
+        at.age_type,
+        dd.age_older AS older,
+        dd.age_younger AS younger,
+        dd.dating_uncertainty_id,
+        ddn.note AS dating_note,
+        dl.dendro_lookup_id,
+        dl.description AS dendro_lookup_description,
+        tbl_sites.site_id,
+		tbl_datasets.dataset_id,
+		tbl_datasets.biblio_id
+        FROM tbl_physical_samples ps
+        JOIN tbl_analysis_entities ae ON ps.physical_sample_id = ae.physical_sample_id
+		JOIN tbl_datasets ON tbl_datasets.dataset_id=ae.dataset_id
+        JOIN tbl_dendro_dates dd ON ae.analysis_entity_id = dd.analysis_entity_id
+        LEFT JOIN tbl_seasons ON tbl_seasons.season_id = dd.season_id
+        LEFT JOIN tbl_age_types at ON at.age_type_id = dd.age_type_id
+        LEFT JOIN tbl_dendro_lookup dl ON dd.dendro_lookup_id = dl.dendro_lookup_id
+        LEFT JOIN tbl_sample_groups sg ON sg.sample_group_id = ps.sample_group_id
+        LEFT JOIN tbl_dendro_date_notes ddn ON ddn.dendro_date_id = dd.dendro_date_id
+        LEFT JOIN tbl_sites ON tbl_sites.site_id = sg.site_id
+        WHERE tbl_sites.site_id=$1
+        `;
         data = await pgClient.query(sql, [siteId]);
         let datingRows = data.rows;
         site.dating = data.rows;
 
-        /* DISABLED THIS - not because it doesn't work but because I'm not sure where to put this data
+        /* DISABLED THIS - not because it doesn't work but because I'm not sure where to put this data - also - it might NOT work anymore after new dendro data structure, haven't checked
         sql = `
         SELECT
         tbl_sites.site_id,
@@ -271,6 +274,7 @@ class DendrochronologyModule {
         return datingUncertaintyLookupTable;
     }
 
+    //fetchErrorUncertainty - this is not used anymore since tbl_error_uncertainties doesn't exist anymore
     async fetchErrorUncertainty(site) {
         let pgClient = await this.app.getDbConnection();
         if(!pgClient) {
@@ -313,22 +317,17 @@ class DendrochronologyModule {
         ae.analysis_entity_id,
         dl.name AS date_type,
         ps.sample_name AS sample,
-        at.age_type,
+        agetype.age_type,
         dd.age_older AS older,
         dd.age_younger AS younger,
-        dd.error_plus AS plus,
-        dd.error_minus AS minus,
-        eu.error_uncertainty_type AS error_uncertainty,
-        soq.season_or_qualifier_type AS season,
         dl.dendro_lookup_id,
         dl.description AS dendro_lookup_description,
         tbl_sites.site_id
         FROM tbl_physical_samples ps
         JOIN tbl_analysis_entities ae ON ps.physical_sample_id = ae.physical_sample_id
         JOIN tbl_dendro_dates dd ON ae.analysis_entity_id = dd.analysis_entity_id
-        LEFT JOIN tbl_season_or_qualifier soq ON soq.season_or_qualifier_id = dd.season_or_qualifier_id
-        LEFT JOIN tbl_age_types at ON at.age_type_id = dd.age_type_id
-        LEFT JOIN tbl_error_uncertainties eu ON eu.error_uncertainty_id = dd.error_uncertainty_id
+        LEFT JOIN tbl_seasons ON tbl_seasons.season_id = dd.season_id
+        LEFT JOIN tbl_age_types agetype ON agetype.age_type_id = dd.age_type_id
         LEFT JOIN tbl_dendro_lookup dl ON dd.dendro_lookup_id = dl.dendro_lookup_id
         LEFT JOIN tbl_sample_groups sg ON sg.sample_group_id = ps.sample_group_id
         LEFT JOIN tbl_sites ON tbl_sites.site_id = sg.site_id
@@ -415,6 +414,15 @@ class DendrochronologyModule {
         }
         let sites = [];
 
+        let cacheId = crypto.createHash('sha256');
+        cacheId = cacheId.update('getFeatureTypesForSites'+JSON.stringify(siteIds)).digest('hex');
+        let identifierObject = { cache_id: cacheId };
+      
+        let cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
+        if (cachedData !== false) {
+          return cachedData.data;
+        }
+
         if(siteIds.length == 0) {
             //If no sites are selected we assume ALL sites
             sites = await this.getMeasurementsForAllSites();
@@ -438,6 +446,13 @@ class DendrochronologyModule {
             });
         })
 
+        let resultObject = {
+            cache_id: cacheId,
+            data: featureTypeCategories
+        };
+        
+        this.app.saveObjectToCache("graph_cache", identifierObject, resultObject);
+
         return featureTypeCategories;
     }
 
@@ -445,7 +460,83 @@ class DendrochronologyModule {
         if(!siteIds) {
             siteIds = [];
         }
+
+        let cacheId = crypto.createHash('sha256');
+        cacheId = cacheId.update('getTreeSpeciesForSites'+JSON.stringify(siteIds)).digest('hex');
+        let identifierObject = { cache_id: cacheId };
+      
+        let cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
+        if (cachedData !== false) {
+          return cachedData.data;
+        }
+
+        if(siteIds.length == 0) {
+            let pgClient = await this.app.getDbConnection();
+            if(!pgClient) {
+                return false;
+            }
+
+            let sql = `SELECT site_id FROM tbl_sites;`;
+            //let data = await pgClient.query('SELECT * FROM postgrest_api.qse_dendro_measurements');
+            let data = await pgClient.query(sql);
+            data.rows.forEach(row => {
+                siteIds.push(row.site_id);
+            });
+            this.app.releaseDbConnection(pgClient);
+        }
+        
+        let data = this.app.mongo.collection("sites").aggregate([
+            // Match documents that contain the specified site IDs
+            {
+                $match: {
+                    'data_groups.datasets.label': 'Tree species',
+                    'site_id': { $in: siteIds },
+                }
+            },
+            // Unwind the arrays
+            { $unwind: '$data_groups' },
+            { $unwind: '$data_groups.datasets' },
+            // Filter only the 'Tree species' label
+            {
+              $match: {
+                'data_groups.datasets.label': 'Tree species'
+              }
+            },
+            // Group by tree species and count occurrences
+            {
+              $group: {
+                _id: '$data_groups.datasets.value',
+                count: { $sum: 1 }
+              }
+            },
+            // Project to reshape the output
+            {
+              $project: {
+                _id: 0,
+                name: '$_id',
+                count: 1
+              }
+            }
+          ]);
+
+          let treeSpeciesCategories = await data.toArray();          
+          return treeSpeciesCategories;
+    }
+
+    async getTreeSpeciesForSitesOLD(siteIds) {
+        if(!siteIds) {
+            siteIds = [];
+        }
         let sites = [];
+
+        let cacheId = crypto.createHash('sha256');
+        cacheId = cacheId.update('getTreeSpeciesForSites'+JSON.stringify(siteIds)).digest('hex');
+        let identifierObject = { cache_id: cacheId };
+      
+        let cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
+        if (cachedData !== false) {
+          return cachedData.data;
+        }
 
         if(siteIds.length == 0) {
             //If no sites are selected we assume ALL sites
@@ -489,8 +580,21 @@ class DendrochronologyModule {
             });
         })
 
+        let resultObject = {
+            cache_id: cacheId,
+            data: treeSpeciesCategories
+        };
+        
+        this.app.saveObjectToCache("graph_cache", identifierObject, resultObject);
+
         return treeSpeciesCategories;
     }
+
+    /*
+    async getDatingHistogramForSites(siteIds) {
+        
+    }
+    */
 
     async getDatingHistogramForSites(siteIds) {
         if(!siteIds) {
@@ -498,12 +602,22 @@ class DendrochronologyModule {
         }
         let sites = [];
 
+        let cacheId = crypto.createHash('sha256');
+        cacheId = cacheId.update('datinghistogramforsites'+JSON.stringify(siteIds)).digest('hex');
+        let identifierObject = { cache_id: cacheId };
+      
+        let cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
+        if (cachedData !== false) {
+          return cachedData.data;
+        }
+
         if(siteIds.length == 0) {
             //If no sites are selected we assume ALL sites
             console.log("Getting ALL sites")
             sites = await this.getMeasurementsForAllSites();
         }
         else {
+            console.log("Getting "+siteIds.length+" sites");
             for(let key in siteIds) {
                 let sampleDataObjects = await this.getMeasurementsForSite(siteIds[key]);
                 sites.push({
@@ -564,8 +678,6 @@ class DendrochronologyModule {
         //or in the way that the last bar has a slightly longer span? I choose the latter
         categories[categories.length-1].endYear = youngestYear.value;
 
-        
-
         //3. Find out number of dated samples which fall within each category/bar
         categories.forEach(cat => {
             cat.datingsNum = 0;
@@ -593,10 +705,15 @@ class DendrochronologyModule {
                     cat.datingsNum += selectedSampleDataObjectsHighReliability.length;
                     cat.datingsNumUncertain += selectedSampleDataObjects.length;
                 }
-                
-                
             });
         });
+
+        let resultObject = {
+            cache_id: cacheId,
+            data: categories
+        };
+        
+        this.app.saveObjectToCache("graph_cache", identifierObject, resultObject);
 
         return categories;
     }
@@ -631,6 +748,10 @@ class DendrochronologyModule {
             console.log("No cache result for this query.");
             return false;
         }
+    }
+
+    readCacheMongo(keyString) {
+
     }
 
     postProcessSiteData(site) {

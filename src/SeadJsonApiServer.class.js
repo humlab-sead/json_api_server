@@ -19,7 +19,7 @@ const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.31.3";
+const appVersion = "1.32.0";
 
 class SeadJsonApiServer {
     constructor() {
@@ -764,7 +764,6 @@ class SeadJsonApiServer {
                     pendingFetches++;
                     let siteId = siteIds.shift();
                     console.time("Fetched site "+siteId);
-                    //console.log("Fetching site", siteId);
                     this.getSite(siteId, false).then(() => {
                         console.timeEnd("Fetched site "+siteId);
                         pendingFetches--;
@@ -1241,12 +1240,12 @@ class SeadJsonApiServer {
         return site;
     }
 
-    async fetchMethodSpecificData(site, verbose = true) {
+    async fetchMethodSpecificData(site, verbose = false) {
         let fetchPromises = [];
         
         for(let key in this.dataFetchingModules) {
             let module = this.dataFetchingModules[key];
-            //if(verbose) console.time("Fetched method "+module.name);
+            if(verbose) console.time("Fetched method "+module.name);
 
             //This should get "data_groups", a data_group has data structured in tabular form, like:
             /*
@@ -1266,7 +1265,7 @@ class SeadJsonApiServer {
             let promise = module.fetchSiteData(site);
             fetchPromises.push(promise);
             promise.then(() => {
-                //if(verbose) console.timeEnd("Fetched method "+module.name);
+                if(verbose) console.timeEnd("Fetched method "+module.name);
             });
         }
 

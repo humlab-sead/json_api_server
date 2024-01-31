@@ -130,25 +130,29 @@ class AbundanceModule {
         }
     }
 
-    async fetchSiteData(site) {
+    async fetchSiteData(site, verbose = false) {
         if(!this.siteHasModuleMethods(site)) {
             //console.log("No abundance methods for site "+site.site_id);
             return site;
         }
 
-        //console.log("Fetching abundance data for site "+site.site_id);
+        if(verbose) {
+            console.log("Fetching abundance data for site "+site.site_id);
+        }
 
         let pgClient = await this.app.getDbConnection();
         if(!pgClient) {
             return false;
         }
         
+        let queriesExecuted = 0;
         let queryPromises = [];
 
         site.sample_groups.forEach(sampleGroup => {
             sampleGroup.physical_samples.forEach(physicalSample => {
                 physicalSample.analysis_entities.forEach(analysisEntity => {
                     let promise = pgClient.query('SELECT * FROM tbl_abundances WHERE analysis_entity_id=$1', [analysisEntity.analysis_entity_id]).then(async data => {
+                        queriesExecuted++;
                         analysisEntity.abundances = data.rows;
 
                         for(let key in analysisEntity.abundances) {
@@ -167,6 +171,7 @@ class AbundanceModule {
                             WHERE abundance_id=$1
                             `;
                             await pgClient.query(sql, [abundance.abundance_id]).then(identLevels => {
+                                queriesExecuted++;
                                 abundance.identification_levels = identLevels.rows;
                             });
 
@@ -186,6 +191,7 @@ class AbundanceModule {
                                 `;
                                 */
                                 await pgClient.query('SELECT * FROM tbl_abundance_elements WHERE abundance_element_id=$1', [abundance.abundance_element_id]).then(abundanceElements => {
+                                    queriesExecuted++;
                                     if(abundanceElements.rows.length > 0) {
                                         this.addAbundanceElementToLocalLookup(site, abundanceElements.rows[0]);
                                     }
@@ -194,6 +200,7 @@ class AbundanceModule {
 
                             sql = "SELECT * FROM tbl_abundance_modifications WHERE abundance_id=$1";
                             let abundanceModifications = await pgClient.query(sql, [abundance.abundance_id]);
+                            queriesExecuted++;
                             abundance.modifications = abundanceModifications.rows;
 
                             for(let key in abundance.modifications) {
@@ -202,6 +209,7 @@ class AbundanceModule {
                                 if(abundanceModification == null) {
                                     sql = "SELECT * FROM tbl_modification_types WHERE modification_type_id=$1";
                                     let abundanceModificationResult = await pgClient.query(sql, [am.modification_type_id]);
+                                    queriesExecuted++;
                                     if(abundanceModificationResult.rows.length > 0) {
                                         this.addAbundanceModificationTypeToLocalLookup(site, abundanceModificationResult.rows[0]);
                                     }
@@ -213,13 +221,14 @@ class AbundanceModule {
                             if(taxon == null) {
                                 let taxon_id = abundance.taxon_id;
                                 await pgClient.query('SELECT taxon_id,author_id,genus_id,species FROM tbl_taxa_tree_master WHERE taxon_id=$1', [taxon_id]).then(async taxonData => {
-                                    
+                                    queriesExecuted++;
                                     let taxon = taxonData.rows[0];
 
                                     let family_id = null;
                                     if(taxon.genus_id) {
                                         sql = `SELECT family_id, genus_name FROM tbl_taxa_tree_genera WHERE genus_id=$1`;
                                         await pgClient.query(sql, [taxon.genus_id]).then(genus => {
+                                            queriesExecuted++;
                                             family_id = genus.rows[0].family_id;
                                             taxon.genus = {
                                                 genus_id: taxon.genus_id,
@@ -232,6 +241,7 @@ class AbundanceModule {
                                     if(family_id) {
                                         sql = `SELECT family_name, order_id FROM tbl_taxa_tree_families WHERE family_id=$1`;
                                         await pgClient.query(sql, [family_id]).then(fam => {
+                                            queriesExecuted++;
                                             order_id = fam.rows[0].order_id;
                                             taxon.family = {
                                                 family_id: family_id,
@@ -243,6 +253,7 @@ class AbundanceModule {
                                     if(order_id) {
                                         sql = `SELECT order_name, record_type_id FROM tbl_taxa_tree_orders WHERE order_id=$1`;
                                         await pgClient.query(sql, [order_id]).then(order => {
+                                            queriesExecuted++;
                                             taxon.order = {
                                                 order_id: order_id,
                                                 order_name: order.rows[0].order_name,
@@ -253,6 +264,7 @@ class AbundanceModule {
                                     
                                     if(taxon.author_id) {
                                         await pgClient.query('SELECT * FROM tbl_taxa_tree_authors WHERE author_id=$1', [taxon.author_id]).then(taxa_author => {
+                                            queriesExecuted++;
                                             taxon.author = taxa_author.rows[0];
                                             delete taxon.author_id;
                                         });
@@ -265,22 +277,27 @@ class AbundanceModule {
                                     WHERE taxon_id=$1
                                     `;
                                     await pgClient.query(sql, [taxon_id]).then(commonNames => {
+                                        queriesExecuted++;
                                         taxon.common_names = commonNames.rows;
                                     });
 
                                     await pgClient.query('SELECT measured_attribute_id,attribute_measure,attribute_type,attribute_units,data FROM tbl_taxa_measured_attributes WHERE taxon_id=$1', [abundance.taxon_id]).then(measuredAttr => {
+                                        queriesExecuted++;
                                         taxon.measured_attributes = measuredAttr.rows;
                                     });
 
                                     await pgClient.query('SELECT * FROM tbl_taxonomy_notes WHERE taxon_id=$1', [taxon_id]).then(taxNotes => {
+                                        queriesExecuted++;
                                         taxon.taxonomy_notes = taxNotes.rows;
                                     });
 
                                     await pgClient.query('SELECT * FROM tbl_text_biology WHERE taxon_id=$1', [taxon_id]).then(textBio => {
+                                        queriesExecuted++;
                                         taxon.text_biology = textBio.rows;
                                     });
                                     
                                     await pgClient.query('SELECT * FROM tbl_text_distribution WHERE taxon_id=$1', [taxon_id]).then(textDist => {
+                                        queriesExecuted++;
                                         taxon.text_distribution = textDist.rows;
                                     });
 
@@ -302,6 +319,7 @@ class AbundanceModule {
                                     WHERE tbl_taxa_seasonality.taxon_id=$1
                                     `;
                                     await pgClient.query(sql, [taxon_id]).then(seasonality => {
+                                        queriesExecuted++;
                                         taxon.seasonality = seasonality.rows;
                                     });
                                 
@@ -322,6 +340,7 @@ class AbundanceModule {
 
         await Promise.all(queryPromises);
         this.app.releaseDbConnection(pgClient);
+        //console.log("Abundance queries executed: "+queriesExecuted);
         
         return site;
     }

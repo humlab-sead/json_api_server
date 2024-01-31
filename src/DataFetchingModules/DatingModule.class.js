@@ -18,9 +18,13 @@ class DatingModule {
         return false;
     }
     
-    async fetchSiteData(site) {
+    async fetchSiteData(site, verbose = false) {
         if(!this.siteHasModuleMethods(site)) {
             return site;
+        }
+
+        if(verbose) {
+            console.log("Fetching dating data for site "+site.site_id);
         }
 
         let pgClient = await this.app.getDbConnection();
@@ -75,6 +79,7 @@ class DatingModule {
         WHERE tbl_analysis_entities.analysis_entity_id=$1;
         `;
         
+        let queriesExecuted = 0;
         let queryPromises = [];
         
         site.sample_groups.forEach(sampleGroup => {
@@ -100,6 +105,7 @@ class DatingModule {
                         promise = pgClient.query(sql, [analysisEntity.analysis_entity_id]).then(values => {
                             analysisEntity.dating_values = values.rows[0];
                         });
+                        queriesExecuted++;
                     }
                     else {
                         promise = pgClient.query(c14stdSql, [analysisEntity.analysis_entity_id]).then(values => {
@@ -126,6 +132,7 @@ class DatingModule {
                                 queryPromises.push(labFetchPromise);
                             }
                         });
+                        queriesExecuted++;
                     }
                     queryPromises.push(promise);
                     
@@ -135,6 +142,7 @@ class DatingModule {
 
         await Promise.all(queryPromises).then(() => {
             this.app.releaseDbConnection(pgClient);
+            //console.log("Dating module executed "+queriesExecuted+" queries for site "+site.site_id);
         });
 
         return site;

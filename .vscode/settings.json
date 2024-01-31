@@ -19,5 +19,6 @@
         "titleBar.inactiveBackground": "#07e8b599",
         "titleBar.inactiveForeground": "#15202b99"
     },
-    "peacock.remoteColor": "#07e8b5"
+    "peacock.remoteColor": "#07e8b5",
+    "CodeGPT.organizationId": "org-0Q77pA63Ytm4HRAVHGkcQYm0"
 }
