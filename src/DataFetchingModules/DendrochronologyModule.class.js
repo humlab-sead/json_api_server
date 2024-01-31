@@ -185,6 +185,7 @@ class DendrochronologyModule {
         dd.age_older AS older,
         dd.age_younger AS younger,
         dd.dating_uncertainty_id,
+        dd.season_id,
         ddn.note AS dating_note,
         dl.dendro_lookup_id,
         dl.description AS dendro_lookup_description,
@@ -320,6 +321,7 @@ class DendrochronologyModule {
         agetype.age_type,
         dd.age_older AS older,
         dd.age_younger AS younger,
+        dd.season_id,
         dl.dendro_lookup_id,
         dl.description AS dendro_lookup_description,
         tbl_sites.site_id
