@@ -19,7 +19,7 @@ const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.32.1";
+const appVersion = "1.32.2";
 
 class SeadJsonApiServer {
     constructor() {
@@ -798,6 +798,13 @@ class SeadJsonApiServer {
         }
         if(verbose) console.time("Fetched basic site data for site "+siteId);
         let siteData = await pgClient.query('SELECT * FROM tbl_sites WHERE site_id=$1', [siteId]);
+
+        //if it doesn't exist, return false
+        if(siteData.rows.length == 0) {
+            console.warn("No site found for site_id", siteId);
+            return false;
+        }
+
         site = siteData.rows[0];
         site.data_groups = [];
         site.api_source = appName+"-"+appVersion;

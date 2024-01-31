@@ -321,19 +321,26 @@ class DendrochronologyModule {
         agetype.age_type,
         dd.age_older AS older,
         dd.age_younger AS younger,
+        dd.dating_uncertainty_id,
         dd.season_id,
+        ddn.note AS dating_note,
         dl.dendro_lookup_id,
         dl.description AS dendro_lookup_description,
-        tbl_sites.site_id
+        tbl_sites.site_id,
+        tbl_datasets.dataset_id,
+		tbl_datasets.biblio_id
         FROM tbl_physical_samples ps
         JOIN tbl_analysis_entities ae ON ps.physical_sample_id = ae.physical_sample_id
+        JOIN tbl_datasets ON tbl_datasets.dataset_id=ae.dataset_id
         JOIN tbl_dendro_dates dd ON ae.analysis_entity_id = dd.analysis_entity_id
         LEFT JOIN tbl_seasons ON tbl_seasons.season_id = dd.season_id
         LEFT JOIN tbl_age_types agetype ON agetype.age_type_id = dd.age_type_id
         LEFT JOIN tbl_dendro_lookup dl ON dd.dendro_lookup_id = dl.dendro_lookup_id
         LEFT JOIN tbl_sample_groups sg ON sg.sample_group_id = ps.sample_group_id
+        LEFT JOIN tbl_dendro_date_notes ddn ON ddn.dendro_date_id = dd.dendro_date_id
         LEFT JOIN tbl_sites ON tbl_sites.site_id = sg.site_id
         `;
+
         //data = await pgClient.query('SELECT * FROM postgrest_api.qse_dendro_dating2');
         data = await pgClient.query(sql);
         let datingRows = data.rows;
