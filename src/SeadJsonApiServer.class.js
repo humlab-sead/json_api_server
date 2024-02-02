@@ -19,7 +19,7 @@ const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.32.2";
+const appVersion = "1.32.3";
 
 class SeadJsonApiServer {
     constructor() {
@@ -129,6 +129,22 @@ class SeadJsonApiServer {
             let site = await this.getSite(req.params.siteId, true);
             res.header("Content-type", "application/json");
             res.send(JSON.stringify(site, null, 2));
+        });
+
+        this.expressApp.post('/export/bulk/sites', async (req, res) => {
+            let siteIds = req.body;
+            if(typeof siteIds != "object") {
+                res.status(400);
+                res.send("Bad input - should be an array of site IDs");
+                return;
+            }
+
+            let siteIdQuery = { $in: siteIds };
+            let siteData = await this.mongo.collection('sites').find({ site_id: siteIdQuery }, { projection: { site_id: 1, site_name: 1, national_site_identifier: 1, site_description: 1, latitude_dd: 1, longitude_dd: 1 } });
+            let sites = await siteData.toArray();
+           
+            res.header("Content-type", "application/json");
+            res.end(JSON.stringify(sites, null, 2));
         });
 
         this.expressApp.post('/export/sites', async (req, res) => {
