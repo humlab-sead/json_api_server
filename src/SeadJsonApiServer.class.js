@@ -19,7 +19,7 @@ const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.32.3";
+const appVersion = "1.32.4";
 
 class SeadJsonApiServer {
     constructor() {
@@ -825,7 +825,14 @@ class SeadJsonApiServer {
         site.data_groups = [];
         site.api_source = appName+"-"+appVersion;
         site.lookup_tables = {
-            biblio: []
+            biblio: [],
+            units: [],
+            dimensions: [],
+            coordinate_methods: [],
+            analysis_methods: [],
+            sampling_methods: [],
+            dataset_contacts: [],
+            prep_methods: [],
         };
 
         if(verbose) console.timeEnd("Fetched basic site data for site "+siteId);
@@ -1316,7 +1323,6 @@ class SeadJsonApiServer {
         });
 
         let queryPromises = [];
-        let methods = [];
         for(let key in methodIds) {
             let methodId = methodIds[key];
             let methodResult = await pgClient.query('SELECT * FROM tbl_methods WHERE method_id=$1', [methodId]);
@@ -1353,7 +1359,7 @@ class SeadJsonApiServer {
                 method.unit = unit;
             }
 
-            methods.push(method);
+            this.addAnalysisMethodToLocalLookup(site, method);
         }
         /*
         methodIds.forEach(methodId => {
@@ -1367,8 +1373,6 @@ class SeadJsonApiServer {
         await Promise.all(queryPromises).then(() => {
             this.releaseDbConnection(pgClient);
         });
-        
-        site.lookup_tables.analysis_methods = methods;
 
         return site;
     }
@@ -1672,19 +1676,43 @@ class SeadJsonApiServer {
                 let altRefs = await pgClient.query(sql, [sample.physical_sample_id]);
                 sample.alt_refs = altRefs.rows;
 
+                /*
                 sql = `SELECT *
                 FROM tbl_sample_dimensions
                 LEFT JOIN tbl_methods ON tbl_sample_dimensions.method_id = tbl_methods.method_id
                 WHERE tbl_sample_dimensions.physical_sample_id=$1
                 `;
+                */
+                sql = `SELECT 
+                tbl_sample_dimensions.*,
+                tbl_methods.method_id
+                FROM tbl_sample_dimensions
+                LEFT JOIN tbl_methods ON tbl_sample_dimensions.method_id = tbl_methods.method_id
+                WHERE tbl_sample_dimensions.physical_sample_id=$1`;
+
                 let sampleDimensions = await pgClient.query(sql, [sample.physical_sample_id]);
                 sample.dimensions = sampleDimensions.rows;
                 
                 //If we have dimensions, then we need the units for these dimensions
                 for(let key in sample.dimensions) {
-                    let unit = this.getUnitByUnitId(site, sample.dimensions[key].unit_id);
+
+                    //fetch dimension adn add to lookup table
+                    let dimension = this.getDimensionByDimensionId(site, sample.dimensions[key].dimension_id);
+                    if(!dimension) {
+                        dimension = await this.fetchDimension(sample.dimensions[key].dimension_id);
+                        this.addDimensionToLocalLookup(site, dimension);
+                    }
+
+                    //fetch method and add to lookup table
+                    let method = this.getAnalysisMethodByMethodId(site, sample.dimensions[key].method_id);
+                    if(!method) {
+                        method = await this.fetchMethodByMethodId(sample.dimensions[key].method_id);
+                        this.addAnalysisMethodToLocalLookup(site, method);
+                    }
+
+                    let unit = this.getUnitByUnitId(site, dimension.unit_id);
                     if(!unit) {
-                        this.fetchUnit(sample.dimensions[key].unit_id).then(unit => {
+                        this.fetchUnit(dimension.unit_id).then(unit => {
                             if(unit) {
                                 this.addUnitToLocalLookup(site, unit);
                             }
@@ -1808,7 +1836,7 @@ class SeadJsonApiServer {
                 return site.lookup_tables.units[key];
             }
         }
-        return null;
+        return false;
     }
 
     addCoordinateMethodToLocalLookup(site, method) {
@@ -1833,8 +1861,17 @@ class SeadJsonApiServer {
         if(typeof site.lookup_tables.units == "undefined") {
             site.lookup_tables.units = [];
         }
-        if(this.getUnitByUnitId(site, unit.unit_id) == null) {
+        if(this.getUnitByUnitId(site, unit.unit_id) == false) {
             site.lookup_tables.units.push(unit);
+        }
+    }
+
+    addAnalysisMethodToLocalLookup(site, method) {
+        if(typeof site.lookup_tables.analysis_methods == "undefined") {
+            site.lookup_tables.analysis_methods = [];
+        }
+        if(this.getAnalysisMethodByMethodId(site, method.method_id) == false) {
+            site.lookup_tables.analysis_methods.push(method);
         }
     }
 
