@@ -8,8 +8,8 @@ class MeasuredValuesModule {
     }
 
     siteHasModuleMethods(site) {
-        for(let key in site.lookup_tables.analysis_methods) {
-            if(this.moduleMethodGroups.includes(site.lookup_tables.analysis_methods[key].method_group_id)) {
+        for(let key in site.lookup_tables.methods) {
+            if(this.moduleMethodGroups.includes(site.lookup_tables.methods[key].method_group_id)) {
                 return true;
             }
         }
@@ -66,7 +66,7 @@ class MeasuredValuesModule {
             let dataset = site.datasets[dsKey];
             if(this.datasetHasModuleMethods(dataset)) {
 
-                let method = this.app.getAnalysisMethodByMethodId(site, dataset.method_id);
+                let method = this.app.getMethodByMethodId(site, dataset.method_id);
 
                 let dataGroup = {
                     id: dataset.dataset_id,

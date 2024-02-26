@@ -54,8 +54,8 @@ class AbundanceModule {
     }
 
     siteHasModuleMethods(site) {
-        for(let key in site.lookup_tables.analysis_methods) {
-            if(this.moduleMethods.includes(site.lookup_tables.analysis_methods[key].method_id)) {
+        for(let key in site.lookup_tables.methods) {
+            if(this.moduleMethods.includes(site.lookup_tables.methods[key].method_id)) {
                 return true;
             }
         }
@@ -353,7 +353,7 @@ class AbundanceModule {
             let dataset = site.datasets[dsKey];
             if(this.datasetHasModuleMethods(dataset)) {
 
-                let method = this.app.getAnalysisMethodByMethodId(site, dataset.method_id);
+                let method = this.app.getMethodByMethodId(site, dataset.method_id);
                 
                 let dataGroup = {
                     id: dataset.dataset_id,

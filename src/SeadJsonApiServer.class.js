@@ -17,9 +17,10 @@ const Chronology = require("./EndpointModules/Chronology.class");
 const Taxa = require("./EndpointModules/Taxa.class");
 const Graphs = require("./EndpointModules/Graphs.class");
 const res = require('express/lib/response');
+const basicAuth = require('basic-auth');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.32.4";
+const appVersion = "1.33.0";
 
 class SeadJsonApiServer {
     constructor() {
@@ -27,7 +28,6 @@ class SeadJsonApiServer {
         this.appVersion = appVersion;
         this.cacheStorageMethod = typeof(process.env.CACHE_STORAGE_METHOD) != "undefined" ? process.env.CACHE_STORAGE_METHOD : "file";
         this.useSiteCaching = typeof(process.env.USE_SITE_CACHE) != "undefined" ? process.env.USE_SITE_CACHE == "true" : true;
-        this.useQueryCaching = typeof(process.env.USE_QUERY_CACHE) != "undefined" ? process.env.USE_QUERY_CACHE == "true" : true;
         this.useTaxaCaching = typeof(process.env.USE_TAXA_CACHE) != "undefined" ? process.env.USE_TAXA_CACHE == "true" : true;
         this.useTaxaSummaryCacheing = typeof(process.env.USE_TAXA_SUMMARY_CACHE) != "undefined" ? process.env.USE_TAXA_SUMMARY_CACHE == "true" : true;
         this.useEcoCodeCaching = typeof(process.env.USE_ECOCODE_CACHE) != "undefined" ? process.env.USE_ECOCODE_CACHE == "true" : true;
@@ -35,6 +35,8 @@ class SeadJsonApiServer {
         this.acceptCacheVersionMismatch = typeof(process.env.ACCEPT_CACHE_VERSION_MISMATCH) != "undefined" ? process.env.ACCEPT_CACHE_VERSION_MISMATCH == "true" : false;
         this.allCachingDisabled = typeof(process.env.FORCE_DISABLE_ALL_CACHES) != "undefined" ? process.env.FORCE_DISABLE_ALL_CACHES == "true" : false;
         this.maxConcurrentFetches = parseInt(process.env.MAX_CONCURRENT_FETCHES) ? parseInt(process.env.MAX_CONCURRENT_FETCHES) : process.env.MAX_CONCURRENT_FETCHES = 1;
+        this.protectedEndpointUser = process.env.PROTECTED_ENDPOINTS_USER;
+        this.protectedEndpointPass = process.env.PROTECTED_ENDPOINTS_PASS;
         
         this.staticDbConnection = null;
         console.log("Starting up SEAD Data Server "+appVersion);
@@ -135,7 +137,7 @@ class SeadJsonApiServer {
             let siteIds = req.body;
             if(typeof siteIds != "object") {
                 res.status(400);
-                res.send("Bad input - should be an array of site IDs");
+                res.send("Bad input - should be an array of site IDs\n");
                 return;
             }
 
@@ -152,13 +154,13 @@ class SeadJsonApiServer {
             console.log(siteIds);
             if(typeof siteIds != "object") {
                 res.status(400);
-                res.send("Bad input - should be an array of site IDs");
+                res.send("Bad input - should be an array of site IDs\n");
                 return;
             }
             siteIds.forEach(siteId => {
                 if(!parseInt(siteId)) {
                     res.status(400);
-                    res.send("Bad input - should be an array of site IDs");
+                    res.send("Bad input - should be an array of site IDs\n");
                     return;
                 }
             })
@@ -199,7 +201,7 @@ class SeadJsonApiServer {
                 await this.flushSiteCache();
             }
             await this.preloadAllSites();
-            res.end("Preload of sites complete");
+            res.end("Preload of sites complete\n");
         });
 
         this.expressApp.get('/preload/taxa/:flushCache?', async (req, res) => {
@@ -208,7 +210,7 @@ class SeadJsonApiServer {
                 await this.flushTaxaCache();
             }
             await this.preloadAllTaxa();
-            res.send("Preload of taxa complete");
+            res.send("Preload of taxa complete\n");
         });
 
         this.expressApp.get('/preload/ecocodes/:flushCache?', async (req, res) => {
@@ -217,13 +219,13 @@ class SeadJsonApiServer {
                 await this.ecoCodes.flushEcocodeCache();
             }
             await this.ecoCodes.preloadAllSiteEcocodes(); 
-            res.send("Preload of ecocodes complete");
+            res.send("Preload of ecocodes complete\n");
         });
 
         this.expressApp.get('/flush/graphcache', async (req, res) => {
             console.log(req.path);
             await this.flushGraphCache();
-            res.send("Flushed graph cache");
+            res.send("Flushed graph cache\n");
         });
 
         this.expressApp.get('/preload/all', async (req, res) => {
@@ -233,13 +235,38 @@ class SeadJsonApiServer {
             await this.preloadAllTaxa(); // collection: taxa
             await this.ecoCodes.preloadAllSiteEcocodes(); 
             console.timeEnd("Preload of all data complete");
-            res.send("Preload of all data complete");
+            res.send("Preload of all data complete\n");
         });
 
         this.expressApp.get('/flushSiteCache', async (req, res) => {
             console.log(req.path);
             await this.flushSiteCache();
-            res.send("Flush of site cache complete");
+            res.send("Flush of site cache complete\n");
+        });
+
+        this.expressApp.get('/rebuild', async (req, res) => {
+            console.log(req.path);
+            const credentials = basicAuth(req);
+        
+            if (!credentials || credentials.name !== this.protectedEndpointUser || credentials.pass !== this.protectedEndpointPass) {
+                res.setHeader('WWW-Authenticate', 'Basic realm="SEAD"');
+                const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+                const userAgent = req.headers['user-agent'];
+                console.log(`Access denied for endpoint ${req.path}, from IP: ${ip}, Browser: ${userAgent}`);
+                return res.status(401).send("Access denied\n");
+            }
+            
+            await this.flushSiteCache();
+            await this.preloadAllSites();
+            
+            await this.flushTaxaCache();
+            await this.preloadAllTaxa();
+
+            await this.ecoCodes.flushEcocodeCache();
+            await this.ecoCodes.preloadAllSiteEcocodes();
+
+            await this.flushGraphCache();
+            res.send("Rebuild complete\n");
         });
 
         this.expressApp.get('/taxon/:taxonId', async (req, res) => {
@@ -247,7 +274,7 @@ class SeadJsonApiServer {
             if(!taxonId) {
                 console.log(req.path, "Bad request");
                 res.status(400);
-                res.send("Bad request");
+                res.send("Bad request\n");
                 return;
             }
 
@@ -828,10 +855,8 @@ class SeadJsonApiServer {
             biblio: [],
             units: [],
             dimensions: [],
-            coordinate_methods: [],
-            analysis_methods: [],
-            sampling_methods: [],
             dataset_contacts: [],
+            methods: [],
             prep_methods: [],
         };
 
@@ -942,19 +967,10 @@ class SeadJsonApiServer {
         return method;
     }
 
-    getCoordinateMethodByMethodId(site, method_id) {
-        for(let key in site.lookup_tables.coordinate_methods) {
-            if(site.lookup_tables.coordinate_methods[key].method_id == method_id) {
-                return site.lookup_tables.coordinate_methods[key];
-            }
-        }
-        return false;
-    }
-
-    getAnalysisMethodByMethodId(site, method_id) {
-        for(let key in site.lookup_tables.analysis_methods) {
-            if(site.lookup_tables.analysis_methods[key].method_id == method_id) {
-                return site.lookup_tables.analysis_methods[key];
+    getMethodByMethodId(site, method_id) {
+        for(let key in site.lookup_tables.methods) {
+            if(site.lookup_tables.methods[key].method_id == method_id) {
+                return site.lookup_tables.methods[key];
             }
         }
         return false;
@@ -1141,11 +1157,11 @@ class SeadJsonApiServer {
                     measurement: parseFloat(sgCoord.sample_group_position),
                 });
 
-                let coordMethod = this.getCoordinateMethodByMethodId(site, sgCoord.coordinate_method_id);
+                let coordMethod = this.getMethodByMethodId(site, sgCoord.coordinate_method_id);
                 if(!coordMethod) {
                     this.fetchMethodByMethodId(sgCoord.coordinate_method_id).then(method => {
                         if(method) {
-                            this.addCoordinateMethodToLocalLookup(site, method);
+                            this.addMethodToLocalLookup(site, method);
                             if(parseInt(method.unit_id)) {
                                 this.fetchUnit(method.unit_id).then(unit => {
                                     this.addUnitToLocalLookup(site, unit);
@@ -1359,7 +1375,7 @@ class SeadJsonApiServer {
                 method.unit = unit;
             }
 
-            this.addAnalysisMethodToLocalLookup(site, method);
+            this.addMethodToLocalLookup(site, method);
         }
         /*
         methodIds.forEach(methodId => {
@@ -1502,7 +1518,21 @@ class SeadJsonApiServer {
             this.releaseDbConnection(pgClient);
         });
 
-        site.lookup_tables.sampling_methods = methods;
+        //merge site.lookup_tables.methods with the new methods
+        if(typeof site.lookup_tables.methods == "undefined") {
+            site.lookup_tables.methods = [];
+        }
+        methods.forEach(method => {
+            let found = false;
+            for(let key in site.lookup_tables.methods) {
+                if(site.lookup_tables.methods[key].method_id == method.method_id) {
+                    found = true;
+                }
+            }
+            if(!found) {
+                site.lookup_tables.methods.push(method);
+            }
+        });
 
         return site;
     }
@@ -1704,10 +1734,10 @@ class SeadJsonApiServer {
                     }
 
                     //fetch method and add to lookup table
-                    let method = this.getAnalysisMethodByMethodId(site, sample.dimensions[key].method_id);
+                    let method = this.getMethodByMethodId(site, sample.dimensions[key].method_id);
                     if(!method) {
                         method = await this.fetchMethodByMethodId(sample.dimensions[key].method_id);
-                        this.addAnalysisMethodToLocalLookup(site, method);
+                        this.addMethodToLocalLookup(site, method);
                     }
 
                     let unit = this.getUnitByUnitId(site, dimension.unit_id);
@@ -1742,14 +1772,14 @@ class SeadJsonApiServer {
                     }
                 }
 
-                if(typeof site.lookup_tables.coordinate_methods == "undefined") {
-                    site.lookup_tables.coordinate_methods = [];
+                if(typeof site.lookup_tables.methods == "undefined") {
+                    site.lookup_tables.methods = [];
                 }
                 for(let key in sample.coordinates) {
-                    let method = this.getCoordinateMethodByMethodId(site, sample.coordinates[key].coordinate_method_id);
+                    let method = this.getMethodByMethodId(site, sample.coordinates[key].coordinate_method_id);
                     if(!method) {
                         method = await this.fetchMethodByMethodId(sample.coordinates[key].coordinate_method_id);
-                        site.lookup_tables.coordinate_methods.push(method);
+                        site.lookup_tables.methods.push(method);
                     }
                 }
             }
@@ -1798,7 +1828,7 @@ class SeadJsonApiServer {
 
     fetchMethod(site, method_id) {
         let method = null;
-        site.lookup_tables.analysis_methods.forEach(m => {
+        site.lookup_tables.methods.forEach(m => {
             if(m.method_id == method_id) {
                 method = m;
             }
@@ -1839,15 +1869,6 @@ class SeadJsonApiServer {
         return false;
     }
 
-    addCoordinateMethodToLocalLookup(site, method) {
-        if(typeof site.lookup_tables.coordinate_methods == "undefined") {
-            site.lookup_tables.coordinate_methods = [];
-        }
-        if(!this.getCoordinateMethodByMethodId(site, method.method_id)) {
-            site.lookup_tables.coordinate_methods.push(method);
-        }
-    }
-
     addDimensionToLocalLookup(site, dimension) {
         if(typeof site.lookup_tables.dimensions == "undefined") {
             site.lookup_tables.dimensions = [];
@@ -1866,12 +1887,12 @@ class SeadJsonApiServer {
         }
     }
 
-    addAnalysisMethodToLocalLookup(site, method) {
-        if(typeof site.lookup_tables.analysis_methods == "undefined") {
-            site.lookup_tables.analysis_methods = [];
+    addMethodToLocalLookup(site, method) {
+        if(typeof site.lookup_tables.methods == "undefined") {
+            site.lookup_tables.methods = [];
         }
-        if(this.getAnalysisMethodByMethodId(site, method.method_id) == false) {
-            site.lookup_tables.analysis_methods.push(method);
+        if(this.getMethodByMethodId(site, method.method_id) == false) {
+            site.lookup_tables.methods.push(method);
         }
     }
 

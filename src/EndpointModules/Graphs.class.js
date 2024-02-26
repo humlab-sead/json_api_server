@@ -226,7 +226,7 @@ class Graphs {
                 method_meta: {
                   $first: {
                     $filter: {
-                      input: "$lookup_tables.sampling_methods",
+                      input: "$lookup_tables.methods",
                       cond: { $eq: ["$$this.method_id", "$sample_groups.method_id"] }
                     }
                   }
@@ -309,7 +309,7 @@ class Graphs {
               method_meta: {
                 $first: {
                   $filter: {
-                    input: "$lookup_tables.analysis_methods",
+                    input: "$lookup_tables.methods",
                     cond: { $eq: ["$$this.method_id", "$datasets.method_id"] }
                   }
                 }
