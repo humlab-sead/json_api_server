@@ -82,6 +82,7 @@ class Taxa {
         //console.log("Fetching taxa for sites", siteIds);
 
         let cacheId = crypto.createHash('sha256');
+        siteIds.sort((a, b) => a - b);
         cacheId = cacheId.update('toptaxa'+JSON.stringify(siteIds)).digest('hex');
         let identifierObject = { cache_id: cacheId };
 

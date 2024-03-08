@@ -127,6 +127,7 @@ class Graphs {
 
     async fetchEcocodesSummaryForSites(siteIds) {
       let cacheId = crypto.createHash('sha256');
+      siteIds.sort((a, b) => a - b);
       cacheId = cacheId.update('ecocodes' + JSON.stringify(siteIds)).digest('hex');
       let identifierObject = { cache_id: cacheId };
       
@@ -185,6 +186,7 @@ class Graphs {
 
     async fetchFeatureTypesSummaryForSites(siteIds) {
       let cacheId = crypto.createHash('sha256');
+      siteIds.sort((a, b) => a - b);
       cacheId = cacheId.update('featuretypes' + JSON.stringify(siteIds)).digest('hex');
       let identifierObject = { cache_id: cacheId };
     
@@ -229,6 +231,7 @@ class Graphs {
 
     async fetchSampleMethodsSummaryForSites(siteIds) {
         let cacheId = crypto.createHash('sha256');
+        siteIds.sort((a, b) => a - b);
         cacheId = cacheId.update('samplemethods' + JSON.stringify(siteIds)).digest('hex');
         let identifierObject = { cache_id: cacheId };
       
@@ -278,6 +281,7 @@ class Graphs {
 
     async fetchTemporalDistributionSummaryForSites(siteIds) {
         let cacheId = crypto.createHash('sha256');
+        siteIds.sort((a, b) => a - b);
         cacheId = cacheId.update('analysismethods'+JSON.stringify(siteIds)).digest('hex');
         let identifierObject = { cache_id: cacheId };
 
@@ -317,6 +321,7 @@ class Graphs {
     //WARNING: this function does seem to work, but not all datasets are covered by domains (such as dating methods), so the result is less useful than I would like since it doesn't do a very good job of showing an overview of what data is available in a site
     async fetchDomainsOverviewForSites(siteIds) {
         let cacheId = crypto.createHash('sha256');
+        siteIds.sort((a, b) => a - b);
         cacheId = cacheId.update('domains'+JSON.stringify(siteIds)).digest('hex');
         let identifierObject = { cache_id: cacheId };
       
@@ -379,6 +384,7 @@ class Graphs {
 
     async fetchAnalysisMethodsSummaryForSites(siteIds) {
         let cacheId = crypto.createHash('sha256');
+        siteIds.sort((a, b) => a - b);
         cacheId = cacheId.update('analysismethods'+JSON.stringify(siteIds)).digest('hex');
         let identifierObject = { cache_id: cacheId };
       

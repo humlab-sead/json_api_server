@@ -22,7 +22,7 @@ const res = require('express/lib/response');
 const basicAuth = require('basic-auth');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.34.2";
+const appVersion = "1.34.3";
 
 class SeadJsonApiServer {
     constructor() {
@@ -1982,6 +1982,7 @@ class SeadJsonApiServer {
 
     async getObjectFromCache(collection, identifierObject, findMany = false) {
         if(this.allCachingDisabled) {
+            console.warn("Skipping cache lookup, all caching is disabled");
             return false;
         }
         let foundObject = null;
@@ -2014,9 +2015,10 @@ class SeadJsonApiServer {
         if(this.allCachingDisabled) {
             return false;
         }
+
         saveObject.api_source = appName+"-"+appVersion;
         await this.mongo.collection(collection).deleteMany(identifierObject);
-        this.mongo.collection(collection).insertOne(saveObject);
+        await this.mongo.collection(collection).insertOne(saveObject);
     }
 
     async getSiteFromCache(siteId) {

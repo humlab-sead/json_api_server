@@ -429,6 +429,7 @@ class DendrochronologyModule {
         let sites = [];
 
         let cacheId = crypto.createHash('sha256');
+        siteIds.sort((a, b) => a - b);
         cacheId = cacheId.update('getFeatureTypesForSites'+JSON.stringify(siteIds)).digest('hex');
         let identifierObject = { cache_id: cacheId };
       
@@ -476,6 +477,7 @@ class DendrochronologyModule {
         }
 
         let cacheId = crypto.createHash('sha256');
+        siteIds.sort((a, b) => a - b);
         cacheId = cacheId.update('getTreeSpeciesForSites'+JSON.stringify(siteIds)).digest('hex');
         let identifierObject = { cache_id: cacheId };
       
@@ -617,12 +619,13 @@ class DendrochronologyModule {
         let sites = [];
 
         let cacheId = crypto.createHash('sha256');
+        siteIds.sort((a, b) => a - b);
         cacheId = cacheId.update('datinghistogramforsites'+JSON.stringify(siteIds)).digest('hex');
         let identifierObject = { cache_id: cacheId };
       
         let cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
         if (cachedData !== false) {
-          return cachedData.data;
+            return cachedData.data;
         }
 
         if(siteIds.length == 0) {
