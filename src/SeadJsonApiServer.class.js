@@ -1,5 +1,7 @@
 const fs = require('fs');
 const express = require('express');
+const WebSocket = require('ws');
+const http = require('http');
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const { Pool } = require('pg');
@@ -20,7 +22,7 @@ const res = require('express/lib/response');
 const basicAuth = require('basic-auth');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.33.0";
+const appVersion = "1.34.0";
 
 class SeadJsonApiServer {
     constructor() {
@@ -29,6 +31,7 @@ class SeadJsonApiServer {
         this.cacheStorageMethod = typeof(process.env.CACHE_STORAGE_METHOD) != "undefined" ? process.env.CACHE_STORAGE_METHOD : "file";
         this.useSiteCaching = typeof(process.env.USE_SITE_CACHE) != "undefined" ? process.env.USE_SITE_CACHE == "true" : true;
         this.useTaxaCaching = typeof(process.env.USE_TAXA_CACHE) != "undefined" ? process.env.USE_TAXA_CACHE == "true" : true;
+        this.useGraphCaching = typeof(process.env.USE_GRAPH_CACHE) != "undefined" ? process.env.USE_GRAPH_CACHE == "true" : true;
         this.useTaxaSummaryCacheing = typeof(process.env.USE_TAXA_SUMMARY_CACHE) != "undefined" ? process.env.USE_TAXA_SUMMARY_CACHE == "true" : true;
         this.useEcoCodeCaching = typeof(process.env.USE_ECOCODE_CACHE) != "undefined" ? process.env.USE_ECOCODE_CACHE == "true" : true;
         this.useStaticDbConnection = typeof(process.env.USE_SINGLE_PERSISTENT_DBCON) != "undefined" ? process.env.USE_SINGLE_PERSISTENT_DBCON == "true" : false;
@@ -47,6 +50,7 @@ class SeadJsonApiServer {
         this.expressApp = express();
         this.expressApp.use(cors());
         this.expressApp.use(bodyParser.json());
+
         this.setupDatabase().then(() => {
             this.setupEndpoints();
 
@@ -858,6 +862,7 @@ class SeadJsonApiServer {
             dataset_contacts: [],
             methods: [],
             prep_methods: [],
+            domains: [],
         };
 
         if(verbose) console.timeEnd("Fetched basic site data for site "+siteId);
@@ -898,6 +903,10 @@ class SeadJsonApiServer {
         if(verbose) console.time("Fetched other records for site "+siteId);
         await this.fetchSiteOtherRecords(site);
         if(verbose) console.timeEnd("Fetched other records for site "+siteId);
+
+        if(verbose) console.time("Fetched domains for site "+siteId);
+        await this.fetchSiteDomains(site);
+        if(verbose) console.timeEnd("Fetched domains for site "+siteId);
 
         /*
         if(verbose) console.time("Fetched analysis entities ages for site "+siteId);
@@ -1073,6 +1082,51 @@ class SeadJsonApiServer {
 
         this.releaseDbConnection(pgClient);
         
+        return site;
+    }
+
+    async fetchSiteDomains(site) {
+        let pgClient = await this.getDbConnection();
+        if(!pgClient) {
+            return false;
+        }
+
+        //find out which "facet" a domain belongs to
+        let sql = `SELECT facet.facet_id, clause, facet_code, display_title FROM facet.facet_clause
+        JOIN facet.facet ON facet.facet_id=facet_clause.facet_id
+        WHERE facet_group_id=999`;
+        let facetClauses = await pgClient.query(sql);
+        //each facet clause is a string looking like this: "tbl_datasets.method_id in (3, 6)"
+        //we need to parse this to find out which method_ids it contains
+        let facetClausesParsed = [];
+        facetClauses.rows.forEach(facetClause => {
+            let methodIds = facetClause.clause.match(/\d+/g);
+            facetClausesParsed.push({
+                facet_id: facetClause.facet_id,
+                facet_code: facetClause.facet_code,
+                title: facetClause.display_title,
+                method_ids: methodIds
+            });
+        });
+
+        facetClausesParsed.forEach(facetClause => {
+            for(let key in facetClause.method_ids) {
+                facetClause.method_ids[key] = parseInt(facetClause.method_ids[key]);
+            }
+        });
+
+        facetClausesParsed.forEach(facetClause => {
+            if(facetClause.method_ids != null && facetClause.method_ids.length > 0) {
+                site.lookup_tables.domains.push({
+                    facet_id: facetClause.facet_id,
+                    facet_code: facetClause.facet_code,
+                    title: facetClause.title,
+                    method_ids: facetClause.method_ids
+                });
+            }
+        });
+
+        this.releaseDbConnection(pgClient);
         return site;
     }
 
@@ -1434,6 +1488,25 @@ class SeadJsonApiServer {
                 });
 
                 datasets.push(dataset);
+
+                if(dataset.project_id) {
+                    let sql = `SELECT tbl_projects.project_id,
+                    tbl_projects.project_type_id,
+                    tbl_projects.project_stage_id,
+                    tbl_projects.project_name,
+                    tbl_projects.project_abbrev_name,
+                    tbl_projects.description,
+                    tbl_project_types.project_type_name,
+                    tbl_project_types.description AS project_type_description
+                    FROM
+                    tbl_projects
+                    JOIN tbl_project_types ON tbl_project_types.project_type_id=tbl_projects.project_type_id
+                    WHERE project_id=$1`;
+
+                    let projectRes = await pgClient.query(sql, [dataset.project_id]);
+                    dataset.project = projectRes.rows[0];
+                }
+                
                 if(dataset.biblio_id) {
                     let dsBib = await pgClient.query("SELECT * FROM tbl_biblio WHERE biblio_id=$1", [dataset.biblio_id]);
                     
@@ -2110,18 +2183,69 @@ class SeadJsonApiServer {
     }
 
     run() {
+        this.server = this.startWsServer();
+        this.server.listen(process.env.API_PORT, () =>
+            console.log("Webserver started, listening at port", process.env.API_PORT),
+         );
+        /*
         this.server = this.expressApp.listen(process.env.API_PORT, () =>
             console.log("Webserver started, listening at port", process.env.API_PORT),
         );
+        */
+    }
+
+    startWsServer() {
+        this.httpWsServer = http.createServer(this.expressApp);
+
+        this.wss = new WebSocket.Server({ noServer: true });
+
+        this.wss.on('connection', (ws, request) => {
+            ws.on('message', (message) => {
+                let incMsg = JSON.parse(message);
+                if(incMsg.type == "analysis_methods") {
+                    this.graphs.fetchAnalysisMethodsSummaryForSites([incMsg.siteId]).then((result) => {
+                        if(incMsg.request_id) {
+                            result.request_id = incMsg.request_id;
+                        }
+                        ws.send(JSON.stringify(result));
+                    })
+                }
+            });
+        });
+
+        this.httpWsServer.on('upgrade', (request, socket, head) => {
+            this.wss.handleUpgrade(request, socket, head, (ws) => {
+                this.wss.emit('connection', ws, request);
+            });
+        });
+
+        //this.httpWsServer.listen(process.env.API_PORT);
+
+        return this.httpWsServer;
     }
 
     shutdown() {
         console.log("Shutdown called");
         this.pgPool.end();
-        this.server.close(() => {
-            console.log('Server shutdown');
+
+        let p1 = new Promise((resolve, reject) => {
+            this.server.close(() => {
+                console.log('Server shutdown');
+                resolve();
+            });
+        });
+
+        let p2 = new Promise((resolve, reject) => {
+            this.httpWsServer.close(() => {
+                console.log('Websocket server shutdown');
+                resolve();
+            });
+        });
+        
+        Promise.all([p1, p2]).then(() => {
             process.exit(0);
         });
+        
     }
 }
 
