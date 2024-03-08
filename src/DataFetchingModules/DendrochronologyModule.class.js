@@ -186,6 +186,8 @@ class DendrochronologyModule {
         dd.age_younger AS younger,
         dd.dating_uncertainty_id,
         dd.season_id,
+        tbl_seasons.season_type_id,
+        tbl_seasons.season_name,
         ddn.note AS dating_note,
         dl.dendro_lookup_id,
         dl.description AS dendro_lookup_description,
@@ -229,6 +231,7 @@ class DendrochronologyModule {
         data = await pgClient.query(sql, [siteId]);
         let sampleFeatures = data.rows;
         */
+
 
         this.app.releaseDbConnection(pgClient);
 
@@ -323,6 +326,8 @@ class DendrochronologyModule {
         dd.age_younger AS younger,
         dd.dating_uncertainty_id,
         dd.season_id,
+        tbl_seasons.season_type_id,
+        tbl_seasons.season_name,
         ddn.note AS dating_note,
         dl.dendro_lookup_id,
         dl.description AS dendro_lookup_description,
