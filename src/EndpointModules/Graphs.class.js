@@ -388,9 +388,15 @@ class Graphs {
             return cachedData;
           }
         }
-      
+        
         let pipeline = [
           { $match: { site_id: { $in: siteIds } } },
+          // Ensure lookup_tables.methods is accessible after unwinding
+          {
+            $addFields: {
+              "datasets.lookup_methods": "$lookup_tables.methods"
+            }
+          },
           { $unwind: "$datasets" },
           {
             $group: {
@@ -399,7 +405,7 @@ class Graphs {
               method_meta: {
                 $first: {
                   $filter: {
-                    input: "$lookup_tables.methods",
+                    input: "$datasets.lookup_methods", // Adjusted to the added field
                     cond: { $eq: ["$$this.method_id", "$datasets.method_id"] }
                   }
                 }
