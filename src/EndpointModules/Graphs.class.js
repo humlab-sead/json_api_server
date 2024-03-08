@@ -372,6 +372,11 @@ class Graphs {
         return resultObject;
     }
 
+    async flushGraphCache() {
+      console.log("Flushing graph cache");
+      await this.app.mongo.collection('graph_cache').deleteMany({});
+    }
+
     async fetchAnalysisMethodsSummaryForSites(siteIds) {
         let cacheId = crypto.createHash('sha256');
         cacheId = cacheId.update('analysismethods'+JSON.stringify(siteIds)).digest('hex');

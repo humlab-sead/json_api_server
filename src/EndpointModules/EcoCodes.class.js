@@ -70,7 +70,12 @@ class EcoCodes {
         }
     }
 
-    async preloadAllSiteEcocodes() {
+    async preloadAllSiteEcocodes(flushCache = false) {
+
+        if(flushCache) {
+            await this.flushEcocodeCache();
+        }
+
         let pgClient = await this.app.getDbConnection();
         if(!pgClient) {
             return false;

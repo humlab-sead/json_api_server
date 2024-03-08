@@ -22,7 +22,7 @@ const res = require('express/lib/response');
 const basicAuth = require('basic-auth');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.34.0";
+const appVersion = "1.34.1";
 
 class SeadJsonApiServer {
     constructor() {
@@ -232,12 +232,14 @@ class SeadJsonApiServer {
             res.send("Flushed graph cache\n");
         });
 
-        this.expressApp.get('/preload/all', async (req, res) => {
+        this.expressApp.get('/preload/all/:flush?', async (req, res) => {
+            const flush = req.params.flush == "true" ? true : false;
             console.log(req.path);
             console.time("Preload of all data complete");
-            await this.preloadAllSites(); // collection: sites
-            await this.preloadAllTaxa(); // collection: taxa
-            await this.ecoCodes.preloadAllSiteEcocodes(); 
+            await this.preloadAllSites(flush); // collection: sites
+            await this.preloadAllTaxa(flush); // collection: taxa
+            await this.ecoCodes.preloadAllSiteEcocodes(flush); 
+            await this.graphs.flushGraphCache();
             console.timeEnd("Preload of all data complete");
             res.send("Preload of all data complete\n");
         });
@@ -739,7 +741,12 @@ class SeadJsonApiServer {
         }
     }
 
-    async preloadAllTaxa() {
+    async preloadAllTaxa(flushCache = false) {
+
+        if(flushCache) {
+            await this.flushTaxaCache();
+        }
+
         let pgClient = await this.getDbConnection();
         if(!pgClient) {
             return false;
@@ -784,7 +791,11 @@ class SeadJsonApiServer {
         console.timeEnd("Preload of taxa complete");
     }
 
-    async preloadAllSites() {
+    async preloadAllSites(flushCache = false) {
+        if(flushCache) {
+            await this.flushSiteCache();
+        }
+
         let pgClient = await this.getDbConnection();
         if(!pgClient) {
             return false;
