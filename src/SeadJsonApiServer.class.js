@@ -22,7 +22,7 @@ const res = require('express/lib/response');
 const basicAuth = require('basic-auth');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.34.3";
+const appVersion = "1.34.4";
 
 class SeadJsonApiServer {
     constructor() {
