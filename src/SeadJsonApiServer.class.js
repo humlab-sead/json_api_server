@@ -22,7 +22,7 @@ const res = require('express/lib/response');
 const basicAuth = require('basic-auth');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.35.0";
+const appVersion = "1.35.1";
 
 class SeadJsonApiServer {
     constructor() {
@@ -1660,6 +1660,16 @@ class SeadJsonApiServer {
                     }
                 }
             }
+        }
+
+        if(analysisEntityIds.length == 0) {
+            site.analysis_entity_ages = [];
+            site.age_summary = {
+                older: null,
+                younger: null
+            };
+            this.releaseDbConnection(pgClient);
+            return;
         }
 
         let analysisEntityIdsAsSqlArray = "("+analysisEntityIds.join(",")+")";
