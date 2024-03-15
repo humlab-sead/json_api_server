@@ -22,7 +22,7 @@ const res = require('express/lib/response');
 const basicAuth = require('basic-auth');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.34.4";
+const appVersion = "1.35.0";
 
 class SeadJsonApiServer {
     constructor() {
@@ -918,12 +918,10 @@ class SeadJsonApiServer {
         if(verbose) console.time("Fetched domains for site "+siteId);
         await this.fetchSiteDomains(site);
         if(verbose) console.timeEnd("Fetched domains for site "+siteId);
-
-        /*
+        
         if(verbose) console.time("Fetched analysis entities ages for site "+siteId);
         await this.fetchAnalysisEntitiesAges(site);
         if(verbose) console.timeEnd("Fetched analysis entities ages for site "+siteId);
-        */
 
         if(verbose) console.time("Fetched analysis methods for site "+siteId);
         await this.fetchAnalysisMethods(site);
@@ -1650,40 +1648,39 @@ class SeadJsonApiServer {
             return false;
         }
 
-        let sql = `SELECT * FROM tbl_analysis_entity_ages WHERE analysis_entity_id=$1`;
-        let oldestAge = null;
-        let youngestAge = null;
+        let analysisEntityIds = [];
         for(let sgKey in site.sample_groups) {
             let sampleGroup = site.sample_groups[sgKey];
             for(let psKey in sampleGroup.physical_samples) {
                 let sample = sampleGroup.physical_samples[psKey];
                 for(let aeKey in sample.analysis_entities) {
                     let analysisEntity = sample.analysis_entities[aeKey];
-                    let result = await pgClient.query(sql, [analysisEntity.analysis_entity_id]);
-                    analysisEntity.ages = [];
-                    result.rows.forEach(age => {
-                        let older = parseInt(age.age_older);
-                        let younger = parseInt(age.age_younger);
-                        if(older || younger) {
-                            //dates are all (I assume) BCE
-                            if(older && older > oldestAge) {
-                                oldestAge = older;
-                            }
-                            if(younger && younger < youngestAge) {
-                                youngestAge = younger;
-                            }
-                            analysisEntity.ages.push({
-                                older: age.age_older,
-                                younger: age.age_younger,
-                                dating_specifier: age.dating_specifier
-                            });
-                        }
-                    });
+                    if(analysisEntityIds.indexOf(analysisEntity.analysis_entity_id) === -1) {
+                        analysisEntityIds.push(analysisEntity.analysis_entity_id);
+                    }
                 }
             }
         }
 
+        let analysisEntityIdsAsSqlArray = "("+analysisEntityIds.join(",")+")";
+
+        let sql = "SELECT * FROM tbl_analysis_entity_ages WHERE analysis_entity_id IN "+analysisEntityIdsAsSqlArray;
+        let result = await pgClient.query(sql);
+        site.analysis_entity_ages = result.rows;
+
         //Create an age summary for each site that is an aggregation of the AE ages
+        let oldestAge = null;
+        let youngestAge = null;
+        for(let key in site.analysis_entity_ages) {
+            let age = site.analysis_entity_ages[key];
+            if(age.age_older && (age.age_older > oldestAge || oldestAge == null)) {
+                oldestAge = parseInt(age.age_older);
+            }
+            if(age.age_younger && (age.age_younger < youngestAge || youngestAge == null)) {
+                youngestAge = parseInt(age.age_younger);
+            }
+        }
+
         site.age_summary = {
             older: oldestAge,
             younger: youngestAge
