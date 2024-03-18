@@ -67,6 +67,10 @@ class IsotopeModule {
                         if(isoItem.measurement_isotope_type_id) {
                             await this.fetchIsotopeTypes(site, isoItem.measurement_isotope_type_id);
                         }
+
+                        if(isoItem.measurement_standard_id) {
+                            await this.fetchIsotopeStandard(site, isoItem.measurement_standard_id);
+                        }
                         
                         if(isoItem.unit_id) {
                             let unit = this.app.getUnitByUnitId(site, isoItem.unit_id);
@@ -85,6 +89,45 @@ class IsotopeModule {
 
         await this.app.releaseDbConnection(pgClient);
         return site;
+    }
+
+    async fetchIsotopeStandard(site, isotope_standard_id) {
+        if(typeof site.lookup_tables.isotope_standards == "undefined") {
+            site.lookup_tables.isotope_standards = [];
+        }
+
+        let found = false;
+        for(let i=0; i<site.lookup_tables.isotope_standards.length; i++) {
+            if(site.lookup_tables.isotope_standards[i].isotope_standard_id == isotope_standard_id) {
+                found = true;
+                break;
+            }
+        }
+        if(found) {
+            //if this is already in the lookup table, don't fetch it again
+            return;
+        }
+
+        let pgClient = await this.app.getDbConnection();
+        if(!pgClient) {
+            return false;
+        }
+
+        let isotopeStandard = null;
+
+        let sql = `SELECT *
+        FROM tbl_isotope_standards
+        WHERE isotope_standard_id=$1
+        `;
+        let res = await pgClient.query(sql, [isotope_standard_id]);
+        await this.app.releaseDbConnection(pgClient);
+        if(res.rows.length > 0) {
+            isotopeStandard = res.rows[0];
+        }
+        
+        site.lookup_tables.isotope_standards.push(isotopeStandard);
+
+        return isotopeStandard;
     }
 
     async fetchIsotopeTypes(site, isotope_type_id) {
