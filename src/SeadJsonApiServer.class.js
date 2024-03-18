@@ -13,6 +13,7 @@ const AbundanceModule = require('./DataFetchingModules/AbundanceModule.class');
 const MeasuredValuesModule = require('./DataFetchingModules/MeasuredValuesModule.class');
 const CeramicsModule = require('./DataFetchingModules/CeramicsModule.class');
 const DatingModule = require('./DataFetchingModules/DatingModule.class');
+const IsotopeModule = require('./DataFetchingModules/IsotopeModule.class');
 
 const EcoCodes = require("./EndpointModules/EcoCodes.class");
 const Chronology = require("./EndpointModules/Chronology.class");
@@ -22,7 +23,7 @@ const res = require('express/lib/response');
 const basicAuth = require('basic-auth');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.35.1";
+const appVersion = "1.36.0";
 
 class SeadJsonApiServer {
     constructor() {
@@ -61,6 +62,7 @@ class SeadJsonApiServer {
             this.dataFetchingModules.push(new DendrochronologyModule(this));
             this.dataFetchingModules.push(new MeasuredValuesModule(this));
             this.dataFetchingModules.push(new CeramicsModule(this));
+            this.dataFetchingModules.push(new IsotopeModule(this));
             const datingModule = new DatingModule(this);
             this.dataFetchingModules.push(datingModule);
 
