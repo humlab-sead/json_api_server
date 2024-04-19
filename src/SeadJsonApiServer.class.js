@@ -23,7 +23,7 @@ const res = require('express/lib/response');
 const basicAuth = require('basic-auth');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.36.1";
+const appVersion = "1.36.2";
 
 class SeadJsonApiServer {
     constructor() {
@@ -1424,10 +1424,6 @@ class SeadJsonApiServer {
             if(methodId == 37) {
                 //Phosphate degrees - db says: "The amount of phosphate is specified as mg P2O5/100g dry soil.""
                 method.unit_id = 17; //let's say it's just mg for now, which is true enough
-            }
-            if(methodId == 33) {
-                //MS - assume the unit is milligrams
-                method.unit_id = 17;
             }
             if(methodId == 32) {
                 //LOI - assume the unit is a percentage
