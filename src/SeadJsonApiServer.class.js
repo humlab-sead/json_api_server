@@ -23,7 +23,7 @@ const res = require('express/lib/response');
 const basicAuth = require('basic-auth');
 
 const appName = "sead-json-api-server";
-const appVersion = "1.36.2";
+const appVersion = "1.36.3";
 
 class SeadJsonApiServer {
     constructor() {
@@ -133,8 +133,8 @@ class SeadJsonApiServer {
             res.send(JSON.stringify(siteIds, null, 2));
         });
 
-        this.expressApp.get('/site/:siteId', async (req, res) => {
-            let site = await this.getSite(req.params.siteId, true);
+        this.expressApp.get('/site/:siteId/:noCache?', async (req, res) => {
+            let site = await this.getSite(req.params.siteId, true, true, req.params.noCache);
             res.header("Content-type", "application/json");
             res.send(JSON.stringify(site, null, 2));
         });
@@ -839,10 +839,10 @@ class SeadJsonApiServer {
         console.timeEnd("Preload of sites complete");
     }
 
-    async getSite(siteId, verbose = true, fetchMethodSpecificData = true) {
+    async getSite(siteId, verbose = true, fetchMethodSpecificData = true, noCache = false) {
         if(verbose) console.log("Request for site", siteId);
         let site = null;
-        if(this.useSiteCaching) {
+        if(this.useSiteCaching && !noCache) {
             site = await this.getSiteFromCache(siteId);
             if(site) {
                 return site;
@@ -1869,8 +1869,18 @@ class SeadJsonApiServer {
                     if(!method) {
                         method = await this.fetchMethodByMethodId(sample.coordinates[key].coordinate_method_id);
                         site.lookup_tables.methods.push(method);
+
+                        let methodUnit = this.getUnitByUnitId(site, method.unit_id);
+                        if(!methodUnit) {
+                            this.fetchUnit(method.unit_id).then(unit => {
+                                if(unit) {
+                                    this.addUnitToLocalLookup(site, unit);
+                                }
+                            });
+                        }
                     }
                 }
+                
             }
         }
         
