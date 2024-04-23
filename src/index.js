@@ -1,6 +1,8 @@
 
-require('dotenv/config');
-const SeadJsonApiServer = require('./SeadJsonApiServer.class')
+//require('dotenv/config');
+import 'dotenv/config';
+//const SeadJsonApiServer = require('./SeadJsonApiServer.class')
+import SeadJsonApiServer from './SeadJsonApiServer.class.js';
 
 if(typeof process.env.POSTGRES_HOST == "undefined") {
     throw new Error("Didn't find any .env file! Please copy .env-example to .env and fill it out.");

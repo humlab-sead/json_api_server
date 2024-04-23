@@ -1,4 +1,4 @@
-const crypto = require('crypto');
+import crypto from 'crypto';
 
 class Taxa {
     constructor(app) {
@@ -156,4 +156,4 @@ class Taxa {
     }
 }
 
-module.exports = Taxa;
+export default Taxa;

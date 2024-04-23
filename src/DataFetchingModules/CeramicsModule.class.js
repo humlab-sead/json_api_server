@@ -59,4 +59,4 @@ class CeramicsModule {
     }
 }
 
-module.exports = CeramicsModule;
+export default CeramicsModule;

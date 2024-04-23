@@ -395,4 +395,4 @@ class AbundanceModule {
 
 }
 
-module.exports = AbundanceModule;
+export default AbundanceModule;

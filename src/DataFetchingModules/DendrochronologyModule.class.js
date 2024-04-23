@@ -1,6 +1,7 @@
-const fs = require('fs');
-const crypto = require('crypto');
-const DendroLib = require('../Lib/DendroLib.class');
+import fs from 'fs';
+import crypto from 'crypto';
+import DendroLib from '../Lib/sead_common/DendroLib.class.js';
+
 
 class DendrochronologyModule {
     constructor(app) {
@@ -41,6 +42,14 @@ class DendrochronologyModule {
 
         this.expressApp.post('/dendro/treespecies', async (req, res) => {
             let data = await this.getTreeSpeciesForSites(req.body.sites);
+            res.send({
+                requestId: req.body.requestId,
+                categories: data
+            });
+        });
+
+        this.expressApp.post('/dendro/dynamicchart', async (req, res) => {
+            let data = await this.getDendroVariableForSites(req.body.sites, req.body.variable);
             res.send({
                 requestId: req.body.requestId,
                 categories: data
@@ -458,6 +467,75 @@ class DendrochronologyModule {
         return featureTypeCategories;
     }
 
+
+    async getDendroVariableForSites(siteIds, dendroVariable = "Tree species") {
+        if(!siteIds) {
+            siteIds = [];
+        }
+
+        let cacheId = crypto.createHash('sha256');
+        siteIds.sort((a, b) => a - b);
+        cacheId = cacheId.update('getTreeSpeciesForSites'+JSON.stringify(siteIds)).digest('hex');
+        let identifierObject = { cache_id: cacheId };
+      
+        let cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
+        if (cachedData !== false) {
+          return cachedData.data;
+        }
+
+        if(siteIds.length == 0) {
+            let pgClient = await this.app.getDbConnection();
+            if(!pgClient) {
+                return false;
+            }
+
+            let sql = `SELECT site_id FROM tbl_sites;`;
+            //let data = await pgClient.query('SELECT * FROM postgrest_api.qse_dendro_measurements');
+            let data = await pgClient.query(sql);
+            data.rows.forEach(row => {
+                siteIds.push(row.site_id);
+            });
+            this.app.releaseDbConnection(pgClient);
+        }
+        
+        let data = this.app.mongo.collection("sites").aggregate([
+            // Match documents that contain the specified site IDs
+            {
+                $match: {
+                    'data_groups.datasets.label': dendroVariable,
+                    'site_id': { $in: siteIds },
+                }
+            },
+            // Unwind the arrays
+            { $unwind: '$data_groups' },
+            { $unwind: '$data_groups.datasets' },
+            // Filter only the selected label
+            {
+              $match: {
+                'data_groups.datasets.label': dendroVariable
+              }
+            },
+            // Group by selected variable and count occurrences
+            {
+              $group: {
+                _id: '$data_groups.datasets.value',
+                count: { $sum: 1 }
+              }
+            },
+            // Project to reshape the output
+            {
+              $project: {
+                _id: 0,
+                name: '$_id',
+                count: 1
+              }
+            }
+          ]);
+
+          let treeSpeciesCategories = await data.toArray();          
+          return treeSpeciesCategories;
+    }
+
     async getTreeSpeciesForSites(siteIds) {
         if(!siteIds) {
             siteIds = [];
@@ -764,4 +842,4 @@ class DendrochronologyModule {
 
 }
 
-module.exports = DendrochronologyModule;
+export default DendrochronologyModule;

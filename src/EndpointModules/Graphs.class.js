@@ -1,4 +1,4 @@
-const crypto = require('crypto');
+import crypto from 'crypto';
 
 class Graphs {
     constructor(app) {
@@ -63,6 +63,60 @@ class Graphs {
           });
 
           let data = await this.fetchFeatureTypesSummaryForSites(siteIds);
+          res.header("Content-type", "application/json");
+          res.end(JSON.stringify(data, null, 2));
+        });
+
+        this.app.expressApp.post('/graphs/dynamic_chart', async (req, res) => {
+          let siteIds = req.body.siteIds;
+          req.body.x;
+          req.body.y;
+          req.body.variable;
+          req.body.groupBy;
+
+          if(typeof siteIds != "object") {
+              res.status(400);
+              res.send("Bad input - should be an array of site IDs");
+              return;
+          }
+          
+          siteIds.forEach(siteId => {
+              if(!parseInt(siteId)) {
+                  res.status(400);
+                  res.send("Bad input - should be an array of site IDs");
+                  return;
+              }
+          });
+
+          let data = await this.fetchDynamicChart(req.body);
+          res.header("Content-type", "application/json");
+          res.end(JSON.stringify(data, null, 2));
+        });
+        
+        this.app.expressApp.post('/graphs/grouped_data_by_variable', async (req, res) => {
+          let siteIds = req.body.siteIds;
+          let variableName = req.body.variableName;
+          if(typeof siteIds != "object") {
+              res.status(400);
+              res.send("Bad input - should be an array of site IDs");
+              return;
+          }
+          
+          siteIds.forEach(siteId => {
+              if(!parseInt(siteId)) {
+                  res.status(400);
+                  res.send("Bad input - should be an array of site IDs");
+                  return;
+              }
+          });
+
+          if(!variableName) {
+            res.status(400);
+            res.send("Bad input - should include a variable name");
+            return;
+          }
+
+          let data = await this.fetchGroupedDataByVariable(siteIds, variableName);
           res.header("Content-type", "application/json");
           res.end(JSON.stringify(data, null, 2));
       });
@@ -181,6 +235,179 @@ class Graphs {
     
       this.app.saveObjectToCache("graph_cache", identifierObject, resultObject);
     
+      return resultObject;
+    }
+
+    async fetchDynamicChart(requestData) {
+        if(requestData.chartType === "pie") {
+          return await this.fetchPieChart(requestData.siteIds, requestData.variable, requestData.groupBy);
+        }
+        if(requestData.chartType === "bar") {
+          return await this.fetchBarChart(requestData.siteIds, requestData.x, requestData.y);
+        }
+    }
+
+    async fetchPieChart(siteIds, variable, groupBy) {
+      /* variable possibilities:
+      analysis_methods
+      dataset_count
+      dataset_type
+
+      groupBy possibilities:
+      dataset_count
+      time
+      */
+
+      const varDefs = [];
+      varDefs.push({
+        varName: "analysis_methods",
+        variablePath: "$datasets.method_id",
+        lookupPath: "$lookup_tables.methods"
+      });
+
+      const groupByDefs = [];
+      groupByDefs.push({
+        varName: "dataset_count",
+        groupByPath: "$datasets.method_id"
+      });
+
+
+      let selectedVariable = varDefs.find(v => v.varName === variable);
+      let selectedGroupBy = groupByDefs.find(v => v.varName === groupBy);
+
+      //construct a mongodb pipeline
+      let pipeline = [
+        { $match: { site_id: { $in: siteIds } } },
+        { $unwind: "$datasets" },
+        { $unwind: selectedVariable.lookupPath },
+        {
+          $group: {
+            _id: selectedVariable.variablePath,
+            count: { $sum: 1 }
+          }
+        },
+        {
+          $project: {
+            _id: 0,
+            value: "$_id",
+            count: 1
+          }
+        }
+      ];
+    }
+
+    async fetchBarChart(siteIds, x, y) {
+    
+    }
+
+    /**
+     * fetchGroupedDataByVariable
+     * @param {*} siteIds array of siteIds
+     * @param {*} variableName a predefined variable name, e.g. "sampleFeatures"
+     * @returns 
+     */
+    async fetchGroupedDataByVariable(siteIds, variableName) {
+      let cacheId = crypto.createHash('sha256');
+      siteIds.sort((a, b) => a - b);
+      cacheId = cacheId.update(variableName + JSON.stringify(siteIds)).digest('hex');
+      let identifierObject = { cache_id: cacheId };
+      let cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
+      if (cachedData !== false && this.app.useGraphCaching) {
+        return cachedData;
+      }
+
+      let searchableVariables = [];
+      searchableVariables.push({
+        varName: "sampleFeatures",
+        variablePath: "$sample_groups.physical_samples.features",
+        groupByPath: "$sample_groups.physical_samples.features.feature_type_id",
+        key: "feature_type_id"
+      });
+      searchableVariables.push({
+        varName: "sampleMethods",
+        variablePath: "$sample_groups.method_id",
+        groupByPath: "$sample_groups.method_id",
+        key: "method_id"
+      });
+
+
+      //varaiable definition for getting an overview of the existance of wayney edges in the dendro data
+      /*
+      searchableVariables.push({
+        varName: "dendroWayneyEdges",
+        variablePath: "$datagroups.datasets.id", // == 128
+        groupByPath: "$datagroups.datasets.value",
+        key: "dating_method_id"
+      });
+      */
+      /*
+      let dendroWayneyEdgesPipeline = {
+        $match: { site_id: { $in: siteIds } },
+        $unwind: "$datagroups",
+        $unwind: "$datagroups.datasets",
+        $match: { "datagroups.datasets.id": 128 },
+        $group: {
+          _id: "$datagroups.datasets.value",
+          count: { $sum: 1 }
+        },
+        $project: {
+          _id: 0,
+          value: "$_id",
+          count: 1
+        }
+      };
+      */
+
+
+      let variablePath = searchableVariables.find(v => v.varName === variableName).variablePath;
+      let groupByPath = searchableVariables.find(v => v.varName === variableName).groupByPath;
+      let key = searchableVariables.find(v => v.varName === variableName).key;
+
+     // Initialize the pipeline with the match stage
+      let pipeline = [{ $match: { site_id: { $in: siteIds } } }];
+
+      // Dynamically add $unwind stages for the specified path
+      let pathParts = variablePath.slice(1).split('.'); // Remove the leading '$'
+      let unwindPath = '';
+
+      //create unwind stages
+      pathParts.forEach((part, index) => {
+        // Reconstruct the unwind path incrementally
+        unwindPath += (index === 0 ? '' : '.') + part;
+        pipeline.push({ $unwind: `$${unwindPath}` });
+      });
+
+      //create mach stages
+
+      // Append group and project stages to the pipeline
+      pipeline.push(
+        { $group: {
+          _id: groupByPath,
+          count: { $sum: 1 }
+        } },
+        { $project: {
+          _id: 0,
+          value: "$_id",
+          count: 1
+        } }
+      );
+
+      console.log(pipeline);
+      
+      let data = await this.app.mongo.collection('sites').aggregate(pipeline).toArray();
+      let resultObject = {
+        cache_id: cacheId,
+        data: data,
+        meta: {
+          variableName: variableName,
+          key: key
+        }
+      };
+
+      if(this.app.useGraphCaching) {
+        this.app.saveObjectToCache("graph_cache", identifierObject, resultObject);
+      }
+      console.log(resultObject);
       return resultObject;
     }
 
@@ -449,4 +676,4 @@ class Graphs {
     
 }
 
-module.exports = Graphs;
+export default Graphs;

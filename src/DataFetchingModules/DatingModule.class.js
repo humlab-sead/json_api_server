@@ -1,5 +1,3 @@
-const fs = require('fs');
-
 class DatingModule {
     constructor(app) {
         this.name = "Dating";
@@ -337,4 +335,4 @@ class DatingModule {
     
 }
 
-module.exports = DatingModule;
+export default DatingModule;

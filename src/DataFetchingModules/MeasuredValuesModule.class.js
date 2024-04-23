@@ -114,4 +114,4 @@ class MeasuredValuesModule {
 
 }
 
-module.exports = MeasuredValuesModule;
+export default MeasuredValuesModule;

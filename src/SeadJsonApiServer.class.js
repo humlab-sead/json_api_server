@@ -1,29 +1,31 @@
-const fs = require('fs');
-const express = require('express');
-const WebSocket = require('ws');
-const http = require('http');
-const bodyParser = require('body-parser');
-const cors = require('cors');
-const { Pool } = require('pg');
-const crypto = require('crypto');
-const zip = new require('node-zip')();
-const { MongoClient } = require('mongodb');
-const DendrochronologyModule = require('./DataFetchingModules/DendrochronologyModule.class');
-const AbundanceModule = require('./DataFetchingModules/AbundanceModule.class');
-const MeasuredValuesModule = require('./DataFetchingModules/MeasuredValuesModule.class');
-const CeramicsModule = require('./DataFetchingModules/CeramicsModule.class');
-const DatingModule = require('./DataFetchingModules/DatingModule.class');
-const IsotopeModule = require('./DataFetchingModules/IsotopeModule.class');
+import fs from 'fs';
+import express from 'express';
+import WebSocket, { WebSocketServer } from 'ws';
+import http from 'http';
+import bodyParser from 'body-parser';
+import cors from 'cors';
+import pkg from 'pg';
+const { Pool } = pkg;
+import crypto from 'crypto';
+import nodeZip from 'node-zip';  // Make sure to verify that this is the correct default export for node-zip
+import { MongoClient } from 'mongodb';
+import DendrochronologyModule from './DataFetchingModules/DendrochronologyModule.class.js';
+import AbundanceModule from './DataFetchingModules/AbundanceModule.class.js';
+import MeasuredValuesModule from './DataFetchingModules/MeasuredValuesModule.class.js';
+import CeramicsModule from './DataFetchingModules/CeramicsModule.class.js';
+import DatingModule from './DataFetchingModules/DatingModule.class.js';
+import IsotopeModule from './DataFetchingModules/IsotopeModule.class.js';
 
-const EcoCodes = require("./EndpointModules/EcoCodes.class");
-const Chronology = require("./EndpointModules/Chronology.class");
-const Taxa = require("./EndpointModules/Taxa.class");
-const Graphs = require("./EndpointModules/Graphs.class");
-const res = require('express/lib/response');
-const basicAuth = require('basic-auth');
+import EcoCodes from "./EndpointModules/EcoCodes.class.js";
+import Chronology from "./EndpointModules/Chronology.class.js";
+import Taxa from "./EndpointModules/Taxa.class.js";
+import Graphs from "./EndpointModules/Graphs.class.js";
+import response from 'express/lib/response.js';
+import basicAuth from 'basic-auth';
+
 
 const appName = "sead-json-api-server";
-const appVersion = "1.36.3";
+const appVersion = "1.37.0";
 
 class SeadJsonApiServer {
     constructor() {
@@ -97,11 +99,11 @@ class SeadJsonApiServer {
 
     setupEndpoints() {
         this.expressApp.all('*', (req, res, next) => {
-            console.log("Request: "+req.method+" "+req.path+" initiating");
-            console.time("Request: "+req.method+" "+req.path+" completed");
+            console.log("Request: "+req.method+" "+req.path);
+            //console.time("Request: "+req.method+" "+req.path+" completed");
             next();
             res.addListener("close", () => {
-                console.timeEnd("Request: "+req.method+" "+req.path+" completed");
+                //console.timeEnd("Request: "+req.method+" "+req.path+" completed");
             });
         });
 
@@ -2225,7 +2227,7 @@ class SeadJsonApiServer {
     startWsServer() {
         this.httpWsServer = http.createServer(this.expressApp);
 
-        this.wss = new WebSocket.Server({ noServer: true });
+        this.wss = new WebSocketServer({ noServer: true });
 
         this.wss.on('connection', (ws, request) => {
             ws.on('message', (message) => {
@@ -2277,4 +2279,4 @@ class SeadJsonApiServer {
     }
 }
 
-module.exports = SeadJsonApiServer;
+export { SeadJsonApiServer as default }

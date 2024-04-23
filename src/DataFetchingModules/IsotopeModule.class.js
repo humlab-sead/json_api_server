@@ -214,4 +214,4 @@ class IsotopeModule {
     }
 }
 
-module.exports = IsotopeModule;
+export default IsotopeModule;

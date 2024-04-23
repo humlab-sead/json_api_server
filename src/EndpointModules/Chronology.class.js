@@ -61,4 +61,4 @@ class Chronology {
     */
 }
 
-module.exports = Chronology;
+export default Chronology;

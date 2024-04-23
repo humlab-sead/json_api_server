@@ -1,4 +1,4 @@
-const Taxa = require('./Taxa.class.js');
+import Taxa from './Taxa.class.js';
 
 class EcoCodes {
     constructor(app) {
@@ -567,4 +567,4 @@ class EcoCodes {
     }
 }
 
-module.exports = EcoCodes;
+export default EcoCodes;
