@@ -25,7 +25,7 @@ import basicAuth from 'basic-auth';
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.37.1";
+const appVersion = "1.38.0";
 
 class SeadJsonApiServer {
     constructor() {
@@ -1796,7 +1796,7 @@ class SeadJsonApiServer {
                 `;
                 let altRefs = await pgClient.query(sql, [sample.physical_sample_id]);
                 sample.alt_refs = altRefs.rows;
-                
+
                 sql = `SELECT 
                 tbl_sample_dimensions.*,
                 tbl_methods.method_id,
