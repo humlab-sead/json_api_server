@@ -1796,19 +1796,14 @@ class SeadJsonApiServer {
                 `;
                 let altRefs = await pgClient.query(sql, [sample.physical_sample_id]);
                 sample.alt_refs = altRefs.rows;
-
-                /*
-                sql = `SELECT *
-                FROM tbl_sample_dimensions
-                LEFT JOIN tbl_methods ON tbl_sample_dimensions.method_id = tbl_methods.method_id
-                WHERE tbl_sample_dimensions.physical_sample_id=$1
-                `;
-                */
+                
                 sql = `SELECT 
                 tbl_sample_dimensions.*,
-                tbl_methods.method_id
+                tbl_methods.method_id,
+				tbl_dimensions.unit_id
                 FROM tbl_sample_dimensions
                 LEFT JOIN tbl_methods ON tbl_sample_dimensions.method_id = tbl_methods.method_id
+				LEFT JOIN tbl_dimensions ON tbl_dimensions.dimension_id = tbl_sample_dimensions.dimension_id
                 WHERE tbl_sample_dimensions.physical_sample_id=$1`;
 
                 let sampleDimensions = await pgClient.query(sql, [sample.physical_sample_id]);
