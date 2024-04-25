@@ -25,7 +25,7 @@ import basicAuth from 'basic-auth';
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.37.0";
+const appVersion = "1.37.1";
 
 class SeadJsonApiServer {
     constructor() {
