@@ -25,7 +25,7 @@ import basicAuth from 'basic-auth';
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.38.0";
+const appVersion = "1.39.0";
 
 class SeadJsonApiServer {
     constructor() {
@@ -2229,6 +2229,14 @@ class SeadJsonApiServer {
                 let incMsg = JSON.parse(message);
                 if(incMsg.type == "analysis_methods") {
                     this.graphs.fetchAnalysisMethodsSummaryForSites([incMsg.siteId]).then((result) => {
+                        if(incMsg.request_id) {
+                            result.request_id = incMsg.request_id;
+                        }
+                        ws.send(JSON.stringify(result));
+                    })
+                }
+                if(incMsg.type == "feature_types") {
+                    this.graphs.fetchFeatureTypesSummaryForSites([incMsg.siteId]).then((result) => {
                         if(incMsg.request_id) {
                             result.request_id = incMsg.request_id;
                         }

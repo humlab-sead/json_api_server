@@ -29,6 +29,13 @@ class Taxa {
 
         });
 
+        this.app.expressApp.get('/taxon_references/:taxon_id', async (req, res) => {
+            this.fetchTaxonReferences(req.params.taxon_id).then(references => {
+                res.header("Content-type", "application/json");
+                res.send(JSON.stringify(references, null, 2));
+            });
+        });
+
         this.app.expressApp.get('/taxon_distribution/:taxon_id', async (req, res) => {
             this.fetchDistributionForTaxon(req.params.taxon_id).then(distribution => {
                 res.header("Content-type", "application/json");
@@ -36,6 +43,25 @@ class Taxa {
             });
         });
 
+    }
+
+    async fetchTaxonReferences(taxonId) {
+        taxonId = parseInt(taxonId);
+
+        let taxon = await this.app.mongo.collection("taxa").find({ "taxon_id": taxonId }).toArray();
+
+        let references = [];
+        if(taxon.length > 0) {
+            taxon = taxon[0];
+            if(taxon.taxa_tree_authors) {
+                references = taxon.taxa_tree_authors;
+            }
+        }
+        
+        return {
+            taxon_id: taxonId, 
+            references: references
+        };
     }
 
     async fetchDistributionForTaxon(taxonId) {
