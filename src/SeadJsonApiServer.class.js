@@ -25,7 +25,7 @@ import basicAuth from 'basic-auth';
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.39.0";
+const appVersion = "1.40.1";
 
 class SeadJsonApiServer {
     constructor() {
@@ -1877,7 +1877,47 @@ class SeadJsonApiServer {
                         }
                     }
                 }
-                
+
+                //look up sample horizons
+                sql = `SELECT * FROM tbl_sample_horizons
+                JOIN tbl_horizons ON tbl_sample_horizons.horizon_id = tbl_horizons.horizon_id
+                WHERE physical_sample_id=$1`;
+                let sampleHorizons = await pgClient.query(sql, [sample.physical_sample_id]);
+
+                sample.horizons = [];
+                sampleHorizons.rows.forEach(horizon => {
+                    sample.horizons.push(horizon.horizon_id);
+                });
+
+                //add horizon to lookup tables
+                if(!site.lookup_tables.horizons) {
+                    site.lookup_tables.horizons = [];
+                }
+                sampleHorizons.rows.forEach(horizon => {
+                    for(let key in site.lookup_tables.horizons) {
+                        if(site.lookup_tables.horizons[key].horizon_id == horizon.horizon_id) {
+                            return;
+                        }
+                    }
+                    site.lookup_tables.horizons.push({
+                        horizon_id: horizon.horizon_id,
+                        horizon_name: horizon.horizon_name,
+                        description: horizon.description,
+                        method_id: horizon.method_id
+                    });
+                });
+
+                //look up methods
+                site.lookup_tables.horizons.forEach(horizon => {
+                    let method = this.getMethodByMethodId(site, horizon.method_id);
+                    if(!method) {
+                        this.fetchMethodByMethodId(horizon.method_id).then(method => {
+                            if(method) {
+                                this.addMethodToLocalLookup(site, method);
+                            }
+                        });
+                    }
+                });
             }
         }
         
