@@ -677,6 +677,94 @@ class DendrochronologyModule {
     }
     */
 
+    async getDatingHistogramForSitesPIPE(siteIds) {
+        if (!siteIds) {
+            siteIds = [];
+        }
+    
+        let cacheId = crypto.createHash('sha256');
+        siteIds.sort((a, b) => a - b);
+        cacheId = cacheId.update('datinghistogramforsites' + JSON.stringify(siteIds)).digest('hex');
+        let identifierObject = { cache_id: cacheId };
+    
+        let cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
+        if (cachedData !== false) {
+            return cachedData.data;
+        }
+    
+        let matchStage = {};
+        if (siteIds.length > 0) {
+            matchStage = { siteId: { $in: siteIds } };
+        }
+    
+        const aggregationPipeline = [
+            { $match: matchStage },
+            {
+                $unwind: "$sampleDataObjects"
+            },
+            {
+                $project: {
+                    siteId: 1,
+                    germinationYearOldest: "$sampleDataObjects.germinationYearOldest",
+                    fellingYearYoungest: "$sampleDataObjects.fellingYearYoungest",
+                    reliability: "$sampleDataObjects.reliability"
+                }
+            },
+            {
+                $group: {
+                    _id: null,
+                    oldestYear: { $min: "$germinationYearOldest" },
+                    youngestYear: { $max: "$fellingYearYoungest" }
+                }
+            }
+        ];
+
+        let collection = this.app.mongo.collection("sites");
+    
+        let [yearRange] = await collection.aggregate(aggregationPipeline).toArray();
+        if (!yearRange || !yearRange.oldestYear || !yearRange.youngestYear) {
+            return [];
+        }
+    
+        let catSize = 20;
+        let categoriesNum = Math.ceil((yearRange.youngestYear - yearRange.oldestYear) / catSize);
+        let categories = [];
+        let prevCatEnd = 0;
+        for (let i = 0; i < categoriesNum; i++) {
+            categories.push({
+                startYear: yearRange.oldestYear + prevCatEnd,
+                endYear: yearRange.oldestYear + (catSize * (i + 1))
+            });
+            prevCatEnd = catSize * (i + 1);
+        }
+        categories[categories.length - 1].endYear = yearRange.youngestYear;
+    
+        let categoryStages = categories.map((cat, index) => ({
+            $facet: {
+                [`cat${index}`]: [
+                    { $match: { "sampleDataObjects.germinationYearOldest": { $gte: cat.startYear, $lt: cat.endYear } } },
+                    { $group: { _id: null, count: { $sum: 1 } } }
+                ]
+            }
+        }));
+    
+        let sampleCounts = await collection.aggregate(categoryStages).toArray();
+    
+        categories.forEach((cat, index) => {
+            cat.datingsNum = sampleCounts[`cat${index}`][0] ? sampleCounts[`cat${index}`][0].count : 0;
+        });
+    
+        let resultObject = {
+            cache_id: cacheId,
+            data: categories
+        };
+    
+        await this.app.saveObjectToCache("graph_cache", identifierObject, resultObject);
+    
+        return categories;
+    }
+    
+
     async getDatingHistogramForSites(siteIds) {
         if(!siteIds) {
             siteIds = [];
@@ -770,6 +858,7 @@ class DendrochronologyModule {
 
                 if(selectedSampleDataObjects) {
 
+                    /*
                     //Further divide the selected samples in reliability categories
                     let selectedSampleDataObjectsHighReliability = selectedSampleDataObjects.filter(sampleDataObject => {
                         let oldestGerminationYear = this.dl.getOldestGerminationYear(sampleDataObject);
@@ -778,13 +867,15 @@ class DendrochronologyModule {
                         if(!oldestGerminationYear.value || !youngestFellingYear.value) {
                             return false;
                         }
+                        
                         if(oldestGerminationYear.reliability == 1 && youngestFellingYear.reliability == 1) {
                             return true;
                         }
                         return false;
                     });
+                    */
 
-                    cat.datingsNum += selectedSampleDataObjectsHighReliability.length;
+                    cat.datingsNum += selectedSampleDataObjects.length;
                     cat.datingsNumUncertain += selectedSampleDataObjects.length;
                 }
             });
