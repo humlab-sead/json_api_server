@@ -25,9 +25,11 @@ class Taxa {
             res.send(JSON.stringify(taxaList, null, 2));
         });
 
+        /* ???
         this.app.expressApp.get('/taxa/preload/:flushCache?', async (req, res) => {
 
         });
+        */
 
         this.app.expressApp.get('/taxon_references/:taxon_id', async (req, res) => {
             this.fetchTaxonReferences(req.params.taxon_id).then(references => {
@@ -54,7 +56,10 @@ class Taxa {
         if(taxon.length > 0) {
             taxon = taxon[0];
             if(taxon.taxa_tree_authors) {
-                references = taxon.taxa_tree_authors;
+                references = {
+                    taxa_tree_authors: taxon.taxa_tree_authors,
+                    taxonomy_notes: taxon.taxonomy_notes,
+                };
             }
         }
         
