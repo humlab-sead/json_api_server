@@ -23,7 +23,12 @@ class Chronology {
                 }
             });
 
-            let sitesWithTimeData = await this.fetchSiteTimeData(siteIds);
+            let sitesWithTimeData = [];
+            for(let key in siteIds) {
+                let site = await this.app.getSite(siteIds[key]);
+                sitesWithTimeData.push(await this.datingModule.fetchSiteTimeData(site));
+            }
+            
             res.header("Content-type", "application/json");
             res.send(JSON.stringify(sitesWithTimeData, null, 2));
         });
