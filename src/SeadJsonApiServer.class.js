@@ -25,7 +25,7 @@ import basicAuth from 'basic-auth';
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.40.2";
+const appVersion = "1.41.0";
 
 class SeadJsonApiServer {
     constructor() {
@@ -81,6 +81,7 @@ class SeadJsonApiServer {
             console.log('Connected to MongoDB');
         });
     }
+  
 
     async setupMongoDb() {
         const mongoUser = encodeURIComponent(process.env.MONGO_USER);
@@ -96,6 +97,18 @@ class SeadJsonApiServer {
         sha.update(hashKey);
         return sha.digest('hex');
     }
+
+    checkPassword(req, res, next) {
+        const password = req.headers['x-password']; // or use req.query.password for URL query string
+        // Set your desired password here
+        const desiredPassword = 'hunter2';
+    
+        if (password === desiredPassword) {
+            next(); // Password matches, proceed to the endpoint
+        } else {
+            res.status(401).send('Unauthorized: Incorrect password');
+        }
+    };
 
     setupEndpoints() {
         this.expressApp.all('*', (req, res, next) => {
@@ -157,6 +170,38 @@ class SeadJsonApiServer {
             res.end(JSON.stringify(sites, null, 2));
         });
 
+        this.expressApp.post('/datasets', async (req, res) => {
+            let { siteIds, methodIds } = req.body;
+            if (!Array.isArray(siteIds) || !Array.isArray(methodIds)) {
+                res.status(400);
+                res.send("Bad input - siteIds and methodIds should be arrays\n");
+                return;
+            }
+
+            let datasets = await this.getDatasets(siteIds, methodIds);
+           
+            res.header("Content-type", "application/json");
+            res.end(JSON.stringify(datasets, null, 2));
+        });
+
+        this.expressApp.post('/datagroups', async (req, res) => {
+            let { siteIds, methodIds } = req.body;
+            if (!Array.isArray(siteIds) || !Array.isArray(methodIds)) {
+                res.status(400);
+                res.send("Bad input - siteIds and methodIds should be arrays\n");
+                return;
+            }
+
+            let dataGroups = await this.getDatagroups(siteIds, methodIds);
+           
+            //here we stringify each datagroup separately, simply because if there's a lot of sites/datagroups, the stringify function will run out of memory if we do it all in one go
+            let dataGroupsString = "[" + dataGroups.map(el => JSON.stringify(el)).join(",") + "]";
+
+            res.header("Content-type", "application/json");
+            res.end(dataGroupsString);
+        });
+
+
         this.expressApp.post('/export/sites', async (req, res) => {
             let siteIds = req.body;
             console.log(siteIds);
@@ -203,6 +248,11 @@ class SeadJsonApiServer {
             }
         });
 
+        this.expressApp.get('/testpassword', this.checkPassword, async (req, res) => {
+            console.log(req.path);
+            res.end("Password works\n");
+        });
+
         this.expressApp.get('/preload/sites/:flushCache?', async (req, res) => {
             console.log(req.path);
             if(req.params.flushCache) {
@@ -236,6 +286,12 @@ class SeadJsonApiServer {
             res.send("Flushed graph cache\n");
         });
 
+        this.expressApp.get('/flush/sites', async (req, res) => {
+            console.log(req.path);
+            await this.flushSiteCache();
+            res.send("Flush of site cache complete\n");
+        })
+
         this.expressApp.get('/preload/all/:flush?', async (req, res) => {
             const flush = req.params.flush == "true" ? true : false;
             console.log(req.path);
@@ -246,12 +302,6 @@ class SeadJsonApiServer {
             await this.graphs.flushGraphCache();
             console.timeEnd("Preload of all data complete");
             res.send("Preload of all data complete\n");
-        });
-
-        this.expressApp.get('/flushSiteCache', async (req, res) => {
-            console.log(req.path);
-            await this.flushSiteCache();
-            res.send("Flush of site cache complete\n");
         });
 
         this.expressApp.get('/rebuild', async (req, res) => {
@@ -305,6 +355,171 @@ class SeadJsonApiServer {
             res.header("Content-type", "application/json");
             res.send(JSON.stringify(sites, null, 2));
         });
+
+        this.expressApp.post('/datasetsummaries', async (req, res) => {
+            let siteIds = req.body;
+            //console.log(siteIds);
+            if(typeof siteIds != "object") {
+                res.status(400);
+                res.send("Bad input - should be an array of site IDs\n");
+                return;
+            }
+            siteIds.forEach(siteId => {
+                if(!parseInt(siteId)) {
+                    res.status(400);
+                    res.send("Bad input - should be an array of site IDs\n");
+                    return;
+                }
+            })
+
+            let datasetSummaries = await this.datasetSummaries(siteIds);
+            res.header("Content-type", "application/json");
+            res.send(JSON.stringify(datasetSummaries, null, 2));
+        });
+    }
+
+    async getDatagroups(siteIds, methodIds) {
+        let sites = await this.mongo.collection('sites').find({
+            site_id: { $in: siteIds },
+            "data_groups.method_ids": { $in: methodIds }
+        }).toArray();
+
+        sites.forEach(site => {
+
+            for(let key in site.data_groups) {
+                let datagroup = site.data_groups[key];
+
+                let includeDataGroup = false;
+                datagroup.method_ids.forEach(methodId => {
+                    if(methodIds.includes(methodId)) {
+                        includeDataGroup = true;
+                    }
+                });
+                if(!includeDataGroup) {
+                    delete site.data_groups[key];
+                }
+            }
+
+            for(let key in site.datasets) {
+                let dataset = site.datasets[key];
+                let includeDataset = false;
+                if(methodIds.includes(dataset.method_id)) {
+                    includeDataset = true;
+                }
+                if(!includeDataset) {
+                    delete site.datasets[key];
+                }
+            }
+        });
+
+        return sites;
+    }
+
+    //UNUSED, see getDatagroups
+    async getDatasets(siteIds, methodIds) {
+        //let unsupportedMethodIds = [10];
+        let lookupBasedMethodIds = [10];
+        //get just the sites that has datasets with the methodIds
+        let data = await this.mongo.collection('sites').find({
+            site_id: { $in: siteIds },
+            "datasets.method_id": { $in: methodIds }
+        }).toArray();
+
+        let datasets = [];
+        let usedDataSets = [];
+        data.forEach(site => {
+
+            //if this site has data groups (such as a dendro or ceramic site), first go through them
+            //and record all the datasets we are gobbling up the data from so we don't duplicate them
+            if(site.data_groups) {
+                site.data_groups.forEach(dataGroup => {
+                    if(lookupBasedMethodIds.includes(dataGroup.method_id)) {
+                        if(dataGroup.datasets) {
+                            dataGroup.datasets.forEach(dataset => {
+                                usedDataSets.push(dataset.id);
+                            });
+                        }
+    
+                        datasets.push({
+                            site_id: site.site_id,
+                            datagroup: dataGroup
+                        })
+                    }
+                });
+                
+            }
+
+            site.datasets.forEach(dataset => {
+                if(methodIds.includes(dataset.method_id) && !usedDataSets.includes(dataset.dataset_id)) {
+                    dataset.site_id = site.site_id;
+
+                    dataset.analysis_entities.forEach(entity => {
+                        let sampleName = "";
+                        site.sample_groups.forEach(sampleGroup => {
+                            sampleGroup.physical_samples.forEach(sample => {
+                                if(sample.physical_sample_id == entity.physical_sample_id) {
+                                    sampleName = sample.sample_name;
+                                }
+                            });
+                        });
+
+                        entity.sample_name = sampleName;
+
+                        if(entity.measured_values) {
+                            entity.measured_values.forEach(measuredValue => {
+                                measuredValue.measured_value = parseFloat(measuredValue.measured_value);
+                            });
+                        }
+                    });
+
+                    datasets.push(dataset);
+                }
+            });
+        });
+
+        return datasets;
+    }
+
+    async datasetSummaries(siteIds) {
+
+        const pipeline = [
+            {
+                $match: {
+                    site_id: { $in: siteIds }
+                }
+            },
+            {
+                $unwind: "$datasets"  // Unwind the datasets array
+            },
+            {
+                $group: {
+                    _id: "$datasets.method_id",  // Group by dataset method ID
+                    sites: { $addToSet: "$site_id" },  // Use addToSet to count unique site IDs
+                    datasets: { $push: { dataset_id: "$datasets.dataset_id", dataset_name: "$datasets.dataset_name" } }
+                }
+            },
+            {
+                $project: {
+                    method_id: "$_id",  // Project method_id
+                    siteCount: { $size: "$sites" },  // Count the unique sites per method_id
+                    datasetCount: { $size: "$datasets" }  // Count the datasets per method_id
+                }
+            }
+        ];
+
+        //run the pipeline
+        let data = await this.mongo.collection('sites').aggregate(pipeline, { allowDiskUse: true }).toArray();
+
+        const pgClient = await this.getDbConnection();
+        for(let key in data) {
+            let res = await pgClient.query('SELECT * FROM tbl_methods WHERE method_id=$1', [data[key].method_id]);
+            if(res.rows.length > 0) {
+                data[key].method_name = res.rows[0].method_name;
+            }
+        }
+        this.releaseDbConnection(pgClient);
+
+        return data;
     }
 
     async exportSites(siteIds) {
@@ -2175,9 +2390,11 @@ class SeadJsonApiServer {
             */
 
             if(this.useStaticDbConnection) {
-                console.log("Setting up static postgres db connection");
                 this.staticDbConnection = await this.pgPool.connect();
                 console.log("Static postgres database ready");
+            }
+            else {
+                console.log("Pooled postgres database ready");
             }
 
             return true;
@@ -2282,6 +2499,9 @@ class SeadJsonApiServer {
                         }
                         ws.send(JSON.stringify(result));
                     })
+                }
+                if(incMsg.type == "dating_overview") {
+                    
                 }
             });
         });
