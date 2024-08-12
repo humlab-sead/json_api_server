@@ -67,6 +67,27 @@ class Graphs {
           res.end(JSON.stringify(data, null, 2));
         });
 
+        this.app.expressApp.post('/graphs/dating_overview', async (req, res) => {
+          let siteIds = req.body;
+          if(typeof siteIds != "object") {
+              res.status(400);
+              res.send("Bad input - should be an array of site IDs");
+              return;
+          }
+          
+          siteIds.forEach(siteId => {
+              if(!parseInt(siteId)) {
+                  res.status(400);
+                  res.send("Bad input - should be an array of site IDs");
+                  return;
+              }
+          });
+
+          let data = await this.fetchDatingOverviewForSites(siteIds);
+          res.header("Content-type", "application/json");
+          res.end(JSON.stringify(data, null, 2));
+        });
+
         this.app.expressApp.post('/graphs/dynamic_chart', async (req, res) => {
           let siteIds = req.body.siteIds;
           req.body.x;
@@ -411,13 +432,48 @@ class Graphs {
       return resultObject;
     }
 
+    async fetchDatingOverviewForSites(siteIds) {
+      let cacheId = crypto.createHash('sha256');
+      siteIds.sort((a, b) => a - b);
+      cacheId = cacheId.update('dating_extremes' + JSON.stringify(siteIds)).digest('hex');
+      let identifierObject = { cache_id: cacheId };
+    
+      let cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
+      if (cachedData !== false) {
+        return cachedData;
+      }
+    
+      let pipeline = [
+        { $match: { site_id: { $in: siteIds } } },
+        {
+          $project: {
+              site_id: 1,
+              age_older: '$chronology_extremes.age_older',
+              age_younger: '$chronology_extremes.age_younger'
+          }
+      }
+      ];
+    
+      let dating_extremes = await this.app.mongo.collection('sites').aggregate(pipeline).toArray();
+    
+      let resultObject = {
+        cache_id: cacheId,
+        dating_extremes: dating_extremes
+      };
+    
+      this.app.saveObjectToCache("graph_cache", identifierObject, resultObject);
+    
+      return resultObject;
+    }
+
     async fetchFeatureTypesSummaryForSites(siteIds) {
       let cacheId = crypto.createHash('sha256');
       siteIds.sort((a, b) => a - b);
       cacheId = cacheId.update('featuretypes' + JSON.stringify(siteIds)).digest('hex');
       let identifierObject = { cache_id: cacheId };
     
-      let cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
+      //let cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
+      let cachedData = false;
       if (cachedData !== false) {
         return cachedData;
       }
@@ -441,6 +497,9 @@ class Graphs {
             _id: 0,
             feature_count: 1
           }
+        },
+        {
+          $sort: { feature_count: -1 }  // Sort by feature_count in descending order
         }
       ];
     
@@ -452,9 +511,9 @@ class Graphs {
       };
     
       this.app.saveObjectToCache("graph_cache", identifierObject, resultObject);
-    
+      
       return resultObject;
-    }    
+    }
 
     async fetchSampleMethodsSummaryForSites(siteIds) {
         let cacheId = crypto.createHash('sha256');
@@ -607,6 +666,55 @@ class Graphs {
     async flushGraphCache() {
       console.log("Flushing graph cache");
       await this.app.mongo.collection('graph_cache').deleteMany({});
+    }
+
+    async fetchFeatureTypesSummaryForSites(siteIds) {
+        let cacheId = crypto.createHash('sha256');
+        siteIds.sort((a, b) => a - b);
+        cacheId = cacheId.update('featuretypes'+JSON.stringify(siteIds)).digest('hex');
+        let identifierObject = { cache_id: cacheId };
+      
+        if(this.app.useGraphCaching) {
+          let cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
+          if (cachedData !== false) {
+            return cachedData;
+          }
+        }
+      
+        let pipeline = [
+          { $match: { site_id: { $in: siteIds } } },
+          { $unwind: "$sample_groups" },
+          { $unwind: "$sample_groups.physical_samples" },
+          { $unwind: "$sample_groups.physical_samples.features" },
+          {
+            $group: {
+              _id: "$sample_groups.physical_samples.features.feature_type_id",
+              name: { $first: "$sample_groups.physical_samples.features.feature_type_name" },
+              feature_count: { $sum: 1 }
+            }
+          },
+          {
+            $project: {
+              feature_type: "$_id",
+              name: 1,
+              _id: 0,
+              feature_count: 1
+            }
+          }
+        ];
+      
+        let featureTypes = await this.app.mongo.collection('sites').aggregate(pipeline).toArray();
+      
+        let resultObject = {
+          cache_id: cacheId,
+          feature_types: featureTypes
+        };
+      
+        if(this.app.useGraphCaching) {
+          this.app.saveObjectToCache("graph_cache", identifierObject, resultObject);
+        }
+      
+        return resultObject;
     }
 
     async fetchAnalysisMethodsSummaryForSites(siteIds) {
