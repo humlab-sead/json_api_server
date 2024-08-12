@@ -23,6 +23,15 @@ class EcoCodes {
             }
         });
 
+        this.app.expressApp.get('/ecocodes/summary/site/:siteid', async (req, res) => {
+            let siteId = parseInt(req.params.siteid);
+            if(siteId) {
+                let ecoCodes = await this.getEcoCodesSummaryForSite(siteId);
+                res.header("Content-type", "application/json");
+                res.end(JSON.stringify(ecoCodes, null, 2));
+            }
+        });
+
         this.app.expressApp.get('/ecocodes/site/:siteid/samples', async (req, res) => {
             let siteId = parseInt(req.params.siteid);
             if(siteId) {
@@ -414,6 +423,41 @@ class EcoCodes {
         }
         
         return bundleObject;
+    }
+
+    async getEcoCodesSummaryForSite(siteId) {
+        const pipeline = [
+            // Match the document corresponding to the specific siteId
+            { $match: { site_id: siteId } },
+    
+            // Unwind the ecocode_bundles array to process each ecocode bundle individually
+            { $unwind: '$ecocode_bundles' },
+    
+            // Optional: If you want to gather more details or manipulate data, add further stages here
+    
+            // Group the data by ecocode_definition_id and gather relevant information
+            { 
+                $group: {
+                    _id: '$ecocode_bundles.ecocode.ecocode_definition_id', // Group by ecocode definition ID
+                    abbreviation: { $first: '$ecocode_bundles.ecocode.abbreviation' }, // Get the abbreviation of the ecocode
+                    definition: { $first: '$ecocode_bundles.ecocode.definition' }, // Get the definition of the ecocode
+                    name: { $first: '$ecocode_bundles.ecocode.name' }, // Get the name of the ecocode
+                    totalAbundance: { $sum: '$ecocode_bundles.abundance' }, // Sum the abundance values
+                    taxaCount: { $sum: { $size: '$ecocode_bundles.taxa' } }, // Count the total number of taxa
+                }
+            },
+    
+            // Sort the results by totalAbundance in descending order
+            { $sort: { totalAbundance: -1 } }
+        ];
+    
+        try {
+            const result = await this.app.mongo.collection('site_ecocode_bundles').aggregate(pipeline).toArray();
+            return result;
+        } catch (error) {
+            console.error("Failed to retrieve EcoCodes summary:", error);
+            throw error;
+        }
     }
 
     async getEcoCodesForSite(siteId, groupBySample = false) {
