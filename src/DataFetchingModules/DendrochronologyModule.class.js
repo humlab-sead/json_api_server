@@ -94,10 +94,59 @@ class DendrochronologyModule {
         }
 
         let measurements = await this.getMeasurementsForSite(site.site_id);
+
+        let dataGroups = [];
+        let dataGroupId = 1;
+        measurements.forEach(measurement => {
+            //console.log(measurement)
+            /*
+            measurement = sampleDataObject = {
+                id: physicalSampleId,
+                method_id: 10,
+                type: "dendro",
+                sample_name: "",
+                date_sampled: "",
+                physical_sample_id: physicalSampleId,
+                datasets: []
+            }
+            */
+
+            //put all the measurements with the same physical_sample_id in the same data group
+            let dataGroup = dataGroups.find(dg => dg.physical_sample_id == measurement.physical_sample_id);
+            if(!dataGroup) {
+                dataGroup = {
+                    data_group_id: dataGroupId++,
+                    physical_sample_id: measurement.physical_sample_id,
+                    sample_name: measurement.sample_name,
+                    date_sampled: measurement.date_sampled,
+                    method_ids: [10],
+                    method_group_ids: [],
+                    values: []
+                };
+                dataGroups.push(dataGroup);
+            }
+
+            measurement.datasets.forEach(ds => {
+                dataGroup.values.push({
+                    analysis_entitity_id: null,
+                    dataset_id: null,
+                    lookupId: ds.id,
+                    key: ds.label, 
+                    value: ds.value == 'complex' ? ds.data : ds.value,
+                    valueType: ds.value == 'complex' ? 'complex' : 'simple',
+                    data: ds.value == 'complex' ? ds.data : null,
+                    methodId: 10,
+                });
+            });
+        });
+
         if(!site.data_groups) {
             site.data_groups = [];
         }
-        site.data_groups = site.data_groups.concat(measurements);
+        //site.data_groups = site.data_groups.concat(measurements);
+        site.data_groups = dataGroups;
+
+
         site.lookup_tables.dendro = await this.fetchDendroLookup();
         if(typeof site.lookup_tables.dating_uncertainty == "undefined") {
             site.lookup_tables.dating_uncertainty = [];
@@ -256,7 +305,7 @@ class DendrochronologyModule {
         //Grab data in tbl_dating_uncertainty by dating_uncertainty_id
         let datingUncertaintyIds = [];
         site.data_groups.forEach(dg => {
-            dg.datasets.forEach(dataset => {
+            dg.values.forEach(dataset => {
                 if(dataset.id == 134 || dataset.id == 137) {
                     if(parseInt(dataset.data.dating_uncertainty)) {
                         datingUncertaintyIds.push(dataset.data.dating_uncertainty);
@@ -502,23 +551,23 @@ class DendrochronologyModule {
             // Match documents that contain the specified site IDs
             {
                 $match: {
-                    'data_groups.datasets.label': dendroVariable,
+                    'data_groups.values.label': dendroVariable,
                     'site_id': { $in: siteIds },
                 }
             },
             // Unwind the arrays
             { $unwind: '$data_groups' },
-            { $unwind: '$data_groups.datasets' },
+            { $unwind: '$data_groups.values' },
             // Filter only the selected label
             {
               $match: {
-                'data_groups.datasets.label': dendroVariable
+                'data_groups.values.label': dendroVariable
               }
             },
             // Group by selected variable and count occurrences
             {
               $group: {
-                _id: '$data_groups.datasets.value',
+                _id: '$data_groups.values.value',
                 count: { $sum: 1 }
               }
             },
@@ -570,23 +619,23 @@ class DendrochronologyModule {
             // Match documents that contain the specified site IDs
             {
                 $match: {
-                    'data_groups.datasets.label': 'Tree species',
+                    'data_groups.values.label': 'Tree species',
                     'site_id': { $in: siteIds },
                 }
             },
             // Unwind the arrays
             { $unwind: '$data_groups' },
-            { $unwind: '$data_groups.datasets' },
+            { $unwind: '$data_groups.values' },
             // Filter only the 'Tree species' label
             {
               $match: {
-                'data_groups.datasets.label': 'Tree species'
+                'data_groups.values.label': 'Tree species'
               }
             },
             // Group by tree species and count occurrences
             {
               $group: {
-                _id: '$data_groups.datasets.value',
+                _id: '$data_groups.values.value',
                 count: { $sum: 1 }
               }
             },
