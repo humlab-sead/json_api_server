@@ -1,8 +1,59 @@
+import DendroLib from '../Lib/sead_common/DendroLib.class.js';
+
 class DatingModule {
     constructor(app) {
         this.name = "Dating";
-        this.moduleMethodGroups = [19, 20, 3]; //should maybe include 21 as well...
-        this.c14StdMethodIds = [151, 148, 38, 150];
+        this.moduleMethods = [
+            10,
+            14,
+            38,
+            39,
+            127,
+            128,
+            129,
+            130,
+            131,
+            132,
+            133,
+            134,
+            135,
+            136,
+            137,
+            138,
+            139,
+            140,
+            141,
+            142,
+            143,
+            144,
+            146,
+            147,
+            148,
+            149,
+            151,
+            152,
+            153,
+            154,
+            155,
+            156,
+            157,
+            158,
+            159,
+            161,
+            162,
+            163,
+            164,
+            165,
+            167,
+            168,
+            169,
+            170,
+            176
+        ];
+        //this.moduleMethods = [38, 162, 163, 164, 165, 167, 168, 169, 170, 146, 39, 151, 154, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 147, 148, 149, 152, 153, 155, 10, 159, 161, 156, 157, 158];
+        this.moduleMethodGroups = [19, 20, 3]; //should maybe include 21 as well... and also I added the individual methods to the moduleMethods array, because it makes some things easier, so this might be slightly redundant now
+        this.c14StdMethodIds = [151, 148, 38, 150, 152];
+        this.entityAgesMethods = [];
         this.app = app;
         this.expressApp = this.app.expressApp;
     }
@@ -10,6 +61,9 @@ class DatingModule {
     siteHasModuleMethods(site) {
         for(let key in site.lookup_tables.methods) {
             if(this.moduleMethodGroups.includes(site.lookup_tables.methods[key].method_group_id)) {
+                return true;
+            }
+            if(this.moduleMethods.includes(site.lookup_tables.methods[key].method_id)) {
                 return true;
             }
         }
@@ -76,6 +130,10 @@ class DatingModule {
         LEFT JOIN tbl_dating_uncertainty ON tbl_dating_uncertainty.dating_uncertainty_id = tbl_geochronology.dating_uncertainty_id
         WHERE tbl_analysis_entities.analysis_entity_id=$1;
         `;
+
+        let entityAgesSql = `
+        SELECT * FROM tbl_analysis_entity_ages
+        WHERE analysis_entity_id=$1`; //this is already implemented in fetchAnalysisEntitiesAges() method, but that is for creating a site wide age summary
         
         let queriesExecuted = 0;
         let queryPromises = [];
@@ -132,6 +190,11 @@ class DatingModule {
                         });
                         queriesExecuted++;
                     }
+
+                    pgClient.query(entityAgesSql, [analysisEntity.analysis_entity_id]).then(values => {
+                        analysisEntity.entity_ages = values.rows[0];
+                    });
+
                     queryPromises.push(promise);
                     
                 });
@@ -271,16 +334,119 @@ class DatingModule {
         return null;
     }
 
+    datasetHasModuleMethods(dataset) {
+        return this.moduleMethods.includes(dataset.method_id);
+    }
+
     postProcessSiteData(site) {
+    
+        let dataGroups = [];
+        
+        for(let dsKey in site.datasets) {
+            let dataset = site.datasets[dsKey];
+            if(this.datasetHasModuleMethods(dataset)) {
+
+                let method = this.app.getMethodByMethodId(site, dataset.method_id);
+                
+                let dataGroup = {
+                    data_group_id: dataset.dataset_id,
+                    physical_sample_id: null,
+                    id: dataset.dataset_id,
+                    dataset_id: dataset.dataset_id,
+                    dataset_name: dataset.dataset_name,
+                    method_ids: [dataset.method_id],
+                    method_group_ids: [dataset.method_group_id],
+                    method_group_id: dataset.method_group_id,
+                    method_name: method.method_name,
+                    type: "dating",
+                    values: []
+                }
+
+                let analysisEntitiesSet = new Set();
+                let physicalSampleIdsSet = new Set();
+
+                for(let aeKey in dataset.analysis_entities) {
+                    let ae = dataset.analysis_entities[aeKey];
+                    if(ae.dataset_id == dataGroup.dataset_id) {
+                        if(ae.dating_values) {
+                            for(let dKey in ae.dating_values) {
+                                analysisEntitiesSet.add(ae.analysis_entity_id);
+                                physicalSampleIdsSet.add(ae.physical_sample_id);
+                                let sampleName = this.app.getSampleNameBySampleId(site, ae.physical_sample_id);
+
+                                dataGroup.values.push({
+                                    analysis_entitity_id: ae.analysis_entity_id,
+                                    dataset_id: dataset.dataset_id,
+                                    key: dKey, 
+                                    value: ae.dating_values[dKey],
+                                    valueType: 'complex',
+                                    data: ae.dating_values[dKey],
+                                    methodId: dataset.method_id,
+                                    physical_sample_id: ae.physical_sample_id,
+                                    sample_name: sampleName,
+                                });
+                            }
+                        }
+                        if(ae.entity_ages) {
+
+                            analysisEntitiesSet.add(ae.analysis_entity_id);
+                            physicalSampleIdsSet.add(ae.physical_sample_id);
+                            let sampleName = this.app.getSampleNameBySampleId(site, ae.physical_sample_id);
+
+                            const addValueToDataGroup = (key, value) => {
+                                if (value) {
+                                    dataGroup.values.push({
+                                        analysis_entity_id: ae.entity_ages.analysis_entity_id,
+                                        dataset_id: dataset.dataset_id,
+                                        key: key,
+                                        value: value,
+                                        valueType: 'simple',
+                                        data: value,
+                                        methodId: dataset.method_id,
+                                        physical_sample_id: ae.physical_sample_id,
+                                        sample_name: sampleName,
+                                    });
+                                }
+                            };
+
+                            addValueToDataGroup('age', ae.entity_ages.age);
+                            addValueToDataGroup('age_older', ae.entity_ages.age_older);
+                            addValueToDataGroup('age_younger', ae.entity_ages.age_younger);
+                            addValueToDataGroup('age_range', ae.entity_ages.age_range);
+                            addValueToDataGroup('chronology_id', ae.entity_ages.chronology_id);
+                            addValueToDataGroup('dating_specifier', ae.entity_ages.dating_specifier);
+                            
+                        }
+                    }
+                }
+
+                //if set only contains one item
+                if(analysisEntitiesSet.size == 1) {
+                    dataGroup.analysis_entity_id = analysisEntitiesSet.values().next().value;
+                }
+                if(physicalSampleIdsSet.size == 1) {
+                    dataGroup.physical_sample_id = physicalSampleIdsSet.values().next().value;
+                }
+
+                dataGroups.push(dataGroup);
+            }  
+        }
+
+        return site.data_groups = dataGroups.concat(site.data_groups);
+    }
+
+    postProcessSiteDataOLD(site) {
         //Here we are going to group the datasets which belong together (refers to the same analysis method) into "data_groups"
         let dataGroups = [];
 
+         /* - what was I even trying to achieve here?? anyway, it doesn't seem to work so I'm commenting it out since it adds garbage to the data_groups
         for(let dsKey in site.datasets) {
             let dataset = site.datasets[dsKey];
 
             for(let aeKey in dataset.analysis_entities) {
                 let ae = dataset.analysis_entities[aeKey];
 
+               
                 //check here if we should be handling this dataset
                 if(this.moduleMethodGroups.includes(dataset.method_group_id)) {
                     let dataGroup = this.getDataGroupByMethod(dataGroups, dataset.method_id);
@@ -298,8 +464,10 @@ class DatingModule {
                         dataGroup.data_points.push(ae);
                     }
                 }
-            }
+                
+            }    
         }
+        */
 
         //now figure out the chronology overview
         this.fetchSiteTimeData(site);
@@ -330,7 +498,49 @@ class DatingModule {
             }
         });
 
+        //if this is a dendro site...
+        let dl = new DendroLib();
+        site.data_groups.forEach(dataGroup => {
+            if(dataGroup.type == "dendro") {
+                let oldestGerminationYear = dl.getOldestGerminationYear(dataGroup);
+                if(!oldestGerminationYear || !oldestGerminationYear.value) {
+                    oldestGerminationYear = dl.getYoungestGerminationYear(dataGroup);
+                }
+                let youngestFellingYear = dl.getYoungestFellingYear(dataGroup);
+                if(!youngestFellingYear || !youngestFellingYear.value) {
+                    youngestFellingYear = dl.getOldestFellingYear(dataGroup);
+                }
+
+                if(oldestGerminationYear.value != null && (oldestGerminationYear.value < siteDatingObject.age_older || siteDatingObject.age_older == null)) {
+                    siteDatingObject.age_older = oldestGerminationYear.value;
+                    siteDatingObject.older_dataset_id = dataGroup.dataset_id;
+                    siteDatingObject.date_type = "dendro";
+                }
+                if(youngestFellingYear.value != null && (youngestFellingYear.value > siteDatingObject.age_younger || siteDatingObject.age_younger == null)) {
+                    siteDatingObject.age_younger = youngestFellingYear.value;
+                    siteDatingObject.younger_dataset_id = dataGroup.dataset_id;
+                    siteDatingObject.date_type = "dendro";
+                }
+            }
+        });
+
+        /*
+        //if date type is dendro, then we need to recalculate this to BP years
+        if(siteDatingObject.date_type == "dendro") {
+            const currentYear = new Date().getFullYear();
+            const diff = currentYear - 1950; // Calculate the difference from 1950 to the current year
+            
+            if (siteDatingObject.age_older !== null) {
+                siteDatingObject.age_older = siteDatingObject.age_older - diff;
+            }
+            if (siteDatingObject.age_younger !== null) {
+                siteDatingObject.age_younger = siteDatingObject.age_younger - diff;
+            }
+            //FTURE ME: PLEASE CHECK THAT THIS BP CALC IS CORRECT :D
+        }
+        */
         site.chronology_extremes = siteDatingObject;
+        return siteDatingObject;
     }
     
 }
