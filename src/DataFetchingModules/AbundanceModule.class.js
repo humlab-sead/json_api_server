@@ -1,7 +1,7 @@
 class AbundanceModule {
     constructor(app) {
         this.name = "Abundance";
-        this.moduleMethods = [3, 6, 8, 14, 15, 40, 111]; //include 60, 81?
+        this.moduleMethods = [3, 6, 8, 15, 40, 111]; //include 60, 81?
         this.app = app;
         this.expressApp = this.app.expressApp;
         this.setupEndpoints();
@@ -348,7 +348,7 @@ class AbundanceModule {
     postProcessSiteData(site) {
     
         let dataGroups = [];
-
+        
         for(let dsKey in site.datasets) {
             let dataset = site.datasets[dsKey];
             if(this.datasetHasModuleMethods(dataset)) {
@@ -356,14 +356,17 @@ class AbundanceModule {
                 let method = this.app.getMethodByMethodId(site, dataset.method_id);
                 
                 let dataGroup = {
+                    data_group_id: dataset.dataset_id,
+                    physical_sample_id: null,
                     id: dataset.dataset_id,
                     dataset_id: dataset.dataset_id,
                     dataset_name: dataset.dataset_name,
-                    method_id: dataset.method_id,
+                    method_ids: [dataset.method_id],
+                    method_group_ids: [dataset.method_group_id],
                     method_group_id: dataset.method_group_id,
                     method_name: method.method_name,
                     type: "abundance",
-                    data_points: []
+                    values: []
                 }
 
                 for(let aeKey in dataset.analysis_entities) {
@@ -372,14 +375,19 @@ class AbundanceModule {
                         if(ae.abundances) {
                             for(let abundanceKey in ae.abundances) {
                                 let abundance = ae.abundances[abundanceKey];
-
+                                //abundance.taxon = this.getTaxonFromLocalLookup(site, abundance.taxon_id);
                                 let sampleName = this.app.getSampleNameBySampleId(site, ae.physical_sample_id);
 
-                                dataGroup.data_points.push({
+                                dataGroup.values.push({
+                                    analysis_entitity_id: ae.analysis_entity_id,
+                                    dataset_id: dataset.dataset_id,
+                                    key: ae.physical_sample_id, 
+                                    value: abundance,
+                                    valueType: 'complex',
+                                    data: abundance,
+                                    methodId: dataset.method_id,
                                     physical_sample_id: ae.physical_sample_id,
                                     sample_name: sampleName,
-                                    label: ae.physical_sample_id,
-                                    value: abundance
                                 });
                             }
                         }
