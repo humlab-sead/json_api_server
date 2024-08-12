@@ -35,21 +35,57 @@ class CeramicsModule {
         WHERE analysis_entity_id=$1
         `;
 
-        let queryPromises = [];
-        site.sample_groups.forEach(sampleGroup => {
-            sampleGroup.physical_samples.forEach(physicalSample => {
-                physicalSample.analysis_entities.forEach(analysisEntity => {
-                    let promise = pgClient.query(sql, [analysisEntity.analysis_entity_id]).then(ceramicValues => {
-                        analysisEntity.ceramic_values = ceramicValues.rows;
-                    });
-                    queryPromises.push(promise);
-                });
-            })
-        });
+        let dataGroupId = 1;
+        let dataGroups = [];
 
-        await Promise.all(queryPromises).then(() => {
-            this.app.releaseDbConnection(pgClient);
-        });
+        for(let sgKey in site.sample_groups) {
+            let sampleGroup = site.sample_groups[sgKey];
+            for(let sampleKey in sampleGroup.physical_samples) {
+                let physicalSample = sampleGroup.physical_samples[sampleKey];
+
+                let dataGroup = {
+                    data_group_id: dataGroupId++,
+                    physical_sample_id: physicalSample.physical_sample_id,
+                    method_ids: [],
+                    method_group_ids: [],
+                    values: []
+                };
+
+                let methodIds = new Set();
+                let methodGroupIds = new Set();
+                for(let key in physicalSample.analysis_entities) {
+                    let analysisEntity = physicalSample.analysis_entities[key];
+                    let ceramicValues = await pgClient.query(sql, [analysisEntity.analysis_entity_id]);
+                    
+                    analysisEntity.ceramic_values = ceramicValues.rows;
+                    dataGroup.analysis_entity_id = analysisEntity.analysis_entity_id;
+
+                    analysisEntity.ceramic_values.forEach(ceramicValue => {
+                        dataGroup.values.push({
+                            key: ceramicValue.name,
+                            value: ceramicValue.measurement_value,
+                            valueType: 'simple',
+                            //data: ceramicValue,
+                            methodId: ceramicValue.method_id,
+                            ceramicsId: ceramicValue.ceramics_id,
+                            ceramicsLookupId: ceramicValue.ceramics_lookup_id,
+                            description: ceramicValue.description,
+                        });
+
+                        methodIds.add(ceramicValue.method_id);
+                        methodGroupIds.add(ceramicValue.method_group_id);
+                    })
+                }
+
+                dataGroup.method_ids = Array.from(methodIds);
+                dataGroup.method_group_ids = Array.from(methodGroupIds);
+
+                dataGroups.push(dataGroup);
+            }
+        }
+
+        site.data_groups = site.data_groups.concat(dataGroups);
+        this.app.releaseDbConnection(pgClient);
 
         return site;
     }
