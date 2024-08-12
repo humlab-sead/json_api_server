@@ -209,8 +209,62 @@ class IsotopeModule {
         return isotopeValueSpecifier;
     }
 
+    datasetHasModuleMethods(dataset) {
+        return this.moduleMethods.includes(dataset.method_id);
+    }
+
     postProcessSiteData(site) {
-        return site;
+        let dataGroups = [];
+        for(let dsKey in site.datasets) {
+            let dataset = site.datasets[dsKey];
+            if(this.datasetHasModuleMethods(dataset)) {
+
+                let method = this.app.getMethodByMethodId(site, dataset.method_id);
+                
+                let dataGroup = {
+                    data_group_id: dataset.dataset_id,
+                    physical_sample_id: null,
+                    method_ids: [dataset.method_id],
+                    id: dataset.dataset_id,
+                    dataset_id: dataset.dataset_id,
+                    dataset_name: dataset.dataset_name,
+                    method_ids: [dataset.method_id],
+                    method_group_ids: [dataset.method_group_id],
+                    method_name: method.method_name,
+                    type: "isotope",
+                    values: []
+                }
+
+                for(let aeKey in dataset.analysis_entities) {
+                    let ae = dataset.analysis_entities[aeKey];
+                    if(ae.dataset_id == dataGroup.id) {
+                        if(ae.isotopes) {
+                            for(let dataKey in ae.isotopes) {
+                                let isotopeData = ae.isotopes[dataKey];
+
+                                let sampleName = this.app.getSampleNameBySampleId(site, ae.physical_sample_id);
+
+                                dataGroup.values.push({
+                                    analysis_entitity_id: ae.analysis_entity_id,
+                                    physical_sample_id: ae.physical_sample_id,
+                                    dataset_id: dataset.dataset_id,
+                                    key: ae.physical_sample_id, 
+                                    value: isotopeData,
+                                    valueType: 'complex',
+                                    data: isotopeData, //if 'complex' value type
+                                    methodId: dataset.method_id,
+                                    sample_name: sampleName,
+                                });
+                            }
+                        }
+                    }
+                }
+
+                dataGroups.push(dataGroup);
+            }  
+        }
+
+        return site.data_groups = dataGroups.concat(site.data_groups);
     }
 }
 
