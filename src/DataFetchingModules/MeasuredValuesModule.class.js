@@ -69,13 +69,15 @@ class MeasuredValuesModule {
                 let method = this.app.getMethodByMethodId(site, dataset.method_id);
 
                 let dataGroup = {
+                    data_group_id: dataset.dataset_id,
+                    physical_sample_id: null,
                     id: dataset.dataset_id,
                     dataset_name: dataset.dataset_name,
-                    method_id: dataset.method_id,
-                    method_group_id: dataset.method_group_id,
+                    method_ids: [dataset.method_id],
+                    method_group_ids: [dataset.method_group_id],
                     method_name: method.method_name,
                     type: "measured_values",
-                    datasets: []
+                    values: []
                 }
 
                 for(let aeKey in dataset.analysis_entities) {
@@ -93,13 +95,25 @@ class MeasuredValuesModule {
                                     value = parseInt(value);
                                 }
 
-                                dataGroup.datasets.push({
+                                dataGroup.values.push({
+                                    analysis_entitity_id: ae.analysis_entity_id,
+                                    dataset_id: ae.dataset_id,
+                                    key: ae.physical_sample_id,
+                                    physical_sample_id: ae.physical_sample_id, 
+                                    value: value,
+                                    valueType: 'simple',
+                                    data: measuredValue.measured_value,
+                                    methodId: dataset.method_id,
+                                    sample_name: this.app.getSampleNameBySampleId(site, ae.physical_sample_id),
+                                    prep_methods: ae.prepMethods,
+                                    /* OLD:
                                     physical_sample_id: ae.physical_sample_id,
                                     sample_name: this.app.getSampleNameBySampleId(site, ae.physical_sample_id),
                                     label: ae.physical_sample_id,
                                     raw_value: measuredValue.measured_value,
                                     value: value,
                                     dataset_id: ae.dataset_id
+                                    */
                                 });
                             }
                         }
