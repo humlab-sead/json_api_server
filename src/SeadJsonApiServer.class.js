@@ -25,7 +25,7 @@ import basicAuth from 'basic-auth';
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.41.0";
+const appVersion = "1.42.0";
 
 class SeadJsonApiServer {
     constructor() {
@@ -1574,22 +1574,6 @@ class SeadJsonApiServer {
         for(let key in this.dataFetchingModules) {
             let module = this.dataFetchingModules[key];
             if(verbose) console.time("Fetched method "+module.name);
-
-            //This should get "data_groups", a data_group has data structured in tabular form, like:
-            /*
-            data_group.id = "dataset 1"; //id/context can be whatever makes sense for the given data type. For abundance and measured_value it's the dataset,
-            but dendro has a separate dataset for each of what we here would call a datapoint, so there it makes more sense to let the id/context be equal to the sample id/name instead
-            data_group.data_points[
-                {
-                    label: "a",
-                    value: 0
-                },
-                {
-                    label: "b",
-                    value: 1
-                }
-            ]
-            */
             let promise = module.fetchSiteData(site);
             fetchPromises.push(promise);
             promise.then(() => {

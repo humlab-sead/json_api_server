@@ -39,6 +39,7 @@ class DatingModule {
             157,
             158,
             159,
+            160,
             161,
             162,
             163,
@@ -52,7 +53,7 @@ class DatingModule {
         ];
         //this.moduleMethods = [38, 162, 163, 164, 165, 167, 168, 169, 170, 146, 39, 151, 154, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 147, 148, 149, 152, 153, 155, 10, 159, 161, 156, 157, 158];
         this.moduleMethodGroups = [19, 20, 3]; //should maybe include 21 as well... and also I added the individual methods to the moduleMethods array, because it makes some things easier, so this might be slightly redundant now
-        this.c14StdMethodIds = [151, 148, 38, 150, 152];
+        this.c14StdMethodIds = [151, 148, 38, 150, 152, 160];
         this.entityAgesMethods = [];
         this.app = app;
         this.expressApp = this.app.expressApp;
@@ -215,16 +216,16 @@ class DatingModule {
         let type = "";
         if(this.c14StdMethodIds.includes(dataGroup.method_id)) {
             type = "c14std";
-            dataGroup.data_points.forEach(dp => {
-                older = parseInt(dp.dating_values.age) - parseInt(dp.dating_values.error_older);
-                younger = parseInt(dp.dating_values.cal_age_younger) + parseInt(dp.dating_values.error_younger);
+            dataGroup.values.forEach(value => {
+                older = parseInt(value.dating_values.age) - parseInt(value.dating_values.error_older);
+                younger = parseInt(value.dating_values.cal_age_younger) + parseInt(value.dating_values.error_younger);
             });
         }
         else {
             type = "modern";
-            dataGroup.data_points.forEach(dp => {
-                older = parseInt(dp.dating_values.cal_age_older);
-                younger = parseInt(dp.dating_values.cal_age_younger);
+            dataGroup.values.forEach(value => {
+                older = parseInt(value.dating_values.cal_age_older);
+                younger = parseInt(value.dating_values.cal_age_younger);
             });
         }
 
@@ -431,46 +432,6 @@ class DatingModule {
                 dataGroups.push(dataGroup);
             }  
         }
-
-        return site.data_groups = dataGroups.concat(site.data_groups);
-    }
-
-    postProcessSiteDataOLD(site) {
-        //Here we are going to group the datasets which belong together (refers to the same analysis method) into "data_groups"
-        let dataGroups = [];
-
-         /* - what was I even trying to achieve here?? anyway, it doesn't seem to work so I'm commenting it out since it adds garbage to the data_groups
-        for(let dsKey in site.datasets) {
-            let dataset = site.datasets[dsKey];
-
-            for(let aeKey in dataset.analysis_entities) {
-                let ae = dataset.analysis_entities[aeKey];
-
-               
-                //check here if we should be handling this dataset
-                if(this.moduleMethodGroups.includes(dataset.method_group_id)) {
-                    let dataGroup = this.getDataGroupByMethod(dataGroups, dataset.method_id);
-                    if(dataGroup == null) {
-                        dataGroup = {
-                            method_id: dataset.method_id,
-                            method_group_id: dataset.method_group_id,
-                            data_points: [],
-                            type: "dating_values",
-                        };
-                        dataGroups.push(dataGroup);
-                    }
-
-                    if(ae.dating_values) {
-                        dataGroup.data_points.push(ae);
-                    }
-                }
-                
-            }    
-        }
-        */
-
-        //now figure out the chronology overview
-        this.fetchSiteTimeData(site);
 
         return site.data_groups = dataGroups.concat(site.data_groups);
     }
