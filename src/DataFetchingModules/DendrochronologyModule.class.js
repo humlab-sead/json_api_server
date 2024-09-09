@@ -119,11 +119,17 @@ class DendrochronologyModule {
                     physical_sample_id: measurement.physical_sample_id,
                     sample_name: measurement.sample_name,
                     date_sampled: measurement.date_sampled,
+                    biblio_ids: measurement.biblio_ids,
                     method_ids: [10],
                     method_group_ids: [],
                     values: []
                 };
+
                 dataGroups.push(dataGroup);
+            }
+            else {
+                //only concat if unique
+                dataGroup.biblio_ids = dataGroup.biblio_ids.concat(measurement.biblio_ids.filter(biblioId => !dataGroup.biblio_ids.includes(biblioId)));
             }
 
             measurement.datasets.forEach(ds => {
@@ -175,6 +181,7 @@ class DendrochronologyModule {
         let sql = `
         SELECT ps.physical_sample_id,
         ae.analysis_entity_id,
+		tbl_datasets.biblio_id,
         dl.name AS date_type,
         ps.sample_name AS sample,
         ps.date_sampled,
@@ -184,6 +191,7 @@ class DendrochronologyModule {
         tbl_dendro.measurement_value
         FROM tbl_physical_samples ps
         JOIN tbl_analysis_entities ae ON ps.physical_sample_id = ae.physical_sample_id
+		JOIN tbl_datasets ON tbl_datasets.dataset_id=ae.dataset_id
         JOIN tbl_dendro ON tbl_dendro.analysis_entity_id = ae.analysis_entity_id
         LEFT JOIN tbl_dendro_lookup dl ON tbl_dendro.dendro_lookup_id = dl.dendro_lookup_id
         LEFT JOIN tbl_sample_groups sg ON sg.sample_group_id = ps.sample_group_id
@@ -293,7 +301,6 @@ class DendrochronologyModule {
         this.app.releaseDbConnection(pgClient);
 
         let sampleDataObjects = this.dl.dbRowsToSampleDataObjects(measurementRows, datingRows);
-
         return sampleDataObjects;
     }
 
