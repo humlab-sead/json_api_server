@@ -4,7 +4,6 @@ class DatingModule {
     constructor(app) {
         this.name = "Dating";
         this.moduleMethods = [
-            10,
             14,
             38,
             39,
@@ -352,6 +351,7 @@ class DatingModule {
                 let dataGroup = {
                     data_group_id: dataset.dataset_id,
                     physical_sample_id: null,
+                    biblio_ids: [],
                     id: dataset.dataset_id,
                     dataset_id: dataset.dataset_id,
                     dataset_name: dataset.dataset_name,
@@ -363,6 +363,7 @@ class DatingModule {
                     values: []
                 }
 
+                let biblioIds = new Set();
                 let analysisEntitiesSet = new Set();
                 let physicalSampleIdsSet = new Set();
 
@@ -373,6 +374,16 @@ class DatingModule {
                             for(let dKey in ae.dating_values) {
                                 analysisEntitiesSet.add(ae.analysis_entity_id);
                                 physicalSampleIdsSet.add(ae.physical_sample_id);
+
+                                for(let dsk in site.datasets) {
+                                    if(site.datasets[dsk].dataset_id == ae.dataset_id) {
+                                        let dataset = site.datasets[dsk];
+                                        if(dataset.biblio_id) {
+                                            biblioIds.add(dataset.biblio_id);
+                                        }
+                                        break;
+                                    }
+                                }
                                 let sampleName = this.app.getSampleNameBySampleId(site, ae.physical_sample_id);
 
                                 dataGroup.values.push({
@@ -428,6 +439,8 @@ class DatingModule {
                 if(physicalSampleIdsSet.size == 1) {
                     dataGroup.physical_sample_id = physicalSampleIdsSet.values().next().value;
                 }
+
+                dataGroup.biblio_ids = Array.from(biblioIds);
 
                 dataGroups.push(dataGroup);
             }  
