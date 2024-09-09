@@ -48,8 +48,6 @@ class AbundanceModule {
 
         await Promise.all(queryPromises);
 
-        console.log(JSON.stringify(taxa, null, 2));
-
         this.app.releaseDbConnection(pgClient);
     }
 
@@ -361,6 +359,7 @@ class AbundanceModule {
                     id: dataset.dataset_id,
                     dataset_id: dataset.dataset_id,
                     dataset_name: dataset.dataset_name,
+                    biblio_ids: dataset.biblio_id ? [dataset.biblio_id] : [],
                     method_ids: [dataset.method_id],
                     method_group_ids: [dataset.method_group_id],
                     method_group_id: dataset.method_group_id,
