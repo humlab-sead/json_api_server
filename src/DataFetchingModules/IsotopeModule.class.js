@@ -225,6 +225,7 @@ class IsotopeModule {
                     data_group_id: dataset.dataset_id,
                     physical_sample_id: null,
                     method_ids: [dataset.method_id],
+                    biblio_ids: [],
                     id: dataset.dataset_id,
                     dataset_id: dataset.dataset_id,
                     dataset_name: dataset.dataset_name,
@@ -235,9 +236,22 @@ class IsotopeModule {
                     values: []
                 }
 
+                let biblioIds = new Set();
+
                 for(let aeKey in dataset.analysis_entities) {
                     let ae = dataset.analysis_entities[aeKey];
                     if(ae.dataset_id == dataGroup.id) {
+
+                        for(let dsk in site.datasets) {
+                            if(site.datasets[dsk].dataset_id == ae.dataset_id) {
+                                let dataset = site.datasets[dsk];
+                                if(dataset.biblio_id) {
+                                    biblioIds.add(dataset.biblio_id);
+                                }
+                                break;
+                            }
+                        }
+
                         if(ae.isotopes) {
                             for(let dataKey in ae.isotopes) {
                                 let isotopeData = ae.isotopes[dataKey];
@@ -259,6 +273,8 @@ class IsotopeModule {
                         }
                     }
                 }
+
+                dataGroup.biblio_ids = Array.from(biblioIds);
 
                 dataGroups.push(dataGroup);
             }  
