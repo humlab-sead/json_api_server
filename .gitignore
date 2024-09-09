@@ -2,3 +2,4 @@
 node_modules
 mongo-cluster
 src/Lib/sead_common
+test
