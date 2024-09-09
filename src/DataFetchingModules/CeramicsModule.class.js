@@ -1,3 +1,4 @@
+
 class CeramicsModule {
     constructor(app) {
         this.name = "Ceramics";
@@ -46,16 +47,28 @@ class CeramicsModule {
                 let dataGroup = {
                     data_group_id: dataGroupId++,
                     physical_sample_id: physicalSample.physical_sample_id,
+                    biblio_ids: [],
                     method_ids: [],
                     method_group_ids: [],
                     values: []
                 };
 
+                let biblioIds = new Set();
                 let methodIds = new Set();
                 let methodGroupIds = new Set();
                 for(let key in physicalSample.analysis_entities) {
                     let analysisEntity = physicalSample.analysis_entities[key];
                     let ceramicValues = await pgClient.query(sql, [analysisEntity.analysis_entity_id]);
+
+                    for(let dsk in site.datasets) {
+                        if(site.datasets[dsk].dataset_id == analysisEntity.dataset_id) {
+                            let dataset = site.datasets[dsk];
+                            if(dataset.biblio_id) {
+                                biblioIds.add(dataset.biblio_id);
+                            }
+                            break;
+                        }
+                    }
                     
                     analysisEntity.ceramic_values = ceramicValues.rows;
                     dataGroup.analysis_entity_id = analysisEntity.analysis_entity_id;
@@ -77,6 +90,7 @@ class CeramicsModule {
                     })
                 }
 
+                dataGroup.biblio_ids = Array.from(biblioIds);
                 dataGroup.method_ids = Array.from(methodIds);
                 dataGroup.method_group_ids = Array.from(methodGroupIds);
 
