@@ -7,7 +7,6 @@ import cors from 'cors';
 import pkg from 'pg';
 const { Pool } = pkg;
 import crypto from 'crypto';
-import nodeZip from 'node-zip';  // Make sure to verify that this is the correct default export for node-zip
 import { MongoClient } from 'mongodb';
 import DendrochronologyModule from './DataFetchingModules/DendrochronologyModule.class.js';
 import AbundanceModule from './DataFetchingModules/AbundanceModule.class.js';
@@ -23,9 +22,11 @@ import Graphs from "./EndpointModules/Graphs.class.js";
 import response from 'express/lib/response.js';
 import basicAuth from 'basic-auth';
 
+import { Client as ESClient } from "@elastic/elasticsearch";
+
 
 const appName = "sead-json-api-server";
-const appVersion = "1.42.0";
+const appVersion = "1.44.0";
 
 class SeadJsonApiServer {
     constructor() {
@@ -44,6 +45,19 @@ class SeadJsonApiServer {
         this.protectedEndpointUser = process.env.PROTECTED_ENDPOINTS_USER;
         this.protectedEndpointPass = process.env.PROTECTED_ENDPOINTS_PASS;
         
+        /*
+        const esClient = new ESClient({
+            node: 'https://elasticsearch:9200', // Elasticsearch endpoint
+            auth: {
+              apiKey: { // API key ID and secret
+                id: 'elastic',
+                api_key: 'whatever',
+              }
+            }
+          });
+        console.log(esClient);
+        */
+
         this.staticDbConnection = null;
         console.log("Starting up SEAD Data Server "+appVersion);
         if(this.useSiteCaching) {
@@ -98,17 +112,20 @@ class SeadJsonApiServer {
         return sha.digest('hex');
     }
 
-    checkPassword(req, res, next) {
-        const password = req.headers['x-password']; // or use req.query.password for URL query string
-        // Set your desired password here
-        const desiredPassword = 'hunter2';
-    
-        if (password === desiredPassword) {
-            next(); // Password matches, proceed to the endpoint
-        } else {
-            res.status(401).send('Unauthorized: Incorrect password');
+    checkBasicAuth(req, res, next) {
+        const credentials = basicAuth(req);
+
+        if (!credentials || credentials.name !== process.env.PROTECTED_ENDPOINTS_USER || credentials.pass !== process.env.PROTECTED_ENDPOINTS_PASS) {
+            res.setHeader('WWW-Authenticate', 'Basic realm="SEAD"');
+            const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+            const userAgent = req.headers['user-agent'];
+            console.log(`Access denied for endpoint ${req.path}, from IP: ${ip}, Browser: ${userAgent}`);
+            return res.status(401).send("Access denied\n");
         }
-    };
+        else {
+            next();
+        }
+    }
 
     setupEndpoints() {
         this.expressApp.all('*', (req, res, next) => {
@@ -128,19 +145,18 @@ class SeadJsonApiServer {
             res.send(JSON.stringify(versionInfo, null, 2));
         });
 
-        /*
-        this.expressApp.get('/test', async (req, res) => {
-            console.time("All sites fetched")
-            for(let i = 0; i < 1000; i++) {
-                console.time("Fetch of site "+i);
-                await this.getObjectFromCache("sites", { site_id: i });
-                console.timeEnd("Fetch of site "+i);
-            }
-            console.timeEnd("All sites fetched");
-            res.header("Content-type", "application/json");
-            res.end();
+        this.expressApp.get('/createMongoSearchIndex', this.checkBasicAuth, async (req, res) => {
+            let result = await this.createMongoSearchIndex();
+            res.send(JSON.stringify(result, null, 2));
         });
-        */
+
+        this.expressApp.get('/freesearch/:search', async (req, res) => {
+            const decodedQuery = decodeURIComponent(req.params.search);
+            const searchTerm = decodedQuery.replace(/[^a-zA-Z0-9 åäöÅÄÖ]/g, "");
+            let searchResults = await this.freeTextSearch(searchTerm);
+            res.header("Content-type", "application/json");
+            res.send(JSON.stringify(searchResults, null, 2));
+        });
 
         this.expressApp.get('/search/site/:search/:value', async (req, res) => {
             let siteIds = await this.searchSites(req.params.search, req.params.value);
@@ -248,7 +264,7 @@ class SeadJsonApiServer {
             }
         });
 
-        this.expressApp.get('/testpassword', this.checkPassword, async (req, res) => {
+        this.expressApp.get('/testpassword', this.checkBasicAuth, async (req, res) => {
             console.log(req.path);
             res.end("Password works\n");
         });
@@ -304,17 +320,8 @@ class SeadJsonApiServer {
             res.send("Preload of all data complete\n");
         });
 
-        this.expressApp.get('/rebuild', async (req, res) => {
+        this.expressApp.get('/rebuild', this.checkBasicAuth, async (req, res) => {
             console.log(req.path);
-            const credentials = basicAuth(req);
-        
-            if (!credentials || credentials.name !== this.protectedEndpointUser || credentials.pass !== this.protectedEndpointPass) {
-                res.setHeader('WWW-Authenticate', 'Basic realm="SEAD"');
-                const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-                const userAgent = req.headers['user-agent'];
-                console.log(`Access denied for endpoint ${req.path}, from IP: ${ip}, Browser: ${userAgent}`);
-                return res.status(401).send("Access denied\n");
-            }
             
             await this.flushSiteCache();
             await this.preloadAllSites();
@@ -376,6 +383,88 @@ class SeadJsonApiServer {
             res.header("Content-type", "application/json");
             res.send(JSON.stringify(datasetSummaries, null, 2));
         });
+    }
+
+    async createMongoSearchIndex() {
+
+        try {
+            const collection = this.mongo.collection('sites'); // Ensure 'sites' is the correct collection
+
+            // Check if the index exists and drop it if it does
+            try {
+                await collection.dropIndex('weighted_text_index');
+                console.log("Existing index 'weighted_text_index' dropped successfully.");
+            } catch (error) {
+                if (error.codeName === 'IndexNotFound') {
+                    console.log("No existing index found, proceeding to create a new one.");
+                } else {
+                    throw error;
+                }
+            }
+
+            // Create the text index with fields and weights
+            await collection.createIndex({
+                "site_name": "text", 
+                "site_description": "text",
+                "national_site_identifier": "text",
+                "biblio.title": "text",
+                "biblio.isbn": "text",
+                "biblio.year": "text",
+                "biblio.authors": "text",
+                "biblio.full_reference": "text",
+                "datasets.dataset_name": "text",
+                "location.location_name": "text",
+                "lookup_tables.abundance_elements.element_name": "text",
+                "lookup_tables.abundance_modifications.modification_type_name": "text",
+                "lookup_tables.biblio.title": "text",
+                "lookup_tables.biblio.isbn": "text",
+                "lookup_tables.biblio.year": "text",
+                "lookup_tables.biblio.authors": "text",
+                "lookup_tables.biblio.full_reference": "text",
+                "lookup_tables.domains.title": "text",
+                "lookup_tables.methods.method_name": "text",
+                "lookup_tables.methods.description": "text",
+                "lookup_tables.prep_methods.method_name": "text",
+                "lookup_tables.prep_methods.description": "text",
+                "lookup_tables.taxa.family.family_name": "text",
+                "lookup_tables.taxa.genus.genus_name": "text",
+                "lookup_tables.taxa.order.order_name": "text"
+            }, {
+                name: "weighted_text_index",
+                weights: {
+                    "site_name": 10,
+                    "biblio.title": 10,
+                    "datasets.dataset_name": 10,
+                    "site_description": 5,
+                    "biblio.authors": 5,
+                    "biblio.full_reference": 5,
+                    "location.location_name": 5,
+                    "lookup_tables.methods.method_name": 5,
+                    "lookup_tables.domains.title": 5,
+                    "lookup_tables.taxa.family.family_name": 5,
+                    "lookup_tables.taxa.genus.genus_name": 5,
+                    "lookup_tables.taxa.order.order_name": 5,
+                    "national_site_identifier": 2,
+                    "biblio.isbn": 2,
+                    "biblio.year": 2,
+                    "lookup_tables.abundance_elements.element_name": 2,
+                    "lookup_tables.abundance_modifications.modification_type_name": 2,
+                    "lookup_tables.biblio.title": 2,
+                    "lookup_tables.biblio.isbn": 2,
+                    "lookup_tables.biblio.year": 2,
+                    "lookup_tables.biblio.authors": 2,
+                    "lookup_tables.biblio.full_reference": 2,
+                    "lookup_tables.methods.description": 2,
+                    "lookup_tables.prep_methods.method_name": 2,
+                    "lookup_tables.prep_methods.description": 2,
+                    "sample_groups.physical_samples.features.feature_type_name": 8,
+                }
+            });
+
+            return "Index created successfully";
+        } catch (error) {
+            return "Error creating index";
+        }
     }
 
     async getDatagroups(siteIds, methodIds) {
@@ -2229,6 +2318,24 @@ class SeadJsonApiServer {
         if(this.getMethodByMethodId(site, method.method_id) == false) {
             site.lookup_tables.methods.push(method);
         }
+    }
+
+    async freeTextSearch(searchString) {
+        const results = await this.mongo.collection('sites').find({
+            $text: { 
+                $search: searchString,
+                $diacriticSensitive: false
+            },
+        }, {
+            projection: {
+                score: { $meta: "textScore" },
+                site_id: 1,
+                site_name: 1, // Only return the fields you're interested in
+                site_description: 1
+            }
+        }).sort({ score: { $meta: "textScore" } }).limit(50).allowDiskUse(true).toArray();
+
+        return results;
     }
 
     async getObjectFromCache(collection, identifierObject, findMany = false) {
