@@ -26,7 +26,7 @@ import { Client as ESClient } from "@elastic/elasticsearch";
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.44.0";
+const appVersion = "1.45.0";
 
 class SeadJsonApiServer {
     constructor() {
@@ -269,7 +269,7 @@ class SeadJsonApiServer {
             res.end("Password works\n");
         });
 
-        this.expressApp.get('/preload/sites/:flushCache?', async (req, res) => {
+        this.expressApp.get('/preload/sites/:flushCache?', this.checkBasicAuth, async (req, res) => {
             console.log(req.path);
             if(req.params.flushCache) {
                 await this.flushSiteCache();
@@ -278,7 +278,7 @@ class SeadJsonApiServer {
             res.end("Preload of sites complete\n");
         });
 
-        this.expressApp.get('/preload/taxa/:flushCache?', async (req, res) => {
+        this.expressApp.get('/preload/taxa/:flushCache?', this.checkBasicAuth, async (req, res) => {
             console.log(req.path);
             if(req.params.flushCache) {
                 await this.flushTaxaCache();
@@ -287,7 +287,7 @@ class SeadJsonApiServer {
             res.send("Preload of taxa complete\n");
         });
 
-        this.expressApp.get('/preload/ecocodes/:flushCache?', async (req, res) => {
+        this.expressApp.get('/preload/ecocodes/:flushCache?', this.checkBasicAuth, async (req, res) => {
             console.log(req.path);
             if(req.params.flushCache) {
                 await this.ecoCodes.flushEcocodeCache();
@@ -296,19 +296,19 @@ class SeadJsonApiServer {
             res.send("Preload of ecocodes complete\n");
         });
 
-        this.expressApp.get('/flush/graphcache', async (req, res) => {
+        this.expressApp.get('/flush/graphcache', this.checkBasicAuth, async (req, res) => {
             console.log(req.path);
             await this.flushGraphCache();
             res.send("Flushed graph cache\n");
         });
 
-        this.expressApp.get('/flush/sites', async (req, res) => {
+        this.expressApp.get('/flush/sites', this.checkBasicAuth, async (req, res) => {
             console.log(req.path);
             await this.flushSiteCache();
             res.send("Flush of site cache complete\n");
         })
 
-        this.expressApp.get('/preload/all/:flush?', async (req, res) => {
+        this.expressApp.get('/preload/all/:flush?', this.checkBasicAuth, async (req, res) => {
             const flush = req.params.flush == "true" ? true : false;
             console.log(req.path);
             console.time("Preload of all data complete");
