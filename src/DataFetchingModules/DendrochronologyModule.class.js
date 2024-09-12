@@ -119,7 +119,7 @@ class DendrochronologyModule {
                     physical_sample_id: measurement.physical_sample_id,
                     sample_name: measurement.sample_name,
                     date_sampled: measurement.date_sampled,
-                    biblio_ids: measurement.biblio_ids,
+                    biblio_ids: measurement.biblio_ids ? measurement.biblio_ids : [],
                     method_ids: [10],
                     method_group_ids: [],
                     values: []
