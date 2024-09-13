@@ -558,17 +558,17 @@ class DendrochronologyModule {
             // Match documents that contain the specified site IDs
             {
                 $match: {
-                    'data_groups.values.label': dendroVariable,
+                    'data_groups.values.key': dendroVariable,
                     'site_id': { $in: siteIds },
                 }
             },
             // Unwind the arrays
             { $unwind: '$data_groups' },
             { $unwind: '$data_groups.values' },
-            // Filter only the selected label
+            // Filter only the selected key
             {
               $match: {
-                'data_groups.values.label': dendroVariable
+                'data_groups.values.key': dendroVariable
               }
             },
             // Group by selected variable and count occurrences
@@ -626,17 +626,17 @@ class DendrochronologyModule {
             // Match documents that contain the specified site IDs
             {
                 $match: {
-                    'data_groups.values.label': 'Tree species',
+                    'data_groups.values.key': 'Tree species',
                     'site_id': { $in: siteIds },
                 }
             },
             // Unwind the arrays
             { $unwind: '$data_groups' },
             { $unwind: '$data_groups.values' },
-            // Filter only the 'Tree species' label
+            // Filter only the 'Tree species' key
             {
               $match: {
-                'data_groups.values.label': 'Tree species'
+                'data_groups.values.key': 'Tree species'
               }
             },
             // Group by tree species and count occurrences

@@ -472,8 +472,7 @@ class Graphs {
       cacheId = cacheId.update('featuretypes' + JSON.stringify(siteIds)).digest('hex');
       let identifierObject = { cache_id: cacheId };
     
-      //let cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
-      let cachedData = false;
+      let cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
       if (cachedData !== false) {
         return cachedData;
       }
