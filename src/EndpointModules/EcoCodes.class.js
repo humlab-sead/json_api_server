@@ -50,6 +50,28 @@ class EcoCodes {
             res.end("Preload of ecocodes complete");
         });
 
+        this.app.expressApp.post('/ecocodes/sites/individual/:ecocodeId', async (req, res) => { //the endpoint url for this seems kinda dumb, just saying
+            let siteIds = req.body;
+            if(typeof siteIds != "object") {
+                res.status(400);
+                res.send("Bad input - should be an array of site IDs");
+                return;
+            }
+
+            siteIds.forEach(siteId => {
+                if(!parseInt(siteId)) {
+                    res.status(400);
+                    res.send("Bad input - should be an array of site IDs");
+                    return;
+                }
+            });
+
+            let summaries = await this.getSingleEcoCodeForSites(siteIds, req.params.ecocodeId);
+
+            res.header("Content-type", "application/json");
+            res.end(JSON.stringify(summaries, null, 2));
+        });
+
         this.app.expressApp.post('/ecocodes/sites/:aggregationType', async (req, res) => {
             let siteIds = req.body;
             if(typeof siteIds != "object") {
@@ -423,6 +445,45 @@ class EcoCodes {
         }
         
         return bundleObject;
+    }
+
+    async getSingleEcoCodeForSites(siteIds, ecocodeId = null) {
+        const pipeline = [
+            // Match the document corresponding to the specific siteId
+            { $match: { site_id: { $in: siteIds } } },
+    
+            // Unwind the ecocode_bundles array to process each ecocode bundle individually
+            { $unwind: '$ecocode_bundles' },
+    
+            // Optional: If you want to gather more details or manipulate data, add further stages here
+            { $match: { 'ecocode_bundles.ecocode.ecocode_definition_id': parseInt(ecocodeId) } },
+    
+            // Group the data by ecocode_definition_id and gather relevant information
+            { 
+                $group: {
+                    _id: '$site_id', // Group by site ID
+                    site_id: { $first: '$site_id' }, // Get the site ID
+                    abbreviation: { $first: '$ecocode_bundles.ecocode.abbreviation' }, // Get the abbreviation of the ecocode
+                    definition: { $first: '$ecocode_bundles.ecocode.definition' }, // Get the definition of the ecocode
+                    name: { $first: '$ecocode_bundles.ecocode.name' }, // Get the name of the ecocode
+                    ecocode_definition_id: { $first: '$ecocode_bundles.ecocode.ecocode_definition_id' }, // Get the ecocode definition ID
+                    totalAbundance: { $sum: '$ecocode_bundles.abundance' }, // Sum the abundance values
+                    taxaCount: { $sum: { $size: '$ecocode_bundles.taxa' } }, // Count the total number of taxa
+                }
+            },
+    
+            // Sort the results by totalAbundance in descending order
+            { $sort: { totalAbundance: -1 } }
+        ];
+
+        try {
+            const result = await this.app.mongo.collection('site_ecocode_bundles').aggregate(pipeline).toArray();
+            return result;
+        } catch (error) {
+            console.error("Failed to retrieve EcoCodes summary:", error);
+            throw error;
+        }
+
     }
 
     async getEcoCodesSummaryForSite(siteId) {
