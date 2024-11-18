@@ -26,7 +26,7 @@ import { Client as ESClient } from "@elastic/elasticsearch";
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.46.0";
+const appVersion = "1.47.0";
 
 class SeadJsonApiServer {
     constructor() {
@@ -94,6 +94,7 @@ class SeadJsonApiServer {
         this.setupMongoDb().then(() => {
             console.log('Connected to MongoDB');
         });
+
     }
   
 
