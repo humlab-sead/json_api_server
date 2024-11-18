@@ -46,8 +46,10 @@ class Graphs {
           res.end(JSON.stringify(analysisMethods, null, 2));
         });
 
-        this.app.expressApp.post('/graphs/feature_types', async (req, res) => {
-          let siteIds = req.body;
+        
+        this.app.expressApp.post('/graphs/data_count', async (req, res) => {
+          let siteIds = req.body.siteIds;
+          let mongoPath = req.body.path;
           if(typeof siteIds != "object") {
               res.status(400);
               res.send("Bad input - should be an array of site IDs");
@@ -62,7 +64,119 @@ class Graphs {
               }
           });
 
-          let data = await this.fetchFeatureTypesSummaryForSites(siteIds);
+          if(!mongoPath) {
+            res.status(400);
+            res.send("Bad input - should include a path");
+            return;
+          }
+
+          let data = await this.fetchItemCountForSites(siteIds, mongoPath);
+          res.header("Content-type", "application/json");
+          res.end(JSON.stringify(data, null, 2));
+        });
+
+
+        this.app.expressApp.post('/graphs/custom/:perSite?', async (req, res) => {
+          let siteIds = req.body.siteIds;
+          let mongoPath = req.body.path;
+          let idField = req.body.idField;
+          let nameField = req.body.nameField;
+          if(typeof siteIds != "object") {
+              res.status(400);
+              res.send("Bad input - should be an array of site IDs");
+              return;
+          }
+          
+          siteIds.forEach(siteId => {
+              if(!parseInt(siteId)) {
+                  res.status(400);
+                  res.send("Bad input - should be an array of site IDs");
+                  return;
+              }
+          });
+
+          if(!mongoPath) {
+            res.status(400);
+            res.send("Bad input - should include a path");
+            return;
+          }
+
+          if(!idField) {
+            res.status(400);
+            res.send("Bad input - should include an id field");
+            return;
+          }
+
+          if(!nameField) {
+            res.status(400);
+            res.send("Bad input - should include a name field");
+            return;
+          }
+
+          let data = [];
+          if(req.params.perSite === "true") {
+            let promises = [];
+            siteIds.forEach(async siteId => {
+              //promises.push(this.fetchFeatureTypesSummaryForSites([siteId]));
+              promises.push(this.fetchSummaryForSites([siteId], mongoPath, idField, nameField));
+            });
+
+            let siteData = await Promise.all(promises);
+            siteData.forEach(site => {
+              data.push({
+                site_id: site.siteIds[0],
+                summary_data: site.summary_data
+              });
+            });
+          }
+          else {
+            //data = await this.fetchFeatureTypesSummaryForSites(siteIds);
+            data = await this.fetchSummaryForSites(siteIds, mongoPath, idField, nameField);
+          }
+
+          //let data = await this.fetchSummaryForSites(siteIds, mongoPath, idField, nameField);
+          res.header("Content-type", "application/json");
+          res.end(JSON.stringify(data, null, 2));
+        });
+
+
+        this.app.expressApp.post('/graphs/feature_types/:perSite?', async (req, res) => {
+          let siteIds = req.body.siteIds;
+          if(typeof siteIds != "object") {
+              res.status(400);
+              res.send("Bad input - should be an array of site IDs");
+              return;
+          }
+          
+          siteIds.forEach(siteId => {
+              if(!parseInt(siteId)) {
+                  res.status(400);
+                  res.send("Bad input - should be an array of site IDs");
+                  return;
+              }
+          });
+
+          let data = [];
+          if(req.params.perSite === "true") {
+            let promises = [];
+            siteIds.forEach(async siteId => {
+              //promises.push(this.fetchFeatureTypesSummaryForSites([siteId]));
+              promises.push(this.fetchSummaryForSites([siteId], "sample_groups.physical_samples.features", "feature_type_id", "feature_type_name"));
+            });
+
+            let siteData = await Promise.all(promises);
+            siteData.forEach(site => {
+              data.push({
+                site_id: site.siteIds[0],
+                feature_types: site.summary_data
+              });
+            });
+          }
+          else {
+            //data = await this.fetchFeatureTypesSummaryForSites(siteIds);
+            data = await this.fetchSummaryForSites(siteIds, "sample_groups.physical_samples.features", "feature_type_id", "feature_type_name");
+          }
+          
           res.header("Content-type", "application/json");
           res.end(JSON.stringify(data, null, 2));
         });
@@ -466,7 +580,66 @@ class Graphs {
       return resultObject;
     }
 
-    async fetchFeatureTypesSummaryForSites(siteIds) {
+    async fetchFeatureTypesSummaryForSitesNEW(siteIds) {
+      let cacheId = crypto.createHash('sha256');
+      siteIds.sort((a, b) => a - b);
+      cacheId = cacheId.update('featuretypes' + JSON.stringify(siteIds)).digest('hex');
+      let identifierObject = { cache_id: cacheId };
+  
+      let cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
+      if (cachedData !== false) {
+          //return cachedData;
+      }
+  
+      // Build the pipeline
+      let pipeline = [];
+      
+      // Only add the $match stage if specific site IDs are passed
+      if (siteIds.length > 0) {
+          pipeline.push({ $match: { site_id: { $in: siteIds } } });
+      }
+      else {
+        console.log("No site IDs passed");
+      }
+  
+      pipeline.push(
+          { $unwind: "$sample_groups" },
+          { $unwind: "$sample_groups.physical_samples" },
+          { $unwind: "$sample_groups.physical_samples.features" },
+          {
+              $group: {
+                  _id: "$sample_groups.physical_samples.features.feature_type_id",
+                  name: { $first: "$sample_groups.physical_samples.features.feature_type_name" },
+                  feature_count: { $sum: 1 }
+              }
+          },
+          {
+              $project: {
+                  feature_type: "$_id",
+                  name: 1,
+                  _id: 0,
+                  feature_count: 1
+              }
+          },
+          {
+              $sort: { feature_count: -1 }  // Sort by feature_count in descending order
+          }
+      );
+  
+      let featureTypes = await this.app.mongo.collection('sites').aggregate(pipeline).toArray();
+  
+      let resultObject = {
+          cache_id: cacheId,
+          feature_types: featureTypes
+      };
+  
+      this.app.saveObjectToCache("graph_cache", identifierObject, resultObject);
+  
+      return resultObject;
+  }
+  
+
+    async fetchFeatureTypesSummaryForSitesOLD_OLD(siteIds) {
       let cacheId = crypto.createHash('sha256');
       siteIds.sort((a, b) => a - b);
       cacheId = cacheId.update('featuretypes' + JSON.stringify(siteIds)).digest('hex');
@@ -667,7 +840,7 @@ class Graphs {
       await this.app.mongo.collection('graph_cache').deleteMany({});
     }
 
-    async fetchFeatureTypesSummaryForSites(siteIds) {
+    async fetchFeatureTypesSummaryForSites_OLD_FUNCTIONAL(siteIds) {
         let cacheId = crypto.createHash('sha256');
         siteIds.sort((a, b) => a - b);
         cacheId = cacheId.update('featuretypes'+JSON.stringify(siteIds)).digest('hex');
@@ -676,7 +849,7 @@ class Graphs {
         if(this.app.useGraphCaching) {
           let cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
           if (cachedData !== false) {
-            return cachedData;
+            //return cachedData;
           }
         }
       
@@ -714,6 +887,215 @@ class Graphs {
         }
       
         return resultObject;
+    }
+
+
+    /**
+     * This method will count the specified path/array. E.g. you can define a path like "sample_groups.physical_samples" and it will count the number of samples in the specified path.
+     * 
+     * @param {*} siteIds 
+     * @param {*} mongoPath 
+     * @returns 
+     */
+    async fetchItemCountForSites(siteIds, mongoPath) {
+      let cacheId = crypto.createHash('sha256');
+  
+      // Sort site IDs and generate cache ID
+      siteIds.sort((a, b) => a - b);
+      cacheId = cacheId.update(`count_${mongoPath}${JSON.stringify(siteIds)}`).digest('hex');
+      let identifierObject = { cache_id: cacheId };
+  
+      // If graph caching is enabled, check cache
+      if (this.app.useGraphCaching) {
+          let cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
+          if (cachedData !== false) {
+              return cachedData;
+          }
+      }
+  
+      // Build the aggregation pipeline
+      let pipeline = [];
+  
+      // Only add the $match stage if siteIds is not empty (special case for all sites)
+      if (siteIds.length > 0) {
+          pipeline.push({ $match: { site_id: { $in: siteIds } } });
+      }
+  
+      // Dynamically construct unwind stages based on full mongoPath
+      let pathSegments = mongoPath.split('.');
+      let accumulatedPath = '';
+  
+      for (let i = 0; i < pathSegments.length; i++) {
+          accumulatedPath = accumulatedPath ? `${accumulatedPath}.${pathSegments[i]}` : pathSegments[i];
+          pipeline.push({ $unwind: `$${accumulatedPath}` });
+      }
+  
+      // Group stage to count items at the specified path
+      pipeline.push(
+          {
+              $group: {
+                  _id: null, // Not grouping by id, so we can set _id to null
+                  count: { $sum: 1 } // Count occurrences
+              }
+          },
+          {
+              $project: {
+                  count: 1,
+                  _id: 0
+              }
+          }
+      );
+  
+      // Fetch data based on the constructed pipeline
+      let itemCountData = await this.app.mongo.collection('sites').aggregate(pipeline).toArray();
+  
+      // Prepare result object
+      let resultObject = {
+          cache_id: cacheId,
+          item_count: itemCountData.length > 0 ? itemCountData[0].count : 0,
+          siteIds: siteIds
+      };
+  
+      // Save result to cache if caching is enabled
+      if (this.app.useGraphCaching) {
+          this.app.saveObjectToCache("graph_cache", identifierObject, resultObject);
+      }
+  
+      return resultObject;
+  }
+  
+    async fetchSummaryForSites(siteIds, mongoPath, idField = "id", nameField = "name") {
+      let cacheId = crypto.createHash('sha256');
+  
+      // Sort site IDs and generate cache ID
+      siteIds.sort((a, b) => a - b);
+      cacheId = cacheId.update(`${mongoPath}${JSON.stringify(siteIds)}`).digest('hex');
+      let identifierObject = { cache_id: cacheId };
+  
+      // If graph caching is enabled, check cache
+      if (this.app.useGraphCaching) {
+          let cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
+          if (cachedData !== false) {
+              return cachedData;
+          }
+      }
+  
+      // Build the aggregation pipeline
+      let pipeline = [];
+  
+      // Only add the $match stage if siteIds is not empty (special case for all sites)
+      if (siteIds.length > 0) {
+          pipeline.push({ $match: { site_id: { $in: siteIds } } });
+      }
+  
+      // Dynamically construct unwind stages based on full mongoPath
+      let pathSegments = mongoPath.split('.');
+      let accumulatedPath = ''; // Keeps track of the full path
+  
+      for (let i = 0; i < pathSegments.length; i++) {
+          accumulatedPath = accumulatedPath ? `${accumulatedPath}.${pathSegments[i]}` : pathSegments[i];
+          pipeline.push({ $unwind: `$${accumulatedPath}` });
+      }
+  
+      // Group stage to summarize data using the complete path to id and name
+      pipeline.push(
+          {
+              $group: {
+                  _id: `$${accumulatedPath}.${idField}`, // Use full path to access "id"
+                  name: { $first: `$${accumulatedPath}.${nameField}` }, // Use full path to access "name"
+                  count: { $sum: 1 } // Count occurrences (can modify based on specific use case)
+              }
+          },
+          {
+              $project: {
+                  id: '$_id',
+                  name: 1,
+                  count: 1,
+                  _id: 0
+              }
+          }
+      );
+      
+      // Fetch data based on the constructed pipeline
+      let summaryData = await this.app.mongo.collection('sites').aggregate(pipeline).toArray();
+  
+      // Prepare result object
+      let resultObject = {
+          cache_id: cacheId,
+          summary_data: summaryData,
+          siteIds: siteIds
+      };
+  
+      // Save result to cache if caching is enabled
+      if (this.app.useGraphCaching) {
+          this.app.saveObjectToCache("graph_cache", identifierObject, resultObject);
+      }
+  
+      return resultObject;
+    }
+
+    async fetchFeatureTypesSummaryForSites(siteIds) {
+      let cacheId = crypto.createHash('sha256');
+      
+      // Sort site IDs and generate cache ID
+      siteIds.sort((a, b) => a - b);
+      cacheId = cacheId.update('featuretypes' + JSON.stringify(siteIds)).digest('hex');
+      let identifierObject = { cache_id: cacheId };
+  
+      // If graph caching is enabled, check cache
+      if (this.app.useGraphCaching) {
+          let cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
+          if (cachedData !== false) {
+              return cachedData;
+          }
+      }
+      
+  
+      // Build the aggregation pipeline
+      let pipeline = [];
+  
+      // Only add the $match stage if siteIds is not empty (special case for all sites)
+      if (siteIds.length > 0) {
+          pipeline.push({ $match: { site_id: { $in: siteIds } } });
+      }
+  
+      pipeline.push(
+          { $unwind: "$sample_groups" },
+          { $unwind: "$sample_groups.physical_samples" },
+          { $unwind: "$sample_groups.physical_samples.features" },
+          {
+              $group: {
+                  _id: "$sample_groups.physical_samples.features.feature_type_id",
+                  name: { $first: "$sample_groups.physical_samples.features.feature_type_name" },
+                  feature_count: { $sum: 1 }
+              }
+          },
+          {
+              $project: {
+                  feature_type: "$_id",
+                  name: 1,
+                  _id: 0,
+                  feature_count: 1
+              }
+          }
+      );
+  
+      // Fetch feature types summary
+      let featureTypes = await this.app.mongo.collection('sites').aggregate(pipeline).toArray();
+  
+      // Prepare result object
+      let resultObject = {
+          cache_id: cacheId,
+          feature_types: featureTypes,
+          siteIds: siteIds
+      };
+  
+      // Save result to cache if caching is enabled
+      if (this.app.useGraphCaching) {
+          this.app.saveObjectToCache("graph_cache", identifierObject, resultObject);
+      }
+  
+      return resultObject;
     }
 
     async fetchAnalysisMethodsSummaryForSites(siteIds) {
