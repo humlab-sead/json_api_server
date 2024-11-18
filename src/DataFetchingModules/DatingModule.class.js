@@ -475,7 +475,7 @@ class DatingModule {
         //if this is a dendro site...
         let dl = new DendroLib();
         site.data_groups.forEach(dataGroup => {
-            if(dataGroup.type == "dendro") {
+            if(dataGroup.method_ids.includes(10)) { //if this is a dendro data group
                 let oldestGerminationYear = dl.getOldestGerminationYear(dataGroup);
                 if(!oldestGerminationYear || !oldestGerminationYear.value) {
                     oldestGerminationYear = dl.getYoungestGerminationYear(dataGroup);
@@ -498,8 +498,10 @@ class DatingModule {
             }
         });
 
-        /*
+        
         //if date type is dendro, then we need to recalculate this to BP years
+        //ignore this for now
+        /*
         if(siteDatingObject.date_type == "dendro") {
             const currentYear = new Date().getFullYear();
             const diff = currentYear - 1950; // Calculate the difference from 1950 to the current year
@@ -512,7 +514,8 @@ class DatingModule {
             }
             //FTURE ME: PLEASE CHECK THAT THIS BP CALC IS CORRECT :D
         }
-        */
+            */
+        
         site.chronology_extremes = siteDatingObject;
         return siteDatingObject;
     }
