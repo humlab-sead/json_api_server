@@ -1908,6 +1908,29 @@ class SeadJsonApiServer {
         return site;
     }
 
+    async fetchAnalysisEntity(analysisEntity) {
+        let pgClient = await this.getDbConnection();
+        if(!pgClient) {
+            return false;
+        }
+
+        let sql = `
+        SELECT tbl_analysis_values.*, 
+        tbl_value_classes.*,
+        tbl_value_types.name AS value_type_name,
+        tbl_value_types.base_type AS value_base_type
+        FROM tbl_analysis_values
+                LEFT JOIN tbl_value_classes ON tbl_analysis_values.value_class_id=tbl_value_classes.value_class_id
+                LEFT JOIN tbl_value_types ON tbl_value_types.value_type_id=tbl_value_classes.value_type_id
+                WHERE analysis_entity_id=$1
+        `;
+
+        let analysisEntityId = analysisEntity.analysis_entity_id;
+        let analysisValues = await pgClient.query(sql, [analysisEntityId]);
+        analysisEntity.values = analysisValues.rows;
+        this.releaseDbConnection(pgClient);
+    }
+
     async fetchAnalysisEntities(site) {
         let pgClient = await this.getDbConnection();
         if(!pgClient) {
