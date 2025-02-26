@@ -15,10 +15,14 @@ import CeramicsModule from './DataFetchingModules/CeramicsModule.class.js';
 import DatingModule from './DataFetchingModules/DatingModule.class.js';
 import IsotopeModule from './DataFetchingModules/IsotopeModule.class.js';
 
+import DendroLib from './Lib/sead_common/DendroLib.class.js';
+
 import EcoCodes from "./EndpointModules/EcoCodes.class.js";
 import Chronology from "./EndpointModules/Chronology.class.js";
 import Taxa from "./EndpointModules/Taxa.class.js";
 import Graphs from "./EndpointModules/Graphs.class.js";
+import Viewstates from "./EndpointModules/Viewstates.class.js";
+
 import response from 'express/lib/response.js';
 import basicAuth from 'basic-auth';
 
@@ -26,7 +30,7 @@ import { Client as ESClient } from "@elastic/elasticsearch";
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.47.0";
+const appVersion = "1.48.0";
 
 class SeadJsonApiServer {
     constructor() {
@@ -44,6 +48,7 @@ class SeadJsonApiServer {
         this.maxConcurrentFetches = parseInt(process.env.MAX_CONCURRENT_FETCHES) ? parseInt(process.env.MAX_CONCURRENT_FETCHES) : process.env.MAX_CONCURRENT_FETCHES = 1;
         this.protectedEndpointUser = process.env.PROTECTED_ENDPOINTS_USER;
         this.protectedEndpointPass = process.env.PROTECTED_ENDPOINTS_PASS;
+        this.dendroLib = new DendroLib();
         
         /*
         const esClient = new ESClient({
@@ -87,6 +92,7 @@ class SeadJsonApiServer {
             this.chronology = new Chronology(this, datingModule);
             this.taxa = new Taxa(this);
             this.graphs = new Graphs(this);
+            this.viewstates = new Viewstates(this);
 
             this.run();
         });
@@ -1248,6 +1254,10 @@ class SeadJsonApiServer {
         this.postProcessSiteData(site);
         if(verbose) console.timeEnd("Done post-processing primary data for site "+siteId);
 
+        if(verbose) console.time("Compiled site dating overviews for site "+siteId);
+        this.compileSiteDatingOverview(site);
+        if(verbose) console.timeEnd("Compiled site dating overviews for site "+siteId);
+
         if(verbose) console.timeEnd("Done fetching site "+siteId);
 
         if(this.useSiteCaching) {
@@ -1908,6 +1918,29 @@ class SeadJsonApiServer {
         return site;
     }
 
+    async fetchAnalysisEntity(analysisEntity) {
+        let pgClient = await this.getDbConnection();
+        if(!pgClient) {
+            return false;
+        }
+
+        let sql = `
+        SELECT tbl_analysis_values.*, 
+        tbl_value_classes.*,
+        tbl_value_types.name AS value_type_name,
+        tbl_value_types.base_type AS value_base_type
+        FROM tbl_analysis_values
+                LEFT JOIN tbl_value_classes ON tbl_analysis_values.value_class_id=tbl_value_classes.value_class_id
+                LEFT JOIN tbl_value_types ON tbl_value_types.value_type_id=tbl_value_classes.value_type_id
+                WHERE analysis_entity_id=$1
+        `;
+
+        let analysisEntityId = analysisEntity.analysis_entity_id;
+        let analysisValues = await pgClient.query(sql, [analysisEntityId]);
+        analysisEntity.values = analysisValues.rows;
+        this.releaseDbConnection(pgClient);
+    }
+
     async fetchAnalysisEntities(site) {
         let pgClient = await this.getDbConnection();
         if(!pgClient) {
@@ -1986,6 +2019,41 @@ class SeadJsonApiServer {
         }
 
         this.releaseDbConnection(pgClient);
+    }
+
+
+    compileSiteDatingOverview(site) {
+        console.log("Compiling site dating overview for site "+site.site_id);
+        //look for dendrochronology ages
+        let dendroDataGroups = [];
+        site.data_groups.forEach(dataGroup => {
+            if(dataGroup.method_ids.includes(10)) {
+                dendroDataGroups.push(dataGroup);
+            }
+        });
+
+        let oldestYear = null;
+        let youngestYear = null;
+
+        let sampleDataObjects = this.dendroLib.dataGroupsToSampleDataObjects(dendroDataGroups);
+        sampleDataObjects.forEach(sampleDataObject => {
+            let germinationYear = this.dendroLib.getOldestGerminationYear(sampleDataObject);
+            let fellingYear = this.dendroLib.getYoungestFellingYear(sampleDataObject);
+            
+            if(germinationYear.value != null) {
+                if(oldestYear == null || germinationYear.value < oldestYear) {
+                    oldestYear = germinationYear.value;
+                }
+            }
+            if(fellingYear.value != null) {
+                if(youngestYear == null || fellingYear.value > youngestYear) {
+                    youngestYear = fellingYear.value;
+                }
+            }
+        });
+
+        console.log("Oldest year: "+oldestYear);
+        console.log("Youngest year: "+youngestYear);
     }
 
     async fetchAnalysisEntitiesPrepMethods(site) {

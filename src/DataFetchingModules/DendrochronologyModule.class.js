@@ -9,6 +9,8 @@ class DendrochronologyModule {
         this.moduleMethods = [10];
         this.app = app;
         this.expressApp = this.app.expressApp;
+        //this.ringWidthsTestData = fs.readFileSync("0RTM1739.rwl.json");
+        //this.ringWidthsTestData = JSON.parse(this.ringWidthsTestData.toString());
         this.dl = new DendroLib();
         this.setupEndpoints();
     }
@@ -79,7 +81,30 @@ class DendrochronologyModule {
         if(!pgClient) {
             return false;
         }
-        let data = await pgClient.query("SELECT dendro_lookup_id, name, description FROM tbl_dendro_lookup");
+        let valueClasses = await pgClient.query(`
+            SELECT DISTINCT(tbl_value_classes.value_class_id)
+            FROM tbl_analysis_values
+            LEFT JOIN tbl_value_classes ON tbl_value_classes.value_class_id=tbl_analysis_values.value_class_id
+            WHERE tbl_value_classes.method_id=10
+            `);
+
+        let valueClassIds = valueClasses.rows.map(row => row.value_class_id);
+
+        let data = await pgClient.query(`
+            SELECT DISTINCT ON (tbl_analysis_values.value_class_id)
+                tbl_analysis_values.value_class_id,
+                tbl_value_classes.value_type_id,
+                tbl_value_classes.method_id,
+                tbl_value_classes.parent_id,
+                tbl_value_classes.name,
+                tbl_value_classes.description
+            FROM tbl_analysis_values
+            LEFT JOIN tbl_value_classes 
+                ON tbl_value_classes.value_class_id = tbl_analysis_values.value_class_id
+            WHERE tbl_value_classes.value_class_id = ANY($1::int[])
+            ORDER BY tbl_analysis_values.value_class_id, tbl_value_classes.name;
+            `, [valueClassIds]);
+
         this.app.releaseDbConnection(pgClient);
         return data.rows;
     }
@@ -93,6 +118,7 @@ class DendrochronologyModule {
             console.log("Fetching dendrochronology data for site "+site.site_id);
         }
 
+        const ringWidths = await this.fetchRingWidthsForSite(site.site_id);
         let measurements = await this.getMeasurementsForSite(site.site_id);
 
         let dataGroups = [];
@@ -136,14 +162,28 @@ class DendrochronologyModule {
                 dataGroup.values.push({
                     analysis_entitity_id: null,
                     dataset_id: null,
-                    lookupId: ds.id,
+                    valueClassId: ds.id,
                     key: ds.label, 
-                    value: ds.value == 'complex' ? ds.data : ds.value,
-                    valueType: ds.value == 'complex' ? 'complex' : 'simple',
-                    data: ds.value == 'complex' ? ds.data : null,
+                    value: ds.value,
+                    valueType: ds.valueType,
+                    data: ds.complexValue,
                     methodId: 10,
                 });
             });
+
+            if(ringWidths) {
+                dataGroup.values.push({
+                    analysis_entitity_id: null,
+                    dataset_id: null,
+                    valueClassId: null,
+                    key: "Ring widths", 
+                    value: [],
+                    valueType: 'complex',
+                    data: ringWidths,
+                    methodId: 10,
+                });
+            }
+            
         });
 
         if(!site.data_groups) {
@@ -179,129 +219,44 @@ class DendrochronologyModule {
         }
 
         let sql = `
-        SELECT ps.physical_sample_id,
-        ae.analysis_entity_id,
-		tbl_datasets.biblio_id,
-        dl.name AS date_type,
-        ps.sample_name AS sample,
-        ps.date_sampled,
-        dl.dendro_lookup_id,
-        dl.description AS dendro_lookup_description,
-        tbl_sites.site_id,
-        tbl_dendro.measurement_value
-        FROM tbl_physical_samples ps
-        JOIN tbl_analysis_entities ae ON ps.physical_sample_id = ae.physical_sample_id
-		JOIN tbl_datasets ON tbl_datasets.dataset_id=ae.dataset_id
-        JOIN tbl_dendro ON tbl_dendro.analysis_entity_id = ae.analysis_entity_id
-        LEFT JOIN tbl_dendro_lookup dl ON tbl_dendro.dendro_lookup_id = dl.dendro_lookup_id
-        LEFT JOIN tbl_sample_groups sg ON sg.sample_group_id = ps.sample_group_id
+        SELECT 
+        tbl_analysis_values.*,
+        tbl_value_classes.*,
+        tbl_physical_samples.physical_sample_id,
+        tbl_physical_samples.sample_name,
+		tbl_physical_samples.date_sampled,
+		tbl_analysis_dating_ranges.low_value AS dating_range_low_value,
+		tbl_analysis_dating_ranges.high_value AS dating_range_high_value,
+		tbl_analysis_dating_ranges.low_is_uncertain AS dating_range_low_is_uncertain,
+		tbl_analysis_dating_ranges.high_is_uncertain AS dating_range_high_is_uncertain,
+		tbl_analysis_dating_ranges.low_qualifier AS dating_range_low_qualifier,
+		tbl_analysis_dating_ranges.age_type_id AS dating_range_age_type_id,
+		tbl_analysis_dating_ranges.season_id AS dating_range_season_id,
+		tbl_analysis_dating_ranges.dating_uncertainty_id AS dating_range_dating_uncertainty_id,
+		tbl_analysis_dating_ranges.is_variant AS dating_range_is_variant
+        FROM
+        tbl_analysis_values
+        LEFT JOIN tbl_value_classes ON tbl_value_classes.value_class_id=tbl_analysis_values.value_class_id
+        JOIN tbl_analysis_entities ON tbl_analysis_entities.analysis_entity_id=tbl_analysis_values.analysis_entity_id
+        JOIN tbl_physical_samples ON tbl_physical_samples.physical_sample_id=tbl_analysis_entities.physical_sample_id
+        LEFT JOIN tbl_sample_groups sg ON sg.sample_group_id = tbl_physical_samples.sample_group_id
         LEFT JOIN tbl_sites ON tbl_sites.site_id = sg.site_id
+		LEFT JOIN tbl_analysis_dating_ranges ON tbl_analysis_dating_ranges.analysis_value_id=tbl_analysis_values.analysis_value_id
         WHERE tbl_sites.site_id=$1
         `;
-        //SELECT * FROM postgrest_api.qse_dendro_measurements where site_id=2001 order by sample
-        //let data = await pgClient.query('SELECT * FROM postgrest_api.qse_dendro_measurements WHERE site_id=$1', [siteId]);
+
+        //tbl_analysis_dating_ranges
+
         let data = await pgClient.query(sql, [siteId]);
-        let measurementRows = data.rows;
         site.measurements = data.rows;
 
-        //OLD
-        /*
-        sql = `
-        SELECT DISTINCT ps.physical_sample_id,
-        ae.analysis_entity_id,
-        dl.name AS date_type,
-        ps.sample_name AS sample,
-        at.age_type,
-        dd.age_older AS older,
-        dd.age_younger AS younger,
-        dd.error_plus AS plus,
-        dd.error_minus AS minus,
-        dd.dating_uncertainty_id,
-        ddn.note AS dating_note,
-        eu.error_uncertainty_type AS error_uncertainty,
-        soq.season_or_qualifier_type AS season,
-        dl.dendro_lookup_id,
-        dl.description AS dendro_lookup_description,
-        tbl_sites.site_id,
-		tbl_datasets.dataset_id,
-		tbl_datasets.biblio_id
-        FROM tbl_physical_samples ps
-        JOIN tbl_analysis_entities ae ON ps.physical_sample_id = ae.physical_sample_id
-		JOIN tbl_datasets ON tbl_datasets.dataset_id=ae.dataset_id
-        JOIN tbl_dendro_dates dd ON ae.analysis_entity_id = dd.analysis_entity_id
-        LEFT JOIN tbl_season_or_qualifier soq ON soq.season_or_qualifier_id = dd.season_or_qualifier_id
-        LEFT JOIN tbl_age_types at ON at.age_type_id = dd.age_type_id
-        LEFT JOIN tbl_error_uncertainties eu ON eu.error_uncertainty_id = dd.error_uncertainty_id
-        LEFT JOIN tbl_dendro_lookup dl ON dd.dendro_lookup_id = dl.dendro_lookup_id
-        LEFT JOIN tbl_sample_groups sg ON sg.sample_group_id = ps.sample_group_id
-        LEFT JOIN tbl_dendro_date_notes ddn ON ddn.dendro_date_id = dd.dendro_date_id
-        LEFT JOIN tbl_sites ON tbl_sites.site_id = sg.site_id
-        WHERE tbl_sites.site_id=$1
-        `;
-        */
-        
-        //NEW
-        sql = `
-        SELECT DISTINCT ps.physical_sample_id,
-        ae.analysis_entity_id,
-        dl.name AS date_type,
-        ps.sample_name AS sample,
-        at.age_type,
-        dd.age_older AS older,
-        dd.age_younger AS younger,
-        dd.dating_uncertainty_id,
-        dd.season_id,
-        tbl_seasons.season_type_id,
-        tbl_seasons.season_name,
-        ddn.note AS dating_note,
-        dl.dendro_lookup_id,
-        dl.description AS dendro_lookup_description,
-        tbl_sites.site_id,
-		tbl_datasets.dataset_id,
-		tbl_datasets.biblio_id
-        FROM tbl_physical_samples ps
-        JOIN tbl_analysis_entities ae ON ps.physical_sample_id = ae.physical_sample_id
-		JOIN tbl_datasets ON tbl_datasets.dataset_id=ae.dataset_id
-        JOIN tbl_dendro_dates dd ON ae.analysis_entity_id = dd.analysis_entity_id
-        LEFT JOIN tbl_seasons ON tbl_seasons.season_id = dd.season_id
-        LEFT JOIN tbl_age_types at ON at.age_type_id = dd.age_type_id
-        LEFT JOIN tbl_dendro_lookup dl ON dd.dendro_lookup_id = dl.dendro_lookup_id
-        LEFT JOIN tbl_sample_groups sg ON sg.sample_group_id = ps.sample_group_id
-        LEFT JOIN tbl_dendro_date_notes ddn ON ddn.dendro_date_id = dd.dendro_date_id
-        LEFT JOIN tbl_sites ON tbl_sites.site_id = sg.site_id
-        WHERE tbl_sites.site_id=$1
-        `;
-        data = await pgClient.query(sql, [siteId]);
-        let datingRows = data.rows;
-        site.dating = data.rows;
-
-        /* DISABLED THIS - not because it doesn't work but because I'm not sure where to put this data - also - it might NOT work anymore after new dendro data structure, haven't checked
-        sql = `
-        SELECT
-        tbl_sites.site_id,
-        tbl_physical_sample_features.*,
-        tbl_features.*,
-        tbl_feature_types.*,
-        tbl_physical_samples.sample_group_id
-        FROM
-        tbl_sites
-        LEFT JOIN tbl_sample_groups ON tbl_sample_groups.site_id = tbl_sites.site_id
-        LEFT JOIN tbl_physical_samples ON tbl_physical_samples.sample_group_id=tbl_sample_groups.sample_group_id
-        LEFT JOIN tbl_physical_sample_features ON tbl_physical_sample_features.physical_sample_id=tbl_physical_samples.physical_sample_id
-        LEFT JOIN tbl_features ON tbl_features.feature_id=tbl_physical_sample_features.feature_id
-        LEFT JOIN tbl_feature_types ON tbl_feature_types.feature_type_id=tbl_features.feature_type_id
-        WHERE tbl_sites.site_id=$1
-        `;
-
-        data = await pgClient.query(sql, [siteId]);
-        let sampleFeatures = data.rows;
-        */
-
-
         this.app.releaseDbConnection(pgClient);
-
-        let sampleDataObjects = this.dl.dbRowsToSampleDataObjects(measurementRows, datingRows);
+        let sampleDataObjects = this.dl.dbRowsToSampleDataObjects(site.measurements);
         return sampleDataObjects;
+    }
+
+    async fetchRingWidthsForSite(siteId) {
+        return null;
     }
 
     async fetchDatingNotes(site) {
@@ -659,79 +614,6 @@ class DendrochronologyModule {
           let treeSpeciesCategories = await data.toArray();          
           return treeSpeciesCategories;
     }
-
-    async getTreeSpeciesForSitesOLD(siteIds) {
-        if(!siteIds) {
-            siteIds = [];
-        }
-        let sites = [];
-
-        let cacheId = crypto.createHash('sha256');
-        cacheId = cacheId.update('getTreeSpeciesForSites'+JSON.stringify(siteIds)).digest('hex');
-        let identifierObject = { cache_id: cacheId };
-      
-        let cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
-        if (cachedData !== false) {
-          return cachedData.data;
-        }
-
-        if(siteIds.length == 0) {
-            //If no sites are selected we assume ALL sites
-            sites = await this.getMeasurementsForAllSites();
-        }
-        else {
-            for(let key in siteIds) {
-                let sampleDataObjects = await this.getMeasurementsForSite(siteIds[key]);
-                sites.push({
-                    siteId: siteIds[key],
-                    sampleDataObjects: sampleDataObjects
-                });
-            }
-        }
-
-        let treeSpeciesCategories = [];
-
-        sites.forEach(site => {
-            site.sampleDataObjects.forEach(sampleDataObject => {
-                let species = this.dl.getDendroMeasurementByName("Tree species", sampleDataObject);
-                if(!species) {
-                    return false;
-                }
-
-                species = species.toLowerCase();
-    
-                let foundSpecies = false;
-                treeSpeciesCategories.forEach(speciesCat => {
-                    if(speciesCat.name == species) {
-                        speciesCat.count++;
-                        foundSpecies = true;
-                    }
-                });
-    
-                if(!foundSpecies) {
-                    treeSpeciesCategories.push({
-                        name: species,
-                        count: 1
-                    });
-                }
-            });
-        })
-
-        let resultObject = {
-            cache_id: cacheId,
-            data: treeSpeciesCategories
-        };
-        
-        this.app.saveObjectToCache("graph_cache", identifierObject, resultObject);
-
-        return treeSpeciesCategories;
-    }
-
-    /*
-    async getDatingHistogramForSites(siteIds) {
-        
-    }
-    */
 
     async getDatingHistogramForSitesPIPE(siteIds) {
         if (!siteIds) {
