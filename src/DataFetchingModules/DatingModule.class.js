@@ -143,7 +143,7 @@ class DatingModule {
                 physicalSample.analysis_entities.forEach(analysisEntity => {
 
                     //Here we need to check what dataset this AE is linked to
-                    //if it is a dataset with method_id 151 then it's 'C14 std'
+                    //if it is a dataset with method_id 151 (among others) then it's 'C14 std'
                     //which needs to be handled/fetched differently from the other dating methods
 
                     let specialTreatment = false;
@@ -244,7 +244,6 @@ class DatingModule {
 
         for(let aeKey in dataset.analysis_entities) {
             let ae = dataset.analysis_entities[aeKey];
-            
             if(ae.dating_values) {
                 let datingValues = ae.dating_values;
 
@@ -458,17 +457,26 @@ class DatingModule {
             younger_dataset_id: null,
             younger_analysis_entity_id: null,
         }
+        
         site.datasets.forEach(dataset => {
-            let ages = this.getNormalizedDatingSpanFromDataset(dataset);
-            if(ages.older > siteDatingObject.age_older || siteDatingObject.age_older == null) {
-                siteDatingObject.age_older = ages.older;
-                siteDatingObject.older_dataset_id = ages.dataset_id;
-                siteDatingObject.older_analysis_entity_id = ages.older_analysis_entity_id;
+            let datingSummary = this.getNormalizedDatingSpanFromDataset(dataset);
+            console.log(datingSummary);
+
+            if(datingSummary.dating_range_age_type_id == 1) { //dating_range_age_type_id is an "AD" dating
+                if(datingSummary.dating_range_low_value < siteDatingObject.age_older || siteDatingObject.age_older == null) {
+                    siteDatingObject.age_older = datingSummary.dating_range_low_value;
+                    siteDatingObject.older_dataset_id = datingSummary.dataset_id;
+                    siteDatingObject.older_analysis_entity_id = datingSummary.analysis_entity_id;
+                }
+
+                if(datingSummary.dating_range_high_value > siteDatingObject.age_younger || siteDatingObject.age_younger == null) {
+                    siteDatingObject.age_younger = datingSummary.dating_range_high_value;
+                    siteDatingObject.younger_dataset_id = datingSummary.dataset_id;
+                    siteDatingObject.younger_analysis_entity_id = datingSummary.analysis_entity_id;
+                }
             }
-            if(ages.younger < siteDatingObject.age_younger || siteDatingObject.age_younger == null) {
-                siteDatingObject.age_younger = ages.younger;
-                siteDatingObject.younger_dataset_id = ages.dataset_id;
-                siteDatingObject.younger_analysis_entity_id = ages.younger_analysis_entity_id;
+            else {
+                console.warn("This dataset has a dating range type that is not AD, so it will not be included in the site dating summary");
             }
         });
 

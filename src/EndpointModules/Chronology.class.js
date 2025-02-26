@@ -26,7 +26,12 @@ class Chronology {
             let sitesWithTimeData = [];
             for(let key in siteIds) {
                 let site = await this.app.getSite(siteIds[key]);
-                sitesWithTimeData.push(await this.datingModule.fetchSiteTimeData(site));
+                sitesWithTimeData.push({
+                    site_id: site.site_id,
+                    hello: "yes, hello",
+                    chronology_extremes: site.chronology_extremes
+                });
+                //sitesWithTimeData.push(await this.datingModule.fetchSiteTimeData(site));
             }
             
             res.header("Content-type", "application/json");

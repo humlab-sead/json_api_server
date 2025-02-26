@@ -162,7 +162,7 @@ class DendrochronologyModule {
                 dataGroup.values.push({
                     analysis_entitity_id: null,
                     dataset_id: null,
-                    lookupId: ds.id,
+                    valueClassId: ds.id,
                     key: ds.label, 
                     value: ds.value,
                     valueType: ds.valueType,
@@ -175,7 +175,7 @@ class DendrochronologyModule {
                 dataGroup.values.push({
                     analysis_entitity_id: null,
                     dataset_id: null,
-                    lookupId: null,
+                    valueClassId: null,
                     key: "Ring widths", 
                     value: [],
                     valueType: 'complex',
@@ -251,7 +251,7 @@ class DendrochronologyModule {
         site.measurements = data.rows;
 
         this.app.releaseDbConnection(pgClient);
-        let sampleDataObjects = this.dl.newDbRowsToSampleDataObjects(site.measurements);
+        let sampleDataObjects = this.dl.dbRowsToSampleDataObjects(site.measurements);
         return sampleDataObjects;
     }
 
