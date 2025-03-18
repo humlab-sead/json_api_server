@@ -1,0 +1,36 @@
+DO $$
+DECLARE
+    analysis_id INTEGER := 206343;
+    table_name TEXT;
+    count_result INTEGER;
+BEGIN
+    -- List of tables to check
+    FOR table_name IN 
+        SELECT unnest(array[
+            'tbl_measured_values',
+            'tbl_aggregate_samples',
+            'tbl_analysis_entity_ages',
+            'tbl_analysis_entity_dimensions',
+            'tbl_analysis_entity_prep_methods',
+            'tbl_ceramics',
+            'tbl_dendro',
+            'tbl_dendro_dates',
+            'tbl_geochronology',
+            'tbl_isotopes',
+            'tbl_measured_values',
+            'tbl_relative_dates',
+            'tbl_tephra_dates',
+            'tbl_abundances'
+        ])
+    LOOP
+        -- Check if any rows exist in the current table
+        EXECUTE format('SELECT COUNT(*) FROM %I WHERE analysis_entity_id = %L', table_name, analysis_id) INTO count_result;
+        
+        -- Print the result
+        IF count_result > 0 THEN
+            RAISE NOTICE 'Table % has % rows with analysis_entity_id = %', table_name, count_result, analysis_id;
+        ELSE
+            RAISE NOTICE 'Table % has no rows with analysis_entity_id = %', table_name, analysis_id;
+        END IF;
+    END LOOP;
+END $$;

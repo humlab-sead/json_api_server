@@ -64,7 +64,7 @@ class SeadJsonApiServer {
         */
 
         this.staticDbConnection = null;
-        console.log("Starting up SEAD Data Server "+appVersion);
+        console.log("Starting up SEAD JSON API Server "+appVersion);
         if(this.useSiteCaching) {
             console.log("Site cache is enabled")
             console.log("Using "+this.cacheStorageMethod+" for site cache storage");
@@ -2031,6 +2031,8 @@ class SeadJsonApiServer {
                 dendroDataGroups.push(dataGroup);
             }
         });
+
+        console.dir(dendroDataGroups, { depth: null, colors: true });
 
         let oldestYear = null;
         let youngestYear = null;

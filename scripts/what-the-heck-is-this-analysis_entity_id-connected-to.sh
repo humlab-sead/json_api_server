@@ -1,0 +1,14 @@
+select * from tbl_measured_values where analysis_entity_id=206343
+select * from tbl_aggregate_samples where analysis_entity_id=206343
+select * from tbl_analysis_entity_ages  where analysis_entity_id=206343
+select * from tbl_analysis_entity_dimensions where analysis_entity_id=206343
+select * from tbl_analysis_entity_prep_methods where analysis_entity_id=206343
+select * from tbl_ceramics where analysis_entity_id=206343
+select * from tbl_dendro where analysis_entity_id=206343
+select * from tbl_dendro_dates where analysis_entity_id=206343
+select * from tbl_geochronology where analysis_entity_id=206343
+select * from tbl_isotopes where analysis_entity_id=206343
+select * from tbl_measured_values where analysis_entity_id=206343
+select * from tbl_relative_dates where analysis_entity_id=206343
+select * from tbl_tephra_dates where analysis_entity_id=206343
+select * from tbl_abundances where analysis_entity_id=206343
