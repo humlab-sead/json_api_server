@@ -24,7 +24,7 @@ RUN git clone --recurse-submodules https://github.com/humlab-sead/json_api_serve
 
 WORKDIR /json_api_server
 
-RUN npm install
+RUN npm install --legacy-peer-deps
 
 # Install nodemon for development mode
 RUN npm install -g nodemon
