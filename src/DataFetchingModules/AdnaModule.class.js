@@ -32,7 +32,7 @@ export default class AdnaModule {
 
         site.data_groups = site.data_groups.concat(dataGroups);
 
-        site.lookup_tables.dendro = await this.fetchAdnaLookup();
+        site.lookup_tables.adna = await this.fetchAdnaLookup();
 
         return site;
     }
@@ -61,7 +61,8 @@ export default class AdnaModule {
 		tbl_analysis_dating_ranges.age_type_id AS dating_range_age_type_id,
 		tbl_analysis_dating_ranges.season_id AS dating_range_season_id,
 		tbl_analysis_dating_ranges.dating_uncertainty_id AS dating_range_dating_uncertainty_id,
-		tbl_analysis_dating_ranges.is_variant AS dating_range_is_variant
+		tbl_analysis_dating_ranges.is_variant AS dating_range_is_variant,
+        tbl_analysis_entities.dataset_id
         FROM
         tbl_analysis_values
         LEFT JOIN tbl_value_classes ON tbl_value_classes.value_class_id=tbl_analysis_values.value_class_id
@@ -116,7 +117,7 @@ export default class AdnaModule {
     
             const value = {
                 analysis_entitity_id: row.analysis_entity_id || null,
-                dataset_id: row.analysis_value_id || null,
+                dataset_id: row.dataset_id || null,
                 valueClassId: row.value_class_id,
                 key: row.name,
                 value: row.analysis_value,
