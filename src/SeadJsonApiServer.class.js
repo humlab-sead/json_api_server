@@ -14,6 +14,7 @@ import MeasuredValuesModule from './DataFetchingModules/MeasuredValuesModule.cla
 import CeramicsModule from './DataFetchingModules/CeramicsModule.class.js';
 import DatingModule from './DataFetchingModules/DatingModule.class.js';
 import IsotopeModule from './DataFetchingModules/IsotopeModule.class.js';
+import AdnaModule from './DataFetchingModules/AdnaModule.class.js';
 
 import DendroLib from './Lib/sead_common/DendroLib.class.js';
 
@@ -30,7 +31,7 @@ import { Client as ESClient } from "@elastic/elasticsearch";
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.48.0";
+const appVersion = "1.49.0";
 
 class SeadJsonApiServer {
     constructor() {
@@ -84,6 +85,7 @@ class SeadJsonApiServer {
             this.dataFetchingModules.push(new MeasuredValuesModule(this));
             this.dataFetchingModules.push(new CeramicsModule(this));
             this.dataFetchingModules.push(new IsotopeModule(this));
+            this.dataFetchingModules.push(new AdnaModule(this));
             const datingModule = new DatingModule(this);
             this.dataFetchingModules.push(datingModule);
 

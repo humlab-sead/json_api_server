@@ -1,7 +1,7 @@
 class IsotopeModule {
     constructor(app) {
         this.name = "Isotope";
-        this.moduleMethods = [175];
+        this.moduleMethods = []; //should be 175 - but in the latest database release, method_id 175 was overwritten by the method for aDNA, so this module is not allowed to use this id for now. Not sure if isotopes will be method_id 175 again in the future, or how this will be solved, we will have to wait and see.
         this.app = app;
         this.expressApp = this.app.expressApp;
     }

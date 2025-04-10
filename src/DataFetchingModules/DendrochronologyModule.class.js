@@ -124,7 +124,6 @@ class DendrochronologyModule {
         let dataGroups = [];
         let dataGroupId = 1;
         measurements.forEach(measurement => {
-            //console.log(measurement)
             /*
             measurement = sampleDataObject = {
                 id: physicalSampleId,
@@ -183,15 +182,15 @@ class DendrochronologyModule {
                     methodId: 10,
                 });
             }
-            
         });
 
         if(!site.data_groups) {
             site.data_groups = [];
         }
         //site.data_groups = site.data_groups.concat(measurements);
-        site.data_groups = dataGroups;
+        //site.data_groups = dataGroups;
 
+        site.data_groups = site.data_groups.concat(dataGroups);
 
         site.lookup_tables.dendro = await this.fetchDendroLookup();
         if(typeof site.lookup_tables.dating_uncertainty == "undefined") {
