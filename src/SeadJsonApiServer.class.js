@@ -1712,6 +1712,7 @@ class SeadJsonApiServer {
             let methodResult = await pgClient.query('SELECT * FROM tbl_methods WHERE method_id=$1', [methodId]);
             let method = methodResult.rows[0];
 
+            /*
             //The below unit_id's which is hardcoded based on method_id is temporary - SHOULD be included in the db instead, so when it is, just remove this series of if-statements
             if(methodId == 109) {
                 //pH (H2O) - there's no unit for ph in the db atm
@@ -1732,6 +1733,7 @@ class SeadJsonApiServer {
                 //LOI - assume the unit is a percentage
                 method.unit_id = 23;
             }
+            */
 
             if(parseInt(method.unit_id)) {
                 let methodUnitRes = await pgClient.query('SELECT * FROM tbl_units WHERE unit_id=$1', [method.unit_id]);
