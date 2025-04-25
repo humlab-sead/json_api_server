@@ -460,7 +460,7 @@ class DatingModule {
         
         site.datasets.forEach(dataset => {
             let datingSummary = this.getNormalizedDatingSpanFromDataset(dataset);
-            console.log(datingSummary);
+            //console.log(datingSummary);
 
             if(datingSummary.dating_range_age_type_id == 1) { //dating_range_age_type_id is an "AD" dating
                 if(datingSummary.dating_range_low_value < siteDatingObject.age_older || siteDatingObject.age_older == null) {
