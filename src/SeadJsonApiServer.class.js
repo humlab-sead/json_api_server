@@ -31,7 +31,7 @@ import { Client as ESClient } from "@elastic/elasticsearch";
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.49.2";
+const appVersion = "1.49.3";
 
 class SeadJsonApiServer {
     constructor() {
@@ -1256,9 +1256,10 @@ class SeadJsonApiServer {
         this.postProcessSiteData(site);
         if(verbose) console.timeEnd("Done post-processing primary data for site "+siteId);
 
-        if(verbose) console.time("Compiled site dating overviews for site "+siteId);
-        this.compileSiteDatingOverview(site);
-        if(verbose) console.timeEnd("Compiled site dating overviews for site "+siteId);
+        //This is commented out because it's not finished yet
+        //if(verbose) console.time("Compiled site dating overviews for site "+siteId);
+        //this.compileSiteDatingOverview(site);
+        //if(verbose) console.timeEnd("Compiled site dating overviews for site "+siteId);
 
         if(verbose) console.timeEnd("Done fetching site "+siteId);
 
@@ -2027,7 +2028,6 @@ class SeadJsonApiServer {
 
 
     compileSiteDatingOverview(site) {
-        console.log("Compiling site dating overview for site "+site.site_id);
         //look for dendrochronology ages
         let dendroDataGroups = [];
         site.data_groups.forEach(dataGroup => {
@@ -2035,8 +2035,6 @@ class SeadJsonApiServer {
                 dendroDataGroups.push(dataGroup);
             }
         });
-
-        console.dir(dendroDataGroups, { depth: null, colors: true });
 
         let oldestYear = null;
         let youngestYear = null;
@@ -2057,9 +2055,6 @@ class SeadJsonApiServer {
                 }
             }
         });
-
-        console.log("Oldest year: "+oldestYear);
-        console.log("Youngest year: "+youngestYear);
     }
 
     async fetchAnalysisEntitiesPrepMethods(site) {

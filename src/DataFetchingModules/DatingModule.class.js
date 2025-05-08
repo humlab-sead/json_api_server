@@ -48,8 +48,20 @@ class DatingModule {
             168,
             169,
             170,
+            174,
             176
         ];
+
+        /*
+        this.moduleMethods = [
+            174, 6, 8, 3, 14, 40, 15, 10, 154, 127, 38, 39, 151, 146, 128, 129, 130,
+            131, 142, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 143, 144, 145,
+            147, 148, 149, 152, 153, 155, 111, 156, 157, 158, 159, 160, 161, 162, 163,
+            164, 165, 166, 167, 168, 169, 170, 175
+        ];
+        */
+          
+
         //this.moduleMethods = [38, 162, 163, 164, 165, 167, 168, 169, 170, 146, 39, 151, 154, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 147, 148, 149, 152, 153, 155, 10, 159, 161, 156, 157, 158];
         this.moduleMethodGroups = [19, 20, 3]; //should maybe include 21 as well... and also I added the individual methods to the moduleMethods array, because it makes some things easier, so this might be slightly redundant now
         this.c14StdMethodIds = [151, 148, 38, 150, 152, 160];
@@ -239,63 +251,73 @@ class DatingModule {
         let dating = {
             older: null,
             younger: null,
-            dataset_id: dataset.dataset_id
-        }
-
-        for(let aeKey in dataset.analysis_entities) {
+            dataset_id: dataset.dataset_id,
+            older_type: null,
+            younger_type: null,
+            older_analysis_entity_id: null,
+            younger_analysis_entity_id: null,
+        };
+    
+        for (let aeKey in dataset.analysis_entities) {
             let ae = dataset.analysis_entities[aeKey];
-            if(ae.dating_values) {
+            if (ae.dating_values) {
                 let datingValues = ae.dating_values;
-
+    
                 //c14
-                if(datingValues.c14_age_older && datingValues.c14_age_younger) {
+                if (datingValues.c14_age_older && datingValues.c14_age_younger) {
                     let olderValue = parseInt(datingValues.c14_age_older);
-                    let youngerValue = parseInt(datingValues.c14_age_younger);                    
-
-                    //dates are always BP so bigger is older
-                    if(olderValue > dating.older || dating.older == null) {
+                    let youngerValue = parseInt(datingValues.c14_age_younger);
+    
+                    if (olderValue > dating.older || dating.older == null) {
                         dating.older = olderValue;
+                        dating.older_type = 'c14';
                         dating.older_analysis_entity_id = ae.analysis_entity_id;
                     }
-                    if(youngerValue < dating.younger || dating.younger == null) {
+                    if (youngerValue < dating.younger || dating.younger == null) {
                         dating.younger = youngerValue;
+                        dating.younger_type = 'c14';
                         dating.younger_analysis_entity_id = ae.analysis_entity_id;
                     }
                 }
-
-                //cal
-                if(datingValues.cal_age_older && datingValues.cal_age_younger) {
+    
+                //cal - Assuming cal_age is in calendar years (adjust logic based on actual unit)
+                if (datingValues.cal_age_older && datingValues.cal_age_younger) {
                     let olderValue = parseInt(datingValues.cal_age_older);
                     let youngerValue = parseInt(datingValues.cal_age_younger);
-
-                    if(olderValue > dating.older || dating.older == null) {
+    
+                    // Need to know if larger cal_age is older or younger!
+                    // Assuming larger is older for this example - ADJUST IF WRONG
+                    if (olderValue > dating.older || dating.older == null) {
                         dating.older = olderValue;
+                        dating.older_type = 'cal';
                         dating.older_analysis_entity_id = ae.analysis_entity_id;
                     }
-                    if(youngerValue < dating.younger || dating.younger == null) {
+                    if (youngerValue < dating.younger || dating.younger == null) {
                         dating.younger = youngerValue;
+                        dating.younger_type = 'cal';
                         dating.younger_analysis_entity_id = ae.analysis_entity_id;
                     }
                 }
-
+    
                 //other
-                if(datingValues.age && datingValues.error_older && datingValues.error_younger) {
+                if (datingValues.age && datingValues.error_older && datingValues.error_younger) {
                     let olderValue = parseInt(datingValues.age) - parseInt(datingValues.error_older);
                     let youngerValue = parseInt(datingValues.age) + parseInt(datingValues.error_younger);
-
-
-                    if(olderValue > dating.older || dating.older == null) {
+    
+                    if (olderValue > dating.older || dating.older == null) {
                         dating.older = olderValue;
+                        dating.older_type = 'other';
                         dating.older_analysis_entity_id = ae.analysis_entity_id;
                     }
-                    if(youngerValue < dating.younger || dating.younger == null) {
+                    if (youngerValue < dating.younger || dating.younger == null) {
                         dating.younger = youngerValue;
+                        dating.younger_type = 'other';
                         dating.younger_analysis_entity_id = ae.analysis_entity_id;
                     }
                 }
             }
         }
-
+    
         return dating;
     }
 
@@ -453,34 +475,137 @@ class DatingModule {
             age_older: null,
             older_dataset_id: null,
             older_analysis_entity_id: null,
+            older_type: null,
             age_younger: null,
             younger_dataset_id: null,
             younger_analysis_entity_id: null,
+            younger_type: null,
+            // date_type: null, // Consider if you need separate older/younger type
+        };
+
+        let dendroDatings = this.getDendroDatingExtremes(site);
+
+        if(dendroDatings.age_older && (dendroDatings.age_older < siteDatingObject.age_older || siteDatingObject.age_older == null)) {
+            siteDatingObject.age_older = dendroDatings.age_older;
+            siteDatingObject.older_dataset_id = dendroDatings.older_dataset_id;
+            siteDatingObject.older_analysis_entity_id = dendroDatings.older_analysis_entity_id;
+            siteDatingObject.older_type = dendroDatings.older_type;
         }
-        
+        if(dendroDatings.age_younger && (dendroDatings.age_younger > siteDatingObject.age_younger || siteDatingObject.age_younger == null)) {
+            siteDatingObject.age_younger = dendroDatings.age_younger;
+            siteDatingObject.younger_dataset_id = dendroDatings.younger_dataset_id;
+            siteDatingObject.younger_analysis_entity_id = dendroDatings.younger_analysis_entity_id;
+            siteDatingObject.younger_type = dendroDatings.younger_type;
+        }
+
+        //TODO: implement the rest of the dating methods here, like C14, etc.
         site.datasets.forEach(dataset => {
             let datingSummary = this.getNormalizedDatingSpanFromDataset(dataset);
-            //console.log(datingSummary);
-
+            console.log("datingSummary", datingSummary);
             if(datingSummary.dating_range_age_type_id == 1) { //dating_range_age_type_id is an "AD" dating
                 if(datingSummary.dating_range_low_value < siteDatingObject.age_older || siteDatingObject.age_older == null) {
                     siteDatingObject.age_older = datingSummary.dating_range_low_value;
                     siteDatingObject.older_dataset_id = datingSummary.dataset_id;
                     siteDatingObject.older_analysis_entity_id = datingSummary.analysis_entity_id;
+                    // Assuming datingSummary has older_type
+                    siteDatingObject.older_type = datingSummary.older_type;
                 }
-
+    
                 if(datingSummary.dating_range_high_value > siteDatingObject.age_younger || siteDatingObject.age_younger == null) {
                     siteDatingObject.age_younger = datingSummary.dating_range_high_value;
                     siteDatingObject.younger_dataset_id = datingSummary.dataset_id;
                     siteDatingObject.younger_analysis_entity_id = datingSummary.analysis_entity_id;
+                    // Assuming datingSummary has younger_type
+                    siteDatingObject.younger_type = datingSummary.younger_type;
                 }
             }
             else {
-                console.warn("This dataset has a dating range type that is not AD, so it will not be included in the site dating summary");
+                console.warn("This dataset has a dating range type ("+datingSummary.dating_range_age_type_id+") that is not AD, so it will not be included in the site dating summary");
             }
         });
 
-        //if this is a dendro site...
+
+        return siteDatingObject;
+    }
+
+    getDendroDatingExtremes(site) {
+        let siteDatingObject = {
+            age_older: null,
+            older_dataset_id: null,
+            older_analysis_entity_id: null,
+            older_type: null,
+            age_younger: null,
+            younger_dataset_id: null,
+            younger_analysis_entity_id: null,
+            younger_type: null,
+        };
+
+        let dl = new DendroLib();
+
+        let dendroDataGroups = site.data_groups.filter(dataGroup => {
+            return dataGroup.method_ids.includes(10); // Assuming 10 is the method ID for dendro
+        });
+        let sampleDataObjects = dl.dataGroupsToSampleDataObjects(dendroDataGroups);
+
+        sampleDataObjects.forEach(sampleDataObject => {
+            let oldest = dl.getYoungestGerminationYear(sampleDataObject);
+            let youngest = dl.getYoungestFellingYear(sampleDataObject);
+
+            //compare against the siteDatingObject
+            if (oldest && oldest.value && (oldest.value < siteDatingObject.age_older || siteDatingObject.age_older == null)) {
+                siteDatingObject.age_older = oldest.value;
+                siteDatingObject.older_dataset_id = sampleDataObject.dataset_id;
+                // Potentially fetch and assign older_analysis_entity_id if relevant for dendro
+                siteDatingObject.older_type = "dendro";
+            }
+            if (youngest && youngest.value && (youngest.value > siteDatingObject.age_younger || siteDatingObject.age_younger == null)) {
+                siteDatingObject.age_younger = youngest.value;
+                siteDatingObject.younger_dataset_id = sampleDataObject.dataset_id;
+                // Potentially fetch and assign younger_analysis_entity_id if relevant for dendro
+                siteDatingObject.younger_type = "dendro";
+            }
+        });
+
+        return siteDatingObject;
+    }
+
+    async fetchSiteTimeDataOLD(site) {
+        let siteDatingObject = {
+            age_older: null,
+            older_dataset_id: null,
+            older_analysis_entity_id: null,
+            older_type: null,
+            age_younger: null,
+            younger_dataset_id: null,
+            younger_analysis_entity_id: null,
+            younger_type: null,
+            // date_type: null, // Consider if you need separate older/younger type
+        };
+    
+        site.datasets.forEach(dataset => {
+            let datingSummary = this.getNormalizedDatingSpanFromDataset(dataset);
+            if(datingSummary.dating_range_age_type_id == 1) { //dating_range_age_type_id is an "AD" dating
+                if(datingSummary.dating_range_low_value < siteDatingObject.age_older || siteDatingObject.age_older == null) {
+                    siteDatingObject.age_older = datingSummary.dating_range_low_value;
+                    siteDatingObject.older_dataset_id = datingSummary.dataset_id;
+                    siteDatingObject.older_analysis_entity_id = datingSummary.analysis_entity_id;
+                    // Assuming datingSummary has older_type
+                    siteDatingObject.older_type = datingSummary.older_type;
+                }
+    
+                if(datingSummary.dating_range_high_value > siteDatingObject.age_younger || siteDatingObject.age_younger == null) {
+                    siteDatingObject.age_younger = datingSummary.dating_range_high_value;
+                    siteDatingObject.younger_dataset_id = datingSummary.dataset_id;
+                    siteDatingObject.younger_analysis_entity_id = datingSummary.analysis_entity_id;
+                    // Assuming datingSummary has younger_type
+                    siteDatingObject.younger_type = datingSummary.younger_type;
+                }
+            }
+            else {
+                console.warn("This dataset has a dating range type ("+datingSummary.dating_range_age_type_id+") that is not AD, so it will not be included in the site dating summary");
+            }
+        });
+    
         let dl = new DendroLib();
         site.data_groups.forEach(dataGroup => {
             if(dataGroup.method_ids.includes(10)) { //if this is a dendro data group
@@ -492,42 +617,51 @@ class DatingModule {
                 if(!youngestFellingYear || !youngestFellingYear.value) {
                     youngestFellingYear = dl.getOldestFellingYear(dataGroup);
                 }
-
+    
                 if(oldestGerminationYear.value != null && (oldestGerminationYear.value < siteDatingObject.age_older || siteDatingObject.age_older == null)) {
                     siteDatingObject.age_older = oldestGerminationYear.value;
                     siteDatingObject.older_dataset_id = dataGroup.dataset_id;
-                    siteDatingObject.date_type = "dendro";
+                    // Potentially fetch and assign older_analysis_entity_id if relevant for dendro
+                    siteDatingObject.older_type = "dendro";
                 }
                 if(youngestFellingYear.value != null && (youngestFellingYear.value > siteDatingObject.age_younger || siteDatingObject.age_younger == null)) {
                     siteDatingObject.age_younger = youngestFellingYear.value;
                     siteDatingObject.younger_dataset_id = dataGroup.dataset_id;
-                    siteDatingObject.date_type = "dendro";
+                    // Potentially fetch and assign younger_analysis_entity_id if relevant for dendro
+                    siteDatingObject.younger_type = "dendro";
                 }
             }
         });
-
-        
-        //if date type is dendro, then we need to recalculate this to BP years
-        //ignore this for now
-        /*
-        if(siteDatingObject.date_type == "dendro") {
+    
+        // Consider the logic here: if dendro data is present, it might overwrite
+        // the older/younger type even if an earlier AD date was more extreme.
+        // You might need a more sophisticated way to determine the overall
+        // oldest and youngest and their types.
+    
+        if(siteDatingObject.older_type == "dendro") { // Check older_type instead of date_type
             const currentYear = new Date().getFullYear();
-            const diff = currentYear - 1950; // Calculate the difference from 1950 to the current year
-            
+            const diff = currentYear - 1950;
+    
             if (siteDatingObject.age_older !== null) {
                 siteDatingObject.age_older = siteDatingObject.age_older - diff;
             }
+        }
+        if(siteDatingObject.younger_type == "dendro") { // Check younger_type instead of date_type
+            const currentYear = new Date().getFullYear();
+            const diff = currentYear - 1950;
+    
             if (siteDatingObject.age_younger !== null) {
                 siteDatingObject.age_younger = siteDatingObject.age_younger - diff;
             }
             //FTURE ME: PLEASE CHECK THAT THIS BP CALC IS CORRECT :D
         }
-            */
-        
+    
         site.chronology_extremes = siteDatingObject;
         return siteDatingObject;
     }
+
     
+
 }
 
 export default DatingModule;
