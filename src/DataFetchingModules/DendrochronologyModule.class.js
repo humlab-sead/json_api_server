@@ -144,7 +144,7 @@ class DendrochronologyModule {
                     physical_sample_id: measurement.physical_sample_id,
                     sample_name: measurement.sample_name,
                     date_sampled: measurement.date_sampled,
-                    biblio_ids: measurement.biblio_ids ? measurement.biblio_ids : [],
+                    biblio_ids: measurement.biblio_id ? [measurement.biblio_id] : [],
                     method_ids: [10],
                     method_group_ids: [],
                     values: []
@@ -232,7 +232,9 @@ class DendrochronologyModule {
 		tbl_analysis_dating_ranges.age_type_id AS dating_range_age_type_id,
 		tbl_analysis_dating_ranges.season_id AS dating_range_season_id,
 		tbl_analysis_dating_ranges.dating_uncertainty_id AS dating_range_dating_uncertainty_id,
-		tbl_analysis_dating_ranges.is_variant AS dating_range_is_variant
+		tbl_analysis_dating_ranges.is_variant AS dating_range_is_variant,
+		tbl_datasets.dataset_id,
+		tbl_datasets.biblio_id
         FROM
         tbl_analysis_values
         LEFT JOIN tbl_value_classes ON tbl_value_classes.value_class_id=tbl_analysis_values.value_class_id
@@ -241,6 +243,7 @@ class DendrochronologyModule {
         LEFT JOIN tbl_sample_groups sg ON sg.sample_group_id = tbl_physical_samples.sample_group_id
         LEFT JOIN tbl_sites ON tbl_sites.site_id = sg.site_id
 		LEFT JOIN tbl_analysis_dating_ranges ON tbl_analysis_dating_ranges.analysis_value_id=tbl_analysis_values.analysis_value_id
+		LEFT JOIN tbl_datasets ON tbl_datasets.dataset_id=tbl_analysis_entities.dataset_id
         WHERE tbl_sites.site_id=$1
         `;
 
