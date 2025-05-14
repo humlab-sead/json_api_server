@@ -138,13 +138,28 @@ class DendrochronologyModule {
 
             //put all the measurements with the same physical_sample_id in the same data group
             let dataGroup = dataGroups.find(dg => dg.physical_sample_id == measurement.physical_sample_id);
+
+
+            //get all biblio_ids from the datasets if they exist
+            let datasetBiblioIds = measurement.datasets.map(ds => {
+                if(ds.biblio_id) {
+                    return ds.biblio_id;
+                }
+                return null;
+            });
+            datasetBiblioIds = datasetBiblioIds.filter(biblioId => biblioId != null);
+            //make them unique
+            datasetBiblioIds = datasetBiblioIds.filter((value, index, self) => {
+                return self.indexOf(value) === index;
+            });
+
             if(!dataGroup) {
                 dataGroup = {
                     data_group_id: dataGroupId++,
                     physical_sample_id: measurement.physical_sample_id,
                     sample_name: measurement.sample_name,
                     date_sampled: measurement.date_sampled,
-                    biblio_ids: measurement.biblio_id ? [measurement.biblio_id] : [],
+                    biblio_ids: datasetBiblioIds ? datasetBiblioIds : [],
                     method_ids: [10],
                     method_group_ids: [],
                     values: []
