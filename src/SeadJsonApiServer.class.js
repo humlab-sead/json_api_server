@@ -31,7 +31,7 @@ import { Client as ESClient } from "@elastic/elasticsearch";
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.49.7";
+const appVersion = "1.49.8";
 
 class SeadJsonApiServer {
     constructor() {
@@ -183,7 +183,7 @@ class SeadJsonApiServer {
         });
 
         this.expressApp.get('/site/:siteId/:noCache?', async (req, res) => {
-            let site = await this.getSite(req.params.siteId, true, true, req.params.noCache);
+            let site = await this.getSite(req.params.siteId, true, true, req.params.noCache == "true" ? true : false);
             res.header("Content-type", "application/json");
             res.send(JSON.stringify(site, null, 2));
         });
