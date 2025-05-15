@@ -1166,6 +1166,9 @@ class SeadJsonApiServer {
     async getSite(siteId, verbose = true, fetchMethodSpecificData = true, noCache = false) {
         if(verbose) console.log("Request for site", siteId);
         let site = null;
+        if(verbose && noCache) {
+            console.log("getSite - No cache requested");
+        }
         if(this.useSiteCaching && !noCache) {
             site = await this.getSiteFromCache(siteId);
             if(site) {
