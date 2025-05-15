@@ -501,7 +501,6 @@ class DatingModule {
         //TODO: implement the rest of the dating methods here, like C14, etc.
         site.datasets.forEach(dataset => {
             let datingSummary = this.getNormalizedDatingSpanFromDataset(dataset);
-            console.log("datingSummary", datingSummary);
             if(datingSummary.dating_range_age_type_id == 1) { //dating_range_age_type_id is an "AD" dating
                 if(datingSummary.dating_range_low_value < siteDatingObject.age_older || siteDatingObject.age_older == null) {
                     siteDatingObject.age_older = datingSummary.dating_range_low_value;

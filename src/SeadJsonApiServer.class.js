@@ -31,7 +31,7 @@ import { Client as ESClient } from "@elastic/elasticsearch";
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.49.6";
+const appVersion = "1.49.7";
 
 class SeadJsonApiServer {
     constructor() {
@@ -105,6 +105,15 @@ class SeadJsonApiServer {
 
     }
   
+    getDataFetchingModuleByName(name) {
+        let module = null;
+        this.dataFetchingModules.forEach(dataModule => {
+            if(dataModule.name == name) {
+                module = dataModule;
+            }
+        });
+        return module;
+    }
 
     async setupMongoDb() {
         const mongoUser = encodeURIComponent(process.env.MONGO_USER);
@@ -2447,6 +2456,14 @@ class SeadJsonApiServer {
         saveObject.api_source = appName+"-"+appVersion;
         await this.mongo.collection(collection).deleteMany(identifierObject);
         await this.mongo.collection(collection).insertOne(saveObject);
+    }
+
+    async getAllSitesFromCache() {
+        if(this.allCachingDisabled) {
+            return false;
+        }
+        let results = await this.mongo.collection('sites').find({}).toArray();
+        return results;
     }
 
     async getSiteFromCache(siteId) {
