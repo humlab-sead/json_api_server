@@ -31,7 +31,7 @@ import { Client as ESClient } from "@elastic/elasticsearch";
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.49.8";
+const appVersion = "1.49.9";
 
 class SeadJsonApiServer {
     constructor() {
@@ -237,8 +237,7 @@ class SeadJsonApiServer {
 
 
         this.expressApp.post('/export/sites', async (req, res) => {
-            let siteIds = req.body;
-            console.log(siteIds);
+            let siteIds = req.body.siteIds;
             if(typeof siteIds != "object") {
                 res.status(400);
                 res.send("Bad input - should be an array of site IDs\n");
@@ -250,20 +249,17 @@ class SeadJsonApiServer {
                     res.send("Bad input - should be an array of site IDs\n");
                     return;
                 }
-            })
+            });
             let data = await this.exportSites(siteIds);
             let jsonData = JSON.stringify(data, null, 2);
 
-            zip.file('sites_export.json', jsonData);
-            let compressed = zip.generate({base64:false,compression:'DEFLATE'});
-
-            res.writeHead(200, {
-                'Content-Type': "application/zip",
-                'Content-disposition': 'attachment;filename=' + "sites_export.zip",
-                'Content-Length': compressed.length
-            });
-            res.end(Buffer.from(compressed, 'binary'));
+            // --- Return JSON directly ---
+            res.status(200);
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('Content-Disposition', 'attachment; filename="sites_export.json"');
+            res.send(jsonData);
         });
+
 
         this.expressApp.get('/sample/:sampleId', async (req, res) => {
             console.log(req.path);
@@ -632,7 +628,7 @@ class SeadJsonApiServer {
     async exportSites(siteIds) {
         let promises = [];
         siteIds.forEach(siteId => {
-            promises.push(this.getSite(siteId));
+            promises.push(this.getSite(siteId, false));
         });
         
         return await Promise.all(promises);
