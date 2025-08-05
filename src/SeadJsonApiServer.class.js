@@ -31,7 +31,7 @@ import { Client as ESClient } from "@elastic/elasticsearch";
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.49.9";
+const appVersion = "1.49.11";
 
 class SeadJsonApiServer {
     constructor() {
@@ -235,9 +235,9 @@ class SeadJsonApiServer {
             res.end(dataGroupsString);
         });
 
-
         this.expressApp.post('/export/sites', async (req, res) => {
             let siteIds = req.body.siteIds;
+            let methodIds = req.body.methods ? req.body.methods : [];
             if(typeof siteIds != "object") {
                 res.status(400);
                 res.send("Bad input - should be an array of site IDs\n");
@@ -250,7 +250,7 @@ class SeadJsonApiServer {
                     return;
                 }
             });
-            let data = await this.exportSites(siteIds);
+            let data = await this.exportSites(siteIds, methodIds);
             let jsonData = JSON.stringify(data, null, 2);
 
             // --- Return JSON directly ---
@@ -259,7 +259,6 @@ class SeadJsonApiServer {
             res.setHeader('Content-Disposition', 'attachment; filename="sites_export.json"');
             res.send(jsonData);
         });
-
 
         this.expressApp.get('/sample/:sampleId', async (req, res) => {
             console.log(req.path);
@@ -585,6 +584,11 @@ class SeadJsonApiServer {
 
     async datasetSummaries(siteIds) {
 
+        //if siteIds is empty, this should equal returning ALL sites
+        if(!siteIds || siteIds.length == 0) {
+            siteIds = await this.mongo.collection('sites').distinct('site_id');
+        }
+
         const pipeline = [
             {
                 $match: {
@@ -625,13 +629,38 @@ class SeadJsonApiServer {
         return data;
     }
 
-    async exportSites(siteIds) {
+    async exportSites(siteIds, methodIds = []) {
         let promises = [];
         siteIds.forEach(siteId => {
             promises.push(this.getSite(siteId, false));
         });
         
-        return await Promise.all(promises);
+        let sites = await Promise.all(promises);
+        
+        //sites are always returned with all the methods, so now, if a subset of methods were selected we strip out the unwanted methods here
+        //this is done by going through the site.datasets array and filtering on method_id
+        //as well as the site.data_groups array where we will check method_ids
+        sites.forEach(site => {
+            //filter datasets
+            site.datasets = site.datasets.filter(dataset => {
+                return methodIds.includes(dataset.method_id);
+            });
+
+            //filter data groups
+            if(site.data_groups) {
+                site.data_groups = site.data_groups.filter(dataGroup => {
+                    let includeDataGroup = false;
+                    dataGroup.method_ids.forEach(methodId => {
+                        if(methodIds.includes(methodId)) {
+                            includeDataGroup = true;
+                        }
+                    });
+                    return includeDataGroup;
+                });
+            }
+        });
+
+        return sites;
     }
 
     async getTaxon(taxonId, verbose = true) {
