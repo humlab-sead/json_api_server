@@ -1,5 +1,4 @@
 import crypto from 'crypto';
-import { OAuth2Client } from 'google-auth-library';
 
 class Viewstates {
     constructor(app) {
@@ -16,9 +15,9 @@ class Viewstates {
         */
 
         this.app.expressApp.get('/viewstates/:userIdToken', (req, res) => { this.handleViewStateListGet(req, res); });
-        this.app.expressApp.get('/viewstate/:viewstateId', this.handleViewStateGet);
-        this.app.expressApp.post('/viewstate', this.handleViewStatePost);
-        this.app.expressApp.delete('/viewstate/:viewstateId/:userIdToken', this.handleViewstateDelete); //We never actually delete anything, but we use this for removing the associated user information
+        this.app.expressApp.get('/viewstate/:viewstateId', this.handleViewStateGet.bind(this));
+        this.app.expressApp.post('/viewstate', this.handleViewStatePost.bind(this));
+        this.app.expressApp.delete('/viewstate/:viewstateId/:userIdToken', this.handleViewstateDelete.bind(this)); //We never actually delete anything, but we use this for removing the associated user information
     }
 
     getUserToken(userEmail) {
@@ -45,14 +44,36 @@ class Viewstates {
         });
     }
 
-    handleViewstateDelete(req, res) {
-	    console.log("handleViewstateDelete");
-        const viewStatesCur = this.getViewState(req.params.viewstateId);
-        let viewStates = [];
-        let userEmail = "";
+    handleViewStateListGet(req, res) {
+	    console.log("handleViewStateListGet");
+
+        let userId = this.app.authHandler.getUserId(req);
+
+        if(!userId) {
+            console.log("FAILED sending list of viewstates for user");
+            return res.send('{"status": "failed"}');
+        }
+
+        const viewStatesCur = this.getViewStateList(userId);
+            
         viewStatesCur.toArray((err, viewStates) => {
             if (err) throw err;
-            userEmail = viewStates[0].user;
+            console.log("Sending list of viewstates for user "+userId);
+            return res.send(viewStates);
+        });
+    }
+
+    handleViewstateDelete(req, res) {
+        let user = this.app.authHandler.getUser(req);
+        if(!user) {
+            console.log("handleViewstateDelete - no user");
+            return res.send('{"status": "failed"}');
+        }
+
+	    console.log("handleViewstateDelete");
+        const viewStatesCur = this.getViewState(req.params.viewstateId);
+        viewStatesCur.toArray((err, viewStates) => {
+            if (err) throw err;
             console.log("Request to anonymize viewstate "+req.params.viewstateId);
 
             const user = new User();
@@ -70,88 +91,61 @@ class Viewstates {
             });
         });
     }
-
-    handleViewStateListGet(req, res) {
-	    console.log("handleViewStateListGet");
-        const user = new User();
-        let userVerifyPromise = user.verifyGoogleUser(req.params.userIdToken);
-	    console.log("User verification pending");
-        userVerifyPromise.then(userObj => {
-            if(userObj === false) {
-                console.log("FAILED sending list of viewstates for user ");
-                //console.log("FAILED sending list of viewstates for user "+this.getUserToken(user.email));
-                return res.send('{"status": "failed"}');
-            }
-
-            const viewStatesCur = this.getViewStateList(user.getUserToken());
-                
-            let viewStates = [];
-            viewStatesCur.toArray((err, viewStates) => {
-                if (err) throw err;
-                console.log("Sending list of viewstates for user "+user.getUserToken());
-                return res.send(viewStates);
-            });
-        });
-    }
     
-    handleViewStatePost(req, res) {
+    async handleViewStatePost(req, res) {
 	    console.log("handleViewStatePost");
         let jsonData = req.body;
-        const user = new User();
-        let userVerifyPromise = user.verifyGoogleUser(jsonData.user_id_token);
-        
-        userVerifyPromise.then(userObj => {
-            if(userObj === false) {
-                console.log("FAILED storing viewstate - no user");
-                return res.send('{"status": "failed"}');
-            }
+        const user = this.app.authHandler.getUser(req);
+        if(!user) {
+            console.log("handleViewStatePost - no user");
+            return res.send('{"status": "failed"}');
+        }
 
-            let status = this.saveViewState(user.getUserToken(), jsonData.data);
-            if(!status) {
-                return res.send('{"status": "failed"}');
-            }
-            console.log("Storing viewstate for user "+user.getUserToken());
-            return res.send('{"status": "ok"}');
-        });
+        console.log(JSON.stringify(user, null, 2));
+
+        let userId = this.app.authHandler.getUserId(req);
+        let status = await this.saveViewState(userId, jsonData.data);
+        if(!status) {
+            return res.send('{"status": "failed"}');
+        }
+        console.log("Storing viewstate for user "+userId);
+        return res.send('{"status": "ok"}');
     }
 
 
     // low level operations
-    getViewStateList(userToken) {
-        const cursor = this.app.mongo.collection('viewstate').find({ user: userToken });
+    getViewStateList(userId) {
+        const cursor = this.app.mongo.collection('viewstates').find({ user: userId });
         return cursor;
     }
 
     getViewState(vsId) {
-        const cursor = this.app.mongo.collection('viewstate').find({ id: vsId });
+        const cursor = this.app.mongo.collection('viewstates').find({ id: vsId });
         return cursor;
     }
 
     loadViewState(viewStateId) {
-        const cursor = this.app.mongo.collection('viewstate').find({ id: viewStateId });
+        const cursor = this.app.mongo.collection('viewstates').find({ id: viewStateId });
     }
       
-    saveViewState(user, viewState) {
+    async saveViewState(user, viewState) {
         viewState = JSON.parse(viewState);
 
-        viewState.user = user;
+        viewState.user = user.email;
 
-        let p = this.app.mongo.collection('viewstate').insertOne(viewState);
+        await this.app.mongo.collection('viewstates').insertOne(viewState);
 
-        p.then((a, b, c) => {
-            console.log("Viewstate inserted");
-        });
-      
+        console.log("Viewstate inserted");
         return true;
     }
 
     deleteUserFromViewstate(viewstateId) {
-        const cursor = this.app.mongo.collection('viewstate').update({ id: viewstateId }, { user: "deleted" });
+        const cursor = this.app.mongo.collection('viewstates').update({ id: viewstateId }, { user: "deleted" });
         return cursor;
     }
 
     deleteViewstate(viewstateId) {
-        const cursor = this.app.mongo.collection('viewstate').deleteOne({ id: viewstateId });
+        const cursor = this.app.mongo.collection('viewstates').deleteOne({ id: viewstateId });
         return cursor;
     }
 }

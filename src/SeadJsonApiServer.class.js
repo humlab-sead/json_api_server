@@ -23,15 +23,14 @@ import Chronology from "./EndpointModules/Chronology.class.js";
 import Taxa from "./EndpointModules/Taxa.class.js";
 import Graphs from "./EndpointModules/Graphs.class.js";
 import Viewstates from "./EndpointModules/Viewstates.class.js";
-
-import response from 'express/lib/response.js';
+import AuthenticationHandler from './AuthenticationHandler.class.js';
 import basicAuth from 'basic-auth';
 
 import { Client as ESClient } from "@elastic/elasticsearch";
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.49.11";
+const appVersion = "1.49.12";
 
 class SeadJsonApiServer {
     constructor() {
@@ -50,7 +49,6 @@ class SeadJsonApiServer {
         this.protectedEndpointUser = process.env.PROTECTED_ENDPOINTS_USER;
         this.protectedEndpointPass = process.env.PROTECTED_ENDPOINTS_PASS;
         this.dendroLib = new DendroLib();
-        
         /*
         const esClient = new ESClient({
             node: 'https://elasticsearch:9200', // Elasticsearch endpoint
@@ -76,6 +74,7 @@ class SeadJsonApiServer {
 
         this.setupDatabase().then(() => {
             this.setupEndpoints();
+            this.authHandler = new AuthenticationHandler(this);
 
             //These are the data fetching modules
             //they have some requirements on them regarding methods they need to implement
@@ -1190,6 +1189,7 @@ class SeadJsonApiServer {
 
     async getSite(siteId, verbose = true, fetchMethodSpecificData = true, noCache = false) {
         if(verbose) console.log("Request for site", siteId);
+        
         let site = null;
         if(verbose && noCache) {
             console.log("getSite - No cache requested");
