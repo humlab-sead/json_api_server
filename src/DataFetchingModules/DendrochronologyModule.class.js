@@ -501,6 +501,11 @@ class DendrochronologyModule {
             siteIds = [];
         }
 
+        // Ensure siteIds is an array
+        if(!Array.isArray(siteIds)) {
+            siteIds = [siteIds];
+        }
+
         let cacheId = crypto.createHash('sha256');
         siteIds.sort((a, b) => a - b);
         cacheId = cacheId.update('getTreeSpeciesForSites'+JSON.stringify(siteIds)).digest('hex');
