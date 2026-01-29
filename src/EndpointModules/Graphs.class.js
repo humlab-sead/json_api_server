@@ -46,6 +46,47 @@ class Graphs {
           res.end(JSON.stringify(analysisMethods, null, 2));
         });
 
+        this.app.expressApp.post('/graphs/datings', async (req, res) => {
+          let siteIds = req.body;
+          if(typeof siteIds != "object") {
+              res.status(400);
+              res.send("Bad input - should be an array of site IDs");
+              return;
+          }
+          
+          siteIds.forEach(siteId => {
+              if(!parseInt(siteId)) {
+                  res.status(400);
+                  res.send("Bad input - should be an array of site IDs");
+                  return;
+              }
+          });
+
+          let datings = await this.fetchDatingsSummaryForSites(siteIds);
+          res.header("Content-type", "application/json");
+          res.end(JSON.stringify(datings, null, 2));
+        });
+
+        
+        this.app.expressApp.post('/graphs/site/domain_sample_summary', async (req, res) => {
+          let siteIds = req.body;
+          if(typeof siteIds != "object") {
+              res.status(400);
+              res.send("Bad input - should be an array of site IDs");
+              return;
+          }
+
+          siteIds.forEach(siteId => {
+              if(!parseInt(siteId)) {
+                  res.status(400);
+                  res.send("Bad input - should be an array of site IDs");
+                  return;
+              }
+          });
+          let data = await this.fetchDomainSampleSummaryForSites(siteIds);
+          res.header("Content-type", "application/json");
+          res.end(JSON.stringify(data, null, 2));
+        });
         
         this.app.expressApp.post('/graphs/data_count', async (req, res) => {
           let siteIds = req.body.siteIds;
@@ -1097,6 +1138,347 @@ class Graphs {
   
       return resultObject;
     }
+
+    async fetchDomains() {
+      // Get the list of domains and their associated methods from the postgres database
+      const sql = `
+        select facet.facet.facet_id, facet_code, display_title, clause from 
+        facet.facet
+        join facet.facet_clause on facet.facet_clause.facet_id = facet.facet.facet_id
+        where facet.facet_group_id = 999
+      `;
+      let pgClient = await this.app.getDbConnection();
+      try {
+        let res = await pgClient.query(sql);
+        // For each row, parse the clause column for numbers in the IN (...)
+        return res.rows.map(row => {
+          let methodIds = [];
+          // Regex to match: in (number, number, ...)
+          const match = row.clause.match(/in\s*\(([^)]+)\)/i);
+          if (match) {
+            // Only accept if it's a plain list of numbers (no SELECT etc)
+            if (!/select/i.test(match[1])) {
+              methodIds = match[1]
+                .split(',')
+                .map(s => parseInt(s.trim(), 10))
+                .filter(n => !isNaN(n));
+            }
+          }
+          return {
+            ...row,
+            method_ids: methodIds
+          };
+        });
+      } finally {
+        this.app.releaseDbConnection(pgClient);
+      }
+    }
+
+    async fetchMethods() {
+      const sql = `SELECT method_id, method_name FROM tbl_methods`;
+      const pgClient = await this.app.getDbConnection();
+      try {
+        const res = await pgClient.query(sql);
+        const methodMap = {};
+
+        res.rows.forEach(row => {
+          methodMap[row.method_id] = row.method_name;
+        });
+        return methodMap;
+      } finally {
+        this.app.releaseDbConnection(pgClient);
+      }
+    }
+
+    async fetchDomainSampleSummaryForSites(siteIds) {
+      // Get domains and their method_ids
+      const domains = await this.fetchDomains();
+      const methods = await this.fetchMethods();
+      const sitesCol = this.app.mongo.collection('sites');
+      const results = [];
+
+      // Only fetch the fields we need: sample_groups.physical_samples.physical_sample_id and datasets.method_id, datasets.analysis_entities.physical_sample_id
+      const projection = {
+        site_id: 1,
+        sample_groups: { physical_samples: { physical_sample_id: 1 } },
+        datasets: { method_id: 1, analysis_entities: { physical_sample_id: 1 } }
+      };
+      // MongoDB projection syntax for nested arrays requires dot notation for full support, so use string keys
+      const sites = await sitesCol.find(
+        { site_id: { $in: siteIds } },
+        {
+          projection: {
+            site_id: 1,
+            "sample_groups.physical_samples.physical_sample_id": 1,
+            "datasets.method_id": 1,
+            "datasets.analysis_entities.physical_sample_id": 1
+          }
+        }
+      ).toArray();
+
+      // For each domain, count samples per method
+      for (const domain of domains) {
+        const { facet_id, clause, ...domainOut } = domain;
+        if (!domain.method_ids || domain.method_ids.length === 0) {
+          results.push({
+            ...domainOut,
+            sample_count: 0,
+            method_counts: []
+          });
+          continue;
+        }
+
+        // Map: method_id -> Set of sample ids (to avoid double-counting same sample for same method in a site)
+        const methodSampleMap = {};
+        domain.method_ids.forEach(mid => { methodSampleMap[mid] = new Set(); });
+
+        // Traverse all sites
+        for (const site of sites) {
+          // Build a lookup: physical_sample_id -> sample object
+          const sampleIdSet = new Set();
+          if (!site.sample_groups) continue;
+          for (const sg of site.sample_groups) {
+            if (!sg.physical_samples) continue;
+            for (const sample of sg.physical_samples) {
+              if (sample && sample.physical_sample_id != null) {
+                sampleIdSet.add(sample.physical_sample_id);
+              }
+            }
+          }
+
+          // For each dataset, for each analysis_entity, check if its physical_sample_id is in sampleIdSet
+          if (!site.datasets) continue;
+          for (const dataset of site.datasets) {
+            const method_id = dataset.method_id;
+            if (!domain.method_ids.includes(method_id)) continue;
+            if (!dataset.analysis_entities) continue;
+            for (const ae of dataset.analysis_entities) {
+              if (ae && ae.physical_sample_id != null && sampleIdSet.has(ae.physical_sample_id)) {
+                methodSampleMap[method_id].add(ae.physical_sample_id);
+              }
+            }
+          }
+        }
+
+        // Build method_counts array in the order of domain.method_ids
+        const method_counts = domain.method_ids.map(method_id => {
+          return {
+            method_id,
+            method_name: methods[method_id] || null,
+            sample_count: methodSampleMap[method_id] ? methodSampleMap[method_id].size : 0
+          };
+        });
+        const sample_count = method_counts.reduce((sum, m) => sum + m.sample_count, 0);
+        results.push({
+          ...domainOut,
+          sample_count,
+          method_counts
+        });
+      }
+      return { domains: results };
+    }
+
+    /**
+     * Aggregates analysis_entity_ages from sites, summarizes ages for a histogram using RANGE-BINNING
+     * (each site counts in every bin it spans), and returns total site count.
+     *
+     * Age semantics (inclusive & flexible):
+     * - If analysis_entity_ages.age exists: treat as a degenerate range [age, age]
+     * - Else if age_younger + age_older exist: treat as range [age_younger, age_older]
+     * - Each site is counted at most once per bin (unique sites per bin).
+     *
+     * Output:
+     * { cache_id, histogram, total_sites, sites_with_datings }
+     *
+     * histogram: Array<{ bin_start, bin_end, count }>
+     * - Uses half-open bins [bin_start, bin_end)
+     */
+    async fetchDatingsSummaryForSites(siteIds) {
+      // ---- Guard / normalization ----
+      const ids = Array.isArray(siteIds) ? siteIds.slice() : [];
+      ids.sort((a, b) => a - b);
+
+      // ---- Cache key ----
+      const cacheKey = crypto
+        .createHash("sha256")
+        .update("datings_summary_rangebin_v2:" + JSON.stringify(ids))
+        .digest("hex");
+
+      const identifierObject = { cache_id: cacheKey };
+
+      // ---- Check cache if enabled ----
+      if (this.app.useGraphCaching) {
+        const cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
+        if (cachedData !== false) return cachedData;
+      }
+
+      const sitesCol = this.app.mongo.collection("sites");
+
+      // ---- Total sites in DB (global denominator) ----
+      // Consider caching this separately if it becomes hot.
+      const total_sites = await sitesCol.countDocuments();
+
+      // ---- Common expression: derive younger/older from age or age_younger/age_older ----
+      // If age exists: y=o=age
+      // Else: y=age_younger, o=age_older
+      const deriveYOProject = {
+        site_id: 1,
+        y_raw: {
+          $cond: [
+            { $ne: ["$analysis_entity_ages.age", null] },
+            { $toDouble: "$analysis_entity_ages.age" },
+            { $toDouble: "$analysis_entity_ages.age_younger" }
+          ]
+        },
+        o_raw: {
+          $cond: [
+            { $ne: ["$analysis_entity_ages.age", null] },
+            { $toDouble: "$analysis_entity_ages.age" },
+            { $toDouble: "$analysis_entity_ages.age_older" }
+          ]
+        }
+      };
+
+      // ---- 1) Compute min/max over derived ranges (min younger, max older) ----
+      const [mm] = await sitesCol
+        .aggregate([
+          { $match: { site_id: { $in: ids } } },
+          { $unwind: "$analysis_entity_ages" },
+          { $project: deriveYOProject },
+          { $match: { y_raw: { $ne: null }, o_raw: { $ne: null } } },
+          // Normalize flipped data just in case:
+          {
+            $project: {
+              y: { $min: ["$y_raw", "$o_raw"] },
+              o: { $max: ["$y_raw", "$o_raw"] }
+            }
+          },
+          {
+            $group: {
+              _id: null,
+              minAge: { $min: "$y" },
+              maxAge: { $max: "$o" }
+            }
+          }
+        ])
+        .toArray();
+
+      // If no datings found, return empty histogram quickly
+      const binCount = 20;
+
+      // We still return a stable histogram structure (optional).
+      // If you prefer histogram = [] when no data, change below.
+      if (!mm || !isFinite(mm.minAge) || !isFinite(mm.maxAge)) {
+        const resultObject = {
+          cache_id: cacheKey,
+          histogram: [],
+          total_sites,
+          sites_with_datings: 0
+        };
+
+        if (this.app.useGraphCaching) {
+          this.app.saveObjectToCache("graph_cache", identifierObject, resultObject);
+        }
+        return resultObject;
+      }
+
+      const minAge = mm.minAge;
+      const maxAge = mm.maxAge;
+
+      let binSize = (maxAge - minAge) / binCount;
+      if (!isFinite(binSize) || binSize <= 0) binSize = 1;
+
+      // ---- 2) Count UNIQUE SITES per bin by expanding ranges into bin indices ----
+      const counts = await sitesCol
+        .aggregate([
+          { $match: { site_id: { $in: ids } } },
+          { $unwind: "$analysis_entity_ages" },
+          { $project: deriveYOProject },
+          { $match: { y_raw: { $ne: null }, o_raw: { $ne: null } } },
+
+          // Normalize
+          {
+            $project: {
+              site_id: 1,
+              y: { $min: ["$y_raw", "$o_raw"] },
+              o: { $max: ["$y_raw", "$o_raw"] }
+            }
+          },
+
+          // Compute start/end bin indices
+          {
+            $project: {
+              site_id: 1,
+              startIdx: { $floor: { $divide: [{ $subtract: ["$y", minAge] }, binSize] } },
+              endIdx: { $floor: { $divide: [{ $subtract: ["$o", minAge] }, binSize] } }
+            }
+          },
+
+          // Clamp indices to [0, binCount-1]
+          {
+            $project: {
+              site_id: 1,
+              startIdx: { $max: [0, "$startIdx"] },
+              endIdx: { $min: [binCount - 1, "$endIdx"] }
+            }
+          },
+
+          // Expand to all bins in [startIdx..endIdx]
+          {
+            $project: {
+              site_id: 1,
+              binIdx: { $range: ["$startIdx", { $add: ["$endIdx", 1] }] }
+            }
+          },
+          { $unwind: "$binIdx" },
+
+          // Unique sites per bin: (binIdx, site_id)
+          { $group: { _id: { binIdx: "$binIdx", site_id: "$site_id" } } },
+          { $group: { _id: "$_id.binIdx", count: { $sum: 1 } } },
+          { $sort: { _id: 1 } }
+        ])
+        .toArray();
+
+      // ---- 3) sites_with_datings: sites that have ANY valid age or age_younger/age_older ----
+      const [{ sites_with_datings = 0 } = {}] = await sitesCol
+        .aggregate([
+          { $match: { site_id: { $in: ids } } },
+          { $unwind: "$analysis_entity_ages" },
+          { $project: deriveYOProject },
+          { $match: { y_raw: { $ne: null }, o_raw: { $ne: null } } },
+          { $group: { _id: "$site_id" } },
+          { $count: "sites_with_datings" }
+        ])
+        .toArray();
+
+      // ---- 4) Materialize fixed 20-bin histogram ----
+      const histogram = Array.from({ length: binCount }, (_, i) => ({
+        bin_start: minAge + i * binSize,
+        bin_end: minAge + (i + 1) * binSize,
+        count: 0
+      }));
+
+      for (const row of counts) {
+        const idx = row._id;
+        if (Number.isInteger(idx) && idx >= 0 && idx < binCount) {
+          histogram[idx].count = row.count;
+        }
+      }
+
+      const resultObject = {
+        cache_id: cacheKey,
+        histogram,
+        total_sites,
+        sites_with_datings
+      };
+
+      if (this.app.useGraphCaching) {
+        this.app.saveObjectToCache("graph_cache", identifierObject, resultObject);
+      }
+
+      return resultObject;
+    }
+
 
     async fetchAnalysisMethodsSummaryForSites(siteIds) {
         let cacheId = crypto.createHash('sha256');
