@@ -4,7 +4,7 @@ class Taxa {
     constructor(app) {
         this.app = app;
 
-        this.app.expressApp.post('/graphs/toptaxa', async (req, res) => {
+        this.app.expressApp.post('/graphs/toptaxa/:methodId?', async (req, res) => {
             let siteIds = req.body;
             if(typeof siteIds != "object") {
                 res.status(400);
@@ -20,7 +20,8 @@ class Taxa {
                 }
             });
 
-            let taxaList = await this.fetchTaxaForSites(siteIds, 20);
+            let methodId = req.params.methodId ? parseInt(req.params.methodId) : 3;
+            let taxaList = await this.fetchTaxaForSites(siteIds, 20, methodId);
             res.header("Content-type", "application/json");
             res.send(JSON.stringify(taxaList, null, 2));
         });
@@ -109,8 +110,15 @@ class Taxa {
         return abundances;
     }
 
-    async fetchTaxaForSites(siteIds, limit = 10) {
-        //console.log("Fetching taxa for sites", siteIds);
+    /**
+     * fetchTaxaForSites
+     * @param {*} siteIds 
+     * @param {*} limit 
+     * @param {*} methodId - default to 3 - abundance counting insects/palaeoentomology, can also be set to 8 for archeobotany
+     * @returns 
+     */
+    async fetchTaxaForSites(siteIds, limit = 10, methodId = 3) {
+        console.log("Fetching taxa for sites, methodId:", methodId);
 
         let cacheId = crypto.createHash('sha256');
         siteIds.sort((a, b) => a - b);
@@ -127,14 +135,14 @@ class Taxa {
         let query = {
             $and: [
                 { site_id: { $in : siteIds }},
-                { "datasets.method_id": 3 },
+                { "datasets.method_id": methodId },
             ]
         }
         
         const aggregationPipeline = [
             { $match: query },
             { $unwind: "$datasets" },
-            { $match: { "datasets.method_id": 3 } },
+            { $match: { "datasets.method_id": methodId } },
             { $unwind: "$datasets.analysis_entities" },
             { $unwind: "$datasets.analysis_entities.abundances" },
             {
