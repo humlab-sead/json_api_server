@@ -276,6 +276,15 @@ class SeadJsonApiServer {
             }
         });
 
+        this.expressApp.post('/site/sampletypes', async (req, res) => {
+            console.log(req.path);
+            let data = await this.getSampleTypes(req.body.sites);
+            res.send({
+                requestId: req.body.requestId,
+                categories: data
+            });
+        });
+
         this.expressApp.get('/testpassword', this.checkBasicAuth, async (req, res) => {
             console.log(req.path);
             res.end("Password works\n");
@@ -2557,6 +2566,100 @@ class SeadJsonApiServer {
         }
 
         return results;
+    }
+
+    async getSampleTypes(siteIds) {
+        if(!siteIds) {
+            siteIds = [];
+        }
+
+        // Ensure siteIds is an array
+        if(!Array.isArray(siteIds)) {
+            siteIds = [siteIds];
+        }
+
+        let cacheId = crypto.createHash('sha256');
+        siteIds.sort((a, b) => a - b);
+        cacheId = cacheId.update('getSampleTypes'+JSON.stringify(siteIds)).digest('hex');
+        let identifierObject = { cache_id: cacheId };
+      
+        let cachedData = await this.getObjectFromCache("graph_cache", identifierObject);
+        if (cachedData !== false) {
+          return cachedData.data;
+        }
+
+        if(siteIds.length == 0) {
+            let pgClient = await this.getDbConnection();
+            if(!pgClient) {
+                return false;
+            }
+
+            let sql = `SELECT site_id FROM tbl_sites;`;
+            let data = await pgClient.query(sql);
+            data.rows.forEach(row => {
+                siteIds.push(row.site_id);
+            });
+            this.releaseDbConnection(pgClient);
+        }
+        
+        let data = this.mongo.collection("sites").aggregate([
+            // Match documents that contain the specified site IDs
+            {
+                $match: {
+                    'site_id': { $in: siteIds }
+                }
+            },
+            // Unwind the sample groups
+            { $unwind: '$sample_groups' },
+            // Unwind the physical samples
+            { $unwind: '$sample_groups.physical_samples' },
+            // Lookup sample type information from the lookup table
+            {
+                $lookup: {
+                    from: 'sites',
+                    let: { sample_type_id: '$sample_groups.physical_samples.sample_type_id' },
+                    pipeline: [
+                        { $unwind: '$lookup_tables' },
+                        { $match: { $expr: { $eq: ['$sample_type_id', '$$sample_type_id'] } } }
+                    ],
+                    as: 'sample_type_info'
+                }
+            },
+            // Group by sample type and count occurrences
+            {
+              $group: {
+                _id: {
+                    sample_type_id: '$sample_groups.physical_samples.sample_type_id',
+                    sample_type_name: '$sample_groups.physical_samples.sample_type_name'
+                },
+                count: { $sum: 1 }
+              }
+            },
+            // Project to reshape the output
+            {
+              $project: {
+                _id: 0,
+                name: '$_id.sample_type_name',
+                sample_type_id: '$_id.sample_type_id',
+                count: 1
+              }
+            },
+            // Sort by count descending
+            {
+                $sort: { count: -1 }
+            }
+        ]);
+
+        let sampleTypeCategories = await data.toArray();
+        
+        let resultObject = {
+            cache_id: cacheId,
+            data: sampleTypeCategories
+        };
+        
+        await this.saveObjectToCache("graph_cache", identifierObject, resultObject);
+
+        return sampleTypeCategories;
     }
 
     async flushGraphCache() {
