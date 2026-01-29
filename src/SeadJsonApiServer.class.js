@@ -30,7 +30,7 @@ import { Client as ESClient } from "@elastic/elasticsearch";
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.49.12";
+const appVersion = "1.50.0";
 
 class SeadJsonApiServer {
     constructor() {
