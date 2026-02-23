@@ -499,7 +499,7 @@ class DatingModule {
                                 });
                             }
                         }
-                        if(ae.entity_ages) {
+                        if(ae.analysisEntityAgesData) {
 
                             analysisEntitiesSet.add(ae.analysis_entity_id);
                             physicalSampleIdsSet.add(ae.physical_sample_id);
@@ -508,7 +508,7 @@ class DatingModule {
                             const addValueToDataGroup = (key, value) => {
                                 if (value) {
                                     dataGroup.values.push({
-                                        analysis_entity_id: ae.entity_ages.analysis_entity_id,
+                                        analysis_entity_id: ae.analysisEntityAgesData.analysis_entity_id,
                                         dataset_id: dataset.dataset_id,
                                         key: key,
                                         value: value,
@@ -520,13 +520,13 @@ class DatingModule {
                                     });
                                 }
                             };
-
-                            addValueToDataGroup('age', ae.entity_ages.age);
-                            addValueToDataGroup('age_older', ae.entity_ages.age_older);
-                            addValueToDataGroup('age_younger', ae.entity_ages.age_younger);
-                            addValueToDataGroup('age_range', ae.entity_ages.age_range);
-                            addValueToDataGroup('chronology_id', ae.entity_ages.chronology_id);
-                            addValueToDataGroup('dating_specifier', ae.entity_ages.dating_specifier);
+                            
+                            addValueToDataGroup('age', ae.analysisEntityAgesData.age);
+                            addValueToDataGroup('age_older', ae.analysisEntityAgesData.age_older);
+                            addValueToDataGroup('age_younger', ae.analysisEntityAgesData.age_younger);
+                            addValueToDataGroup('age_range', ae.analysisEntityAgesData.age_range);
+                            addValueToDataGroup('chronology_id', ae.analysisEntityAgesData.chronology_id);
+                            addValueToDataGroup('dating_specifier', ae.analysisEntityAgesData.dating_specifier);
                             
                         }
                     }
