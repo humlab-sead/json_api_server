@@ -378,7 +378,7 @@ class AbundanceModule {
                                 let sampleName = this.app.getSampleNameBySampleId(site, ae.physical_sample_id);
 
                                 dataGroup.values.push({
-                                    analysis_entitity_id: ae.analysis_entity_id,
+                                    analysis_entity_id: ae.analysis_entity_id,
                                     dataset_id: dataset.dataset_id,
                                     key: ae.physical_sample_id, 
                                     value: abundance,

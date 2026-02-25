@@ -116,7 +116,7 @@ export default class AdnaModule {
             }
     
             const value = {
-                analysis_entitity_id: row.analysis_entity_id || null,
+                analysis_entity_id: row.analysis_entity_id || null,
                 dataset_id: row.dataset_id || null,
                 valueClassId: row.value_class_id,
                 key: row.name,

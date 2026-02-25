@@ -109,7 +109,7 @@ class MeasuredValuesModule {
                                 }
 
                                 dataGroup.values.push({
-                                    analysis_entitity_id: ae.analysis_entity_id,
+                                    analysis_entity_id: ae.analysis_entity_id,
                                     dataset_id: ae.dataset_id,
                                     key: ae.physical_sample_id,
                                     physical_sample_id: ae.physical_sample_id, 

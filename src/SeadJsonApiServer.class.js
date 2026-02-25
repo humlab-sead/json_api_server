@@ -30,7 +30,7 @@ import { Client as ESClient } from "@elastic/elasticsearch";
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.50.2";
+const appVersion = "1.51.1";
 
 class SeadJsonApiServer {
     constructor() {
@@ -122,6 +122,72 @@ class SeadJsonApiServer {
         this.mongo = this.mongoClient.db(process.env.MONGO_DB);
     }
 
+    async checkPostgresHealth() {
+        if(!this.pgPool) {
+            return {
+                ok: false,
+                error: "Postgres pool not initialized"
+            };
+        }
+
+        let pgClient = null;
+        try {
+            pgClient = await this.getDbConnection();
+            if(!pgClient) {
+                return {
+                    ok: false,
+                    error: "Could not acquire Postgres connection"
+                };
+            }
+
+            const result = await pgClient.query("SELECT 1 AS health");
+            const isHealthy = result?.rows?.[0]?.health === 1;
+            if(!isHealthy) {
+                return {
+                    ok: false,
+                    error: "Postgres ping query returned unexpected result"
+                };
+            }
+
+            return {
+                ok: true
+            };
+        }
+        catch(error) {
+            return {
+                ok: false,
+                error: error.message
+            };
+        }
+        finally {
+            if(pgClient && !this.useStaticDbConnection) {
+                await this.releaseDbConnection(pgClient);
+            }
+        }
+    }
+
+    async checkMongoHealth() {
+        if(!this.mongo) {
+            return {
+                ok: false,
+                error: "Mongo database not initialized"
+            };
+        }
+
+        try {
+            await this.mongo.command({ ping: 1 });
+            return {
+                ok: true
+            };
+        }
+        catch(error) {
+            return {
+                ok: false,
+                error: error.message
+            };
+        }
+    }
+
     getHashFromString(string) {
         let sha = crypto.createHash('sha1');
         let hashKey = string.toString();
@@ -146,8 +212,10 @@ class SeadJsonApiServer {
 
     setupEndpoints() {
         this.expressApp.all('*', (req, res, next) => {
-            console.log("Request: "+req.method+" "+req.path);
-            //console.time("Request: "+req.method+" "+req.path+" completed");
+            //don't log the healthcheck endpoint, since it's called so often
+            if (req.path !== '/health') {
+                console.log("Request: "+req.method+" "+req.path);
+            }
             next();
             res.addListener("close", () => {
                 //console.timeEnd("Request: "+req.method+" "+req.path+" completed");
@@ -160,6 +228,26 @@ class SeadJsonApiServer {
                 version: appVersion
             }
             res.send(JSON.stringify(versionInfo, null, 2));
+        });
+
+        this.expressApp.get('/health', async (req, res) => {
+            const [postgres, mongo] = await Promise.all([
+                this.checkPostgresHealth(),
+                this.checkMongoHealth()
+            ]);
+
+            const healthy = postgres.ok && mongo.ok;
+
+            res.status(healthy ? 200 : 503).json({
+                status: healthy ? "ok" : "error",
+                app: this.appName,
+                version: this.appVersion,
+                uptime: process.uptime(),
+                dependencies: {
+                    postgres,
+                    mongo
+                }
+            });
         });
 
         this.expressApp.get('/createMongoSearchIndex', this.checkBasicAuth, async (req, res) => {

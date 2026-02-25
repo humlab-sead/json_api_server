@@ -58,6 +58,22 @@ class DendrochronologyModule {
             });
         });
 
+        this.expressApp.post('/dendro/variablepersite/average', async (req, res) => {
+            let data = await this.getDendroVariableAveragePerSite(req.body.sites, req.body.variable);
+            res.send({
+                requestId: req.body.requestId,
+                categories: data
+            });
+        });
+
+        this.expressApp.post('/dendro/variablepersite/categorical', async (req, res) => {
+            let data = await this.getDendroVariableCategoricalPerSite(req.body.sites, req.body.variable);
+            res.send({
+                requestId: req.body.requestId,
+                categories: data
+            });
+        });
+
         this.expressApp.post('/dendro/featuretypes', async (req, res) => {
             let data = await this.getFeatureTypesForSites(req.body.sites);
             res.send({
@@ -174,7 +190,7 @@ class DendrochronologyModule {
 
             measurement.datasets.forEach(ds => {
                 dataGroup.values.push({
-                    analysis_entitity_id: null,
+                    analysis_entity_id: null,
                     dataset_id: null,
                     valueClassId: ds.id,
                     key: ds.label, 
@@ -187,7 +203,7 @@ class DendrochronologyModule {
 
             if(ringWidths) {
                 dataGroup.values.push({
-                    analysis_entitity_id: null,
+                    analysis_entity_id: null,
                     dataset_id: null,
                     valueClassId: null,
                     key: "Ring widths", 
@@ -495,6 +511,322 @@ class DendrochronologyModule {
         return featureTypeCategories;
     }
 
+    async getDendroVariablePerSites(siteIds, dendroVariable = "Tree species") {
+        // Wrapper method for backward compatibility
+        // Attempts to detect data type and delegate to appropriate method
+        if(!siteIds) {
+            siteIds = [];
+        }
+
+        // Ensure siteIds is an array
+        if(!Array.isArray(siteIds)) {
+            siteIds = [siteIds];
+        }
+
+        let cacheId = crypto.createHash('sha256');
+        siteIds.sort((a, b) => a - b);
+        cacheId = cacheId.update('getDendroVariablePerSites'+JSON.stringify(siteIds)+dendroVariable).digest('hex');
+        let identifierObject = { cache_id: cacheId };
+      
+        let cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
+        if (cachedData !== false) {
+          return cachedData.data;
+        }
+
+        //If no sites are selected we assume ALL sites
+        if(siteIds.length == 0) {
+            let pgClient = await this.app.getDbConnection();
+            if(!pgClient) {
+                return false;
+            }
+
+            let sql = `SELECT site_id FROM tbl_sites;`;
+            let data = await pgClient.query(sql);
+            data.rows.forEach(row => {
+                siteIds.push(row.site_id);
+            });
+            this.app.releaseDbConnection(pgClient);
+        }
+        
+        let data = this.app.mongo.collection("sites").aggregate([
+            {
+                $match: {
+                    'data_groups.values.key': dendroVariable,
+                    'site_id': { $in: siteIds },
+                }
+            },
+            { $unwind: '$data_groups' },
+            { $unwind: '$data_groups.values' },
+            {
+              $match: {
+                'data_groups.values.key': dendroVariable
+              }
+            },
+            {
+              $group: {
+                _id: '$site_id',
+                values: { $push: '$data_groups.values.value' }
+              }
+            },
+            {
+              $project: {
+                _id: 0,
+                site_id: '$_id',
+                values: 1
+              }
+            }
+          ]);
+
+        let siteResults = await data.toArray();
+        
+        // Auto-detect data type and process accordingly
+        let processedResults = siteResults.map(siteResult => {
+            let numericValues = siteResult.values.filter(val => !isNaN(parseFloat(val)) && isFinite(val));
+            
+            if (numericValues.length === 0) {
+                // Non-numeric values, count occurrences of each unique value
+                let valueCounts = {};
+                siteResult.values.forEach(val => {
+                    if (valueCounts[val]) {
+                        valueCounts[val]++;
+                    } else {
+                        valueCounts[val] = 1;
+                    }
+                });
+                
+                return {
+                    site_id: siteResult.site_id,
+                    value_counts: valueCounts,
+                    total_count: siteResult.values.length
+                };
+            }
+            
+            // Calculate average for numeric values
+            let sum = numericValues.reduce((acc, val) => acc + parseFloat(val), 0);
+            let average = sum / numericValues.length;
+            
+            return {
+                site_id: siteResult.site_id,
+                average: average,
+                count: numericValues.length
+            };
+        });
+
+        let resultObject = {
+            cache_id: cacheId,
+            data: processedResults
+        };
+        
+        this.app.saveObjectToCache("graph_cache", identifierObject, resultObject);
+
+        return processedResults;
+    }
+
+    async getDendroVariableAveragePerSite(siteIds, dendroVariable = "Tree species") {
+        if(!siteIds) {
+            siteIds = [];
+        }
+
+        // Ensure siteIds is an array
+        if(!Array.isArray(siteIds)) {
+            siteIds = [siteIds];
+        }
+
+        let cacheId = crypto.createHash('sha256');
+        siteIds.sort((a, b) => a - b);
+        cacheId = cacheId.update('getDendroVariableAveragePerSite'+JSON.stringify(siteIds)+dendroVariable).digest('hex');
+        let identifierObject = { cache_id: cacheId };
+      
+        let cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
+        if (cachedData !== false) {
+          return cachedData.data;
+        }
+
+        //If no sites are selected we assume ALL sites
+        if(siteIds.length == 0) {
+            let pgClient = await this.app.getDbConnection();
+            if(!pgClient) {
+                return false;
+            }
+
+            let sql = `SELECT site_id FROM tbl_sites;`;
+            let data = await pgClient.query(sql);
+            data.rows.forEach(row => {
+                siteIds.push(row.site_id);
+            });
+            this.app.releaseDbConnection(pgClient);
+        }
+        
+        let data = this.app.mongo.collection("sites").aggregate([
+            {
+                $match: {
+                    'data_groups.values.key': dendroVariable,
+                    'site_id': { $in: siteIds },
+                }
+            },
+            { $unwind: '$data_groups' },
+            { $unwind: '$data_groups.values' },
+            {
+              $match: {
+                'data_groups.values.key': dendroVariable
+              }
+            },
+            {
+              $group: {
+                _id: '$site_id',
+                values: { $push: '$data_groups.values.value' }
+              }
+            },
+            {
+              $project: {
+                _id: 0,
+                site_id: '$_id',
+                values: 1
+              }
+            }
+          ]);
+
+        let siteResults = await data.toArray();
+        
+        // Calculate average for numeric values only
+        let processedResults = siteResults.map(siteResult => {
+            let numericValues = siteResult.values.filter(val => !isNaN(parseFloat(val)) && isFinite(val));
+            
+            if (numericValues.length === 0) {
+                return {
+                    site_id: siteResult.site_id,
+                    average: null,
+                    count: 0,
+                    error: 'No numeric values found'
+                };
+            }
+            
+            let sum = numericValues.reduce((acc, val) => acc + parseFloat(val), 0);
+            let average = sum / numericValues.length;
+            
+            return {
+                site_id: siteResult.site_id,
+                average: average,
+                count: numericValues.length,
+                min: Math.min(...numericValues.map(v => parseFloat(v))),
+                max: Math.max(...numericValues.map(v => parseFloat(v)))
+            };
+        });
+
+        let resultObject = {
+            cache_id: cacheId,
+            data: processedResults
+        };
+        
+        this.app.saveObjectToCache("graph_cache", identifierObject, resultObject);
+
+        return processedResults;
+    }
+
+    async getDendroVariableCategoricalPerSite(siteIds, dendroVariable = "Tree species") {
+        if(!siteIds) {
+            siteIds = [];
+        }
+
+        // Ensure siteIds is an array
+        if(!Array.isArray(siteIds)) {
+            siteIds = [siteIds];
+        }
+
+        let cacheId = crypto.createHash('sha256');
+        siteIds.sort((a, b) => a - b);
+        cacheId = cacheId.update('getDendroVariableCategoricalPerSite'+JSON.stringify(siteIds)+dendroVariable).digest('hex');
+        let identifierObject = { cache_id: cacheId };
+      
+        let cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
+        if (cachedData !== false) {
+          return cachedData.data;
+        }
+
+        //If no sites are selected we assume ALL sites
+        if(siteIds.length == 0) {
+            let pgClient = await this.app.getDbConnection();
+            if(!pgClient) {
+                return false;
+            }
+
+            let sql = `SELECT site_id FROM tbl_sites;`;
+            let data = await pgClient.query(sql);
+            data.rows.forEach(row => {
+                siteIds.push(row.site_id);
+            });
+            this.app.releaseDbConnection(pgClient);
+        }
+        
+        let data = this.app.mongo.collection("sites").aggregate([
+            {
+                $match: {
+                    'data_groups.values.key': dendroVariable,
+                    'site_id': { $in: siteIds },
+                }
+            },
+            { $unwind: '$data_groups' },
+            { $unwind: '$data_groups.values' },
+            {
+              $match: {
+                'data_groups.values.key': dendroVariable
+              }
+            },
+            {
+              $group: {
+                _id: '$site_id',
+                values: { $push: '$data_groups.values.value' }
+              }
+            },
+            {
+              $project: {
+                _id: 0,
+                site_id: '$_id',
+                values: 1
+              }
+            }
+          ]);
+
+        let siteResults = await data.toArray();
+        
+        // Count occurrences of each categorical value per site
+        let processedResults = siteResults.map(siteResult => {
+            let valueCounts = {};
+            siteResult.values.forEach(val => {
+                // Convert to string to ensure consistent handling
+                let stringVal = String(val);
+                if (valueCounts[stringVal]) {
+                    valueCounts[stringVal]++;
+                } else {
+                    valueCounts[stringVal] = 1;
+                }
+            });
+            
+            // Calculate percentages
+            let totalCount = siteResult.values.length;
+            let valuePercentages = {};
+            Object.keys(valueCounts).forEach(key => {
+                valuePercentages[key] = (valueCounts[key] / totalCount * 100).toFixed(2);
+            });
+            
+            return {
+                site_id: siteResult.site_id,
+                value_counts: valueCounts,
+                value_percentages: valuePercentages,
+                total_count: totalCount,
+                unique_values: Object.keys(valueCounts).length
+            };
+        });
+
+        let resultObject = {
+            cache_id: cacheId,
+            data: processedResults
+        };
+        
+        this.app.saveObjectToCache("graph_cache", identifierObject, resultObject);
+
+        return processedResults;
+    }
 
     async getDendroVariableForSites(siteIds, dendroVariable = "Tree species") {
         if(!siteIds) {
