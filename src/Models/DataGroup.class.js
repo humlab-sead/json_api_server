@@ -4,7 +4,7 @@ class DataGroup {
 	physical_sample_id;
 	method_ids = [];
 	values = [{
-		analysis_entitity_id: 0,
+		analysis_entity_id: 0,
 		dataset_id, //if applicable
 		key: '', 
 		value: '',
