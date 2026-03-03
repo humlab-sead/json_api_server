@@ -1191,6 +1191,23 @@ class Graphs {
     }
 
     async fetchDomainSampleSummaryForSites(siteIds) {
+      // ---- Guard / normalization ----
+      const ids = Array.isArray(siteIds) ? siteIds.slice() : [];
+      ids.sort((a, b) => a - b);
+
+      // ---- Cache key ----
+      const cacheKey = crypto
+        .createHash("sha256")
+        .update("domain_sample_summary:" + JSON.stringify(ids))
+        .digest("hex");
+      const identifierObject = { cache_id: cacheKey };
+
+      // ---- Check cache if enabled ----
+      if (this.app.useGraphCaching) {
+        const cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
+        if (cachedData !== false) return cachedData;
+      }
+
       // Get domains and their method_ids
       const domains = await this.fetchDomains();
       const methods = await this.fetchMethods();
@@ -1275,7 +1292,11 @@ class Graphs {
           method_counts
         });
       }
-      return { domains: results };
+      const resultObject = { domains: results, cache_id: cacheKey };
+      if (this.app.useGraphCaching) {
+        this.app.saveObjectToCache("graph_cache", identifierObject, resultObject);
+      }
+      return resultObject;
     }
 
     /**
