@@ -30,7 +30,7 @@ import { Client as ESClient } from "@elastic/elasticsearch";
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.51.2";
+const appVersion = "1.52.3";
 
 class SeadJsonApiServer {
     constructor() {
@@ -71,6 +71,12 @@ class SeadJsonApiServer {
         this.expressApp = express();
         this.expressApp.use(cors());
         this.expressApp.use(bodyParser.json());
+
+        const artificialLatency = parseInt(process.env.ARTIFICIAL_LATENCY_MS) || 0;
+        if(artificialLatency > 0) {
+            console.log(`Artificial latency enabled: ${artificialLatency}ms`);
+            this.expressApp.use((req, res, next) => setTimeout(next, artificialLatency));
+        }
 
         this.setupDatabase().then(() => {
             this.setupEndpoints();
@@ -362,6 +368,24 @@ class SeadJsonApiServer {
                     error: "Internal server error"
                 }));
             }
+        });
+
+        this.expressApp.post('/site/buildingtypes', async (req, res) => {
+            console.log(req.path);
+            let data = await this.getBuildingTypes(req.body.sites);
+            res.send({
+                requestId: req.body.requestId,
+                categories: data
+            });
+        });
+
+        this.expressApp.post('/site/samplescount', async (req, res) => {
+            console.log(req.path);
+            let data = await this.getSamplesCount(req.body.sites);
+            res.send({
+                requestId: req.body.requestId,
+                count: data
+            });
         });
 
         this.expressApp.post('/site/sampletypes', async (req, res) => {
@@ -1370,9 +1394,15 @@ class SeadJsonApiServer {
         await this.fetchSiteDomains(site);
         if(verbose) console.timeEnd("Fetched domains for site "+siteId);
         
+        if(verbose) console.time("Fetched dating summary for site "+siteId);
+        await this.fetchDatingSummary(site);
+        if(verbose) console.timeEnd("Fetched dating summary for site "+siteId);
+
+        /*
         if(verbose) console.time("Fetched analysis entities ages for site "+siteId);
         await this.fetchAnalysisEntitiesAges(site);
         if(verbose) console.timeEnd("Fetched analysis entities ages for site "+siteId);
+        */
 
         if(verbose) console.time("Fetched analysis methods for site "+siteId);
         await this.fetchAnalysisMethods(site);
@@ -1387,7 +1417,7 @@ class SeadJsonApiServer {
         }
 
         if(verbose) console.time("Done post-processing primary data for site "+siteId);
-        this.postProcessSiteData(site);
+        await this.postProcessSiteData(site);
         if(verbose) console.timeEnd("Done post-processing primary data for site "+siteId);
 
         //This is commented out because it's not finished yet
@@ -1461,7 +1491,7 @@ class SeadJsonApiServer {
         return false;
     }
 
-    postProcessSiteData(site) {
+    async postProcessSiteData(site) {
         //Re-arrange things so that analysis_entities are connected to the datasets instead of the samples
         let analysisEntities = [];
         for(let sgKey in site.sample_groups) {
@@ -1512,7 +1542,7 @@ class SeadJsonApiServer {
         //Here we give each module a chance to modify the data structure now that everything is fetched
         for(let key in this.dataFetchingModules) {
             let module = this.dataFetchingModules[key];
-            module.postProcessSiteData(site);
+            await module.postProcessSiteData(site);
         }
         return site;
     }
@@ -2103,6 +2133,12 @@ class SeadJsonApiServer {
         return site;
     }
 
+    async fetchDatingSummary(site) {
+        // Initialize the age summary structure; populated by DatingModule.fetchSiteData
+        site.analysis_entity_ages = [];
+        site.age_summary = { older: null, younger: null, datings: [] };
+    }
+
     async fetchAnalysisEntitiesAges(site) {
         let pgClient = await this.getDbConnection();
         if(!pgClient) {
@@ -2152,12 +2188,12 @@ class SeadJsonApiServer {
             }
         }
 
-        site.age_summary = {
+        this.releaseDbConnection(pgClient);
+
+        return {
             older: oldestAge,
             younger: youngestAge
-        }
-
-        this.releaseDbConnection(pgClient);
+        };
     }
 
 
@@ -2654,6 +2690,145 @@ class SeadJsonApiServer {
         }
 
         return results;
+    }
+
+    async getBuildingTypes(siteIds) {
+        if(!siteIds) {
+            siteIds = [];
+        }
+
+        // Ensure siteIds is an array
+        if(!Array.isArray(siteIds)) {
+            siteIds = [siteIds];
+        }
+
+        let cacheId = crypto.createHash('sha256');
+        siteIds.sort((a, b) => a - b);
+        cacheId = cacheId.update('getBuildingTypes'+JSON.stringify(siteIds)).digest('hex');
+        let identifierObject = { cache_id: cacheId };
+
+        let cachedData = await this.getObjectFromCache("graph_cache", identifierObject);
+        if(cachedData !== false) {
+            return cachedData.data;
+        }
+
+        if(siteIds.length == 0) {
+            let pgClient = await this.getDbConnection();
+            if(!pgClient) {
+                return false;
+            }
+
+            let sql = `SELECT site_id FROM tbl_sites;`;
+            let data = await pgClient.query(sql);
+            data.rows.forEach(row => {
+                siteIds.push(row.site_id);
+            });
+            this.releaseDbConnection(pgClient);
+        }
+
+        let data = this.mongo.collection("sites").aggregate([
+            // Match documents that contain the specified site IDs
+            {
+                $match: {
+                    'site_id': { $in: siteIds }
+                }
+            },
+            // Unwind the sample groups
+            { $unwind: '$sample_groups' },
+            // Unwind the descriptions within each sample group
+            { $unwind: '$sample_groups.descriptions' },
+            // Match only descriptions of type_id 62 (building types)
+            {
+                $match: {
+                    'sample_groups.descriptions.type_id': 62
+                }
+            },
+            // Group by group_description and count occurrences
+            {
+                $group: {
+                    _id: {
+                        group_description: '$sample_groups.descriptions.group_description'
+                    },
+                    count: { $sum: 1 }
+                }
+            },
+            // Project to reshape the output
+            {
+                $project: {
+                    _id: 0,
+                    name: '$_id.group_description',
+                    count: 1
+                }
+            },
+            // Sort by count descending
+            {
+                $sort: { count: -1 }
+            }
+        ]);
+
+        let buildingTypeCategories = await data.toArray();
+
+        let resultObject = {
+            cache_id: cacheId,
+            data: buildingTypeCategories
+        };
+
+        await this.saveObjectToCache("graph_cache", identifierObject, resultObject);
+
+        return buildingTypeCategories;
+    }
+
+    async getSamplesCount(siteIds) {
+        if(!siteIds) {
+            siteIds = [];
+        }
+
+        // Ensure siteIds is an array
+        if(!Array.isArray(siteIds)) {
+            siteIds = [siteIds];
+        }
+
+        let cacheId = crypto.createHash('sha256');
+        siteIds.sort((a, b) => a - b);
+        cacheId = cacheId.update('getSamplesCount'+JSON.stringify(siteIds)).digest('hex');
+        let identifierObject = { cache_id: cacheId };
+
+        let cachedData = await this.getObjectFromCache("graph_cache", identifierObject);
+        if(cachedData !== false) {
+            return cachedData.data;
+        }
+
+        if(siteIds.length == 0) {
+            let pgClient = await this.getDbConnection();
+            if(!pgClient) {
+                return false;
+            }
+
+            let sql = `SELECT site_id FROM tbl_sites;`;
+            let data = await pgClient.query(sql);
+            data.rows.forEach(row => {
+                siteIds.push(row.site_id);
+            });
+            this.releaseDbConnection(pgClient);
+        }
+
+        let result = await this.mongo.collection("sites").aggregate([
+            { $match: { 'site_id': { $in: siteIds } } },
+            { $unwind: '$sample_groups' },
+            { $unwind: '$sample_groups.physical_samples' },
+            { $count: 'total' }
+        ]).toArray();
+
+        let count = result.length > 0 ? result[0].total : 0;
+
+        let resultObject = {
+            cache_id: cacheId,
+            data: count
+        };
+
+        await this.saveObjectToCache("graph_cache", identifierObject, resultObject);
+
+        return count;
     }
 
     async getSampleTypes(siteIds) {

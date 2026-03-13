@@ -1,5 +1,4 @@
 import DendroLib from '../Lib/sead_common/DendroLib.class.js';
-import SiteDatingSummary from '../Models/SiteDatingSummary.class.js';
 
 class DatingModule {
     constructor(app) {
@@ -82,8 +81,21 @@ class DatingModule {
         }
         return false;
     }
+    
+    async fetchSiteData(site, verbose = false) {
+        if(!this.siteHasModuleMethods(site)) {
+            return site;
+        }
 
-    async fetchRelativeAgesData(site, analysisEntity) {
+        if(verbose) {
+            console.log("Fetching dating data for site "+site.site_id);
+        }
+
+        let pgClient = await this.app.getDbConnection();
+        if(!pgClient) {
+            return false;
+        }
+
         let sql = `
         SELECT
         tbl_relative_dates.relative_date_id,
@@ -119,18 +131,6 @@ class DatingModule {
         WHERE analysis_entity_id=$1;
         `;
 
-        let pgClient = await this.app.getDbConnection();
-        if(!pgClient) {
-            return false;
-        }
-
-        let values = await pgClient.query(sql, [analysisEntity.analysis_entity_id]);
-        this.app.releaseDbConnection(pgClient);
-
-        return values.rows[0];
-    }
-
-    async fetchGeoChronologyData(site, analysisEntity) {
         let c14stdSql = `
         SELECT 
         tbl_analysis_entities.*,
@@ -143,159 +143,80 @@ class DatingModule {
         WHERE tbl_analysis_entities.analysis_entity_id=$1;
         `;
 
-        let pgClient = await this.app.getDbConnection();
-        if(!pgClient) {
-            return false;
-        }
-
-        let values = await pgClient.query(c14stdSql, [analysisEntity.analysis_entity_id]);
-        this.app.releaseDbConnection(pgClient);
-        return values.rows[0];
-    }
-    
-    async fetchAnalysisEntityAgesData(site, analysisEntity) {
         let entityAgesSql = `
         SELECT * FROM tbl_analysis_entity_ages
-        WHERE analysis_entity_id=$1`;
+        WHERE analysis_entity_id=$1`; //this is already implemented in fetchAnalysisEntitiesAges() method, but that is for creating a site wide age summary
+        
+        let queriesExecuted = 0;
+        let queryPromises = [];
+        
+        site.sample_groups.forEach(sampleGroup => {
+            sampleGroup.physical_samples.forEach(physicalSample => {
+                physicalSample.analysis_entities.forEach(analysisEntity => {
 
-        let pgClient = await this.app.getDbConnection();
-        if(!pgClient) {
-            return false;
-        }
-
-        const values = await pgClient.query(entityAgesSql, [analysisEntity.analysis_entity_id]);
-        this.app.releaseDbConnection(pgClient);
-
-        return values.rows[0];
-    }
-
-    async fetchSiteData(site, verbose = false) {
-        if(!this.siteHasModuleMethods(site)) {
-            return site;
-        }
-
-        if(verbose) {
-            console.log("Fetching dating data for site "+site.site_id);
-        }
-
-        let extremes = {
-            older: null,
-            older_type: null,
-            older_analysis_entity_id: null,
-            younger: null,
-            younger_type: null,
-            younger_analysis_entity_id: null,
-        }
-
-        for (let sampleGroup of site.sample_groups) {
-            for (let physicalSample of sampleGroup.physical_samples) {
-                for (let analysisEntity of physicalSample.analysis_entities) {
                     //Here we need to check what dataset this AE is linked to
                     //if it is a dataset with method_id 151 (among others) then it's 'C14 std'
                     //which needs to be handled/fetched differently from the other dating methods
-                    let c14StdDataset = false;
+
+                    let specialTreatment = false;
                     for(let key in site.datasets) {
                         if(analysisEntity.dataset_id == site.datasets[key].dataset_id) {
                             if(this.c14StdMethodIds.includes(site.datasets[key].method_id)) {
-                                c14StdDataset = true;
+                                //This needs special treatment
+                                specialTreatment = true;
                             }
                         }
                     }
 
-                    if(physicalSample.sample_name == "F115" || true) {
-
-                        console.log("Processing analysis entity "+analysisEntity.analysis_entity_id+" for sample F115");
-
-                        if(c14StdDataset) {
-                            const geochronologyData = await this.fetchGeoChronologyData(site, analysisEntity);
-                            //console.log("Fetched geochronology data:");
-                            //console.log(geochronologyData);
-                            
-                            if(geochronologyData && parseInt(geochronologyData.age)) {
-                                let older = parseInt(geochronologyData.age) - parseInt(geochronologyData.error_older);
-                                let younger = parseInt(geochronologyData.age) + parseInt(geochronologyData.error_younger);
-
-                                if(extremes.older == null || older < extremes.older) {
-                                    extremes.older = older;
-                                    extremes.older_type = "c14std";
-                                    extremes.older_analysis_entity_id = analysisEntity.analysis_entity_id;
-                                }
-                                if(extremes.younger == null || younger > extremes.younger) {
-                                    extremes.younger = younger;
-                                    extremes.younger_type = "c14std";
-                                    extremes.younger_analysis_entity_id = analysisEntity.analysis_entity_id;
-                                }
-
-                                analysisEntity.geochronologyData = geochronologyData;
-                            }
+                    let promise = null;
+                    if(!specialTreatment) {
+                        promise = pgClient.query(sql, [analysisEntity.analysis_entity_id]).then(values => {
+                            analysisEntity.dating_values = values.rows[0];
+                        });
+                        queriesExecuted++;
+                    }
+                    else {
+                        promise = pgClient.query(c14stdSql, [analysisEntity.analysis_entity_id]).then(values => {
+                            let r = values.rows[0];
+                            analysisEntity.dating_values = {
+                                "geochron_id": r.geochron_id,
+                                "dating_lab_id": r.dating_lab_id,
+                                "lab_number": r.lab_number,
+                                "age": r.age,
+                                "error_older": r.error_older,
+                                "error_younger": r.error_younger,
+                                "delta_13c": r.delta_13c,
+                                "notes": r.notes,
+                                "dating_uncertainty_id": r.dating_uncertainty_id,
+                                "dating_uncertainty": r.dating_uncertainty,
+                                "dating_uncertainty_desc": r.dating_uncertainty_desc
+                            };
 
                             //if dating_lab_id seems to be a number and we don't already have his lab 
                             //among the lookups, add it
-                            const datingLabId = parseInt(geochronologyData.dating_lab_id);
+                            const datingLabId = parseInt(r.dating_lab_id);
                             if(datingLabId != NaN) {
-                                await this.fetchDatingLab(site, datingLabId);
+                                let labFetchPromise = this.fetchDatingLab(site, datingLabId);
+                                queryPromises.push(labFetchPromise);
                             }
-                        }
-                        else {
-                            const relativeAgesdata = await this.fetchRelativeAgesData(site, analysisEntity);
-                            //console.log("Fetched relative ages data:");
-                            //console.log(relativeAgesdata);
-
-                            if(relativeAgesdata && parseInt(relativeAgesdata.cal_age_older) && parseInt(relativeAgesdata.cal_age_younger)) {
-                                if(extremes.older == null || parseInt(relativeAgesdata.cal_age_older) < extremes.older) {
-                                    extremes.older = parseInt(relativeAgesdata.cal_age_older);
-                                    extremes.older_type = "relative";
-                                    extremes.older_analysis_entity_id = analysisEntity.analysis_entity_id;
-                                
-                                }
-                                if(extremes.younger == null || parseInt(relativeAgesdata.cal_age_younger) > extremes.younger) {
-                                    extremes.younger = parseInt(relativeAgesdata.cal_age_younger);
-                                    extremes.younger_type = "relative";
-                                    extremes.younger_analysis_entity_id = analysisEntity.analysis_entity_id;
-                                }
-
-                                analysisEntity.relativeAgesdata = relativeAgesdata;
-                            }
-
-                            if(relativeAgesdata && parseInt(relativeAgesdata.c14_age_older) && parseInt(relativeAgesdata.c14_age_younger)) {
-                                if(extremes.older == null || parseInt(relativeAgesdata.c14_age_older) < extremes.older) {
-                                    extremes.older = parseInt(relativeAgesdata.c14_age_older);
-                                    extremes.older_type = "relative_c14";
-                                    extremes.older_analysis_entity_id = analysisEntity.analysis_entity_id;
-                                }
-                                if(extremes.younger == null || parseInt(relativeAgesdata.c14_age_younger) > extremes.younger) {
-                                    extremes.younger = parseInt(relativeAgesdata.c14_age_younger);
-                                    extremes.younger_type = "relative_c14";
-                                    extremes.younger_analysis_entity_id = analysisEntity.analysis_entity_id;
-                                }
-                            }
-
-                        }
-                        const analysisEntityAgesData = await this.fetchAnalysisEntityAgesData(site, analysisEntity);
-                        //console.log("Fetched analysis entity ages data:");
-                        //console.log(analysisEntityAgesData);
-
-                        if(analysisEntityAgesData && parseInt(analysisEntityAgesData.age_older) && parseInt(analysisEntityAgesData.age_younger)) {
-                            if(extremes.older == null || parseInt(analysisEntityAgesData.age_older) < extremes.older) {
-                                extremes.older = parseInt(analysisEntityAgesData.age_older);
-                                extremes.older_type = "entityAges";
-                                extremes.older_analysis_entity_id = analysisEntity.analysis_entity_id;
-                            }
-                            if(extremes.younger == null || parseInt(analysisEntityAgesData.age_younger) > extremes.younger) {
-                                extremes.younger = parseInt(analysisEntityAgesData.age_younger);
-                                extremes.younger_type = "entityAges";
-                                extremes.younger_analysis_entity_id = analysisEntity.analysis_entity_id;
-                            }
-
-                            analysisEntity.analysisEntityAgesData = analysisEntityAgesData;
-                        }
+                        });
+                        queriesExecuted++;
                     }
-                    
-                }
-            }
-        }
 
-        site.dating_summary = extremes;
+                    pgClient.query(entityAgesSql, [analysisEntity.analysis_entity_id]).then(values => {
+                        analysisEntity.entity_ages = values.rows[0];
+                    });
+
+                    queryPromises.push(promise);
+                    
+                });
+            })
+        });
+
+        await Promise.all(queryPromises).then(() => {
+            this.app.releaseDbConnection(pgClient);
+            //console.log("Dating module executed "+queriesExecuted+" queries for site "+site.site_id);
+        });
 
         return site;
     }
@@ -487,7 +408,7 @@ class DatingModule {
                                 let sampleName = this.app.getSampleNameBySampleId(site, ae.physical_sample_id);
 
                                 dataGroup.values.push({
-                                    analysis_entity_id: ae.analysis_entity_id,
+                                    analysis_entitity_id: ae.analysis_entity_id,
                                     dataset_id: dataset.dataset_id,
                                     key: dKey, 
                                     value: ae.dating_values[dKey],
@@ -499,7 +420,7 @@ class DatingModule {
                                 });
                             }
                         }
-                        if(ae.analysisEntityAgesData) {
+                        if(ae.entity_ages) {
 
                             analysisEntitiesSet.add(ae.analysis_entity_id);
                             physicalSampleIdsSet.add(ae.physical_sample_id);
@@ -508,7 +429,7 @@ class DatingModule {
                             const addValueToDataGroup = (key, value) => {
                                 if (value) {
                                     dataGroup.values.push({
-                                        analysis_entity_id: ae.analysisEntityAgesData.analysis_entity_id,
+                                        analysis_entity_id: ae.entity_ages.analysis_entity_id,
                                         dataset_id: dataset.dataset_id,
                                         key: key,
                                         value: value,
@@ -520,13 +441,13 @@ class DatingModule {
                                     });
                                 }
                             };
-                            
-                            addValueToDataGroup('age', ae.analysisEntityAgesData.age);
-                            addValueToDataGroup('age_older', ae.analysisEntityAgesData.age_older);
-                            addValueToDataGroup('age_younger', ae.analysisEntityAgesData.age_younger);
-                            addValueToDataGroup('age_range', ae.analysisEntityAgesData.age_range);
-                            addValueToDataGroup('chronology_id', ae.analysisEntityAgesData.chronology_id);
-                            addValueToDataGroup('dating_specifier', ae.analysisEntityAgesData.dating_specifier);
+
+                            addValueToDataGroup('age', ae.entity_ages.age);
+                            addValueToDataGroup('age_older', ae.entity_ages.age_older);
+                            addValueToDataGroup('age_younger', ae.entity_ages.age_younger);
+                            addValueToDataGroup('age_range', ae.entity_ages.age_range);
+                            addValueToDataGroup('chronology_id', ae.entity_ages.chronology_id);
+                            addValueToDataGroup('dating_specifier', ae.entity_ages.dating_specifier);
                             
                         }
                     }
@@ -549,19 +470,8 @@ class DatingModule {
         return site.data_groups = dataGroups.concat(site.data_groups);
     }
 
-    /**
-     * This method will fetch a summary of the dating data for a given site. It only returns the extremes.
-     * 
-     * 
-     * @param {*} site 
-     * @returns 
-     */
     async fetchSiteTimeData(site) {
-
-        let siteDatingSummary = new SiteDatingSummary();
-
-        /*
-        siteDatingSummary = {
+        let siteDatingObject = {
             age_older: null,
             older_dataset_id: null,
             older_analysis_entity_id: null,
@@ -570,50 +480,51 @@ class DatingModule {
             younger_dataset_id: null,
             younger_analysis_entity_id: null,
             younger_type: null,
+            // date_type: null, // Consider if you need separate older/younger type
         };
-        */
 
         let dendroDatings = this.getDendroDatingExtremes(site);
 
-        if(dendroDatings.age_older && (dendroDatings.age_older < siteDatingSummary.age_older || siteDatingSummary.age_older == null)) {
-            siteDatingSummary.age_older = dendroDatings.age_older;
-            siteDatingSummary.older_dataset_id = dendroDatings.older_dataset_id;
-            siteDatingSummary.older_analysis_entity_id = dendroDatings.older_analysis_entity_id;
-            siteDatingSummary.older_type = dendroDatings.older_type;
+        if(dendroDatings.age_older && (dendroDatings.age_older < siteDatingObject.age_older || siteDatingObject.age_older == null)) {
+            siteDatingObject.age_older = dendroDatings.age_older;
+            siteDatingObject.older_dataset_id = dendroDatings.older_dataset_id;
+            siteDatingObject.older_analysis_entity_id = dendroDatings.older_analysis_entity_id;
+            siteDatingObject.older_type = dendroDatings.older_type;
         }
-        if(dendroDatings.age_younger && (dendroDatings.age_younger > siteDatingSummary.age_younger || siteDatingSummary.age_younger == null)) {
-            siteDatingSummary.age_younger = dendroDatings.age_younger;
-            siteDatingSummary.younger_dataset_id = dendroDatings.younger_dataset_id;
-            siteDatingSummary.younger_analysis_entity_id = dendroDatings.younger_analysis_entity_id;
-            siteDatingSummary.younger_type = dendroDatings.younger_type;
+        if(dendroDatings.age_younger && (dendroDatings.age_younger > siteDatingObject.age_younger || siteDatingObject.age_younger == null)) {
+            siteDatingObject.age_younger = dendroDatings.age_younger;
+            siteDatingObject.younger_dataset_id = dendroDatings.younger_dataset_id;
+            siteDatingObject.younger_analysis_entity_id = dendroDatings.younger_analysis_entity_id;
+            siteDatingObject.younger_type = dendroDatings.younger_type;
         }
 
         //TODO: implement the rest of the dating methods here, like C14, etc.
         site.datasets.forEach(dataset => {
             let datingSummary = this.getNormalizedDatingSpanFromDataset(dataset);
             if(datingSummary.dating_range_age_type_id == 1) { //dating_range_age_type_id is an "AD" dating
-                if(datingSummary.dating_range_low_value < siteDatingSummary.age_older || siteDatingSummary.age_older == null) {
-                    siteDatingSummary.age_older = datingSummary.dating_range_low_value;
-                    siteDatingSummary.older_dataset_id = datingSummary.dataset_id;
-                    siteDatingSummary.older_analysis_entity_id = datingSummary.analysis_entity_id;
+                if(datingSummary.dating_range_low_value < siteDatingObject.age_older || siteDatingObject.age_older == null) {
+                    siteDatingObject.age_older = datingSummary.dating_range_low_value;
+                    siteDatingObject.older_dataset_id = datingSummary.dataset_id;
+                    siteDatingObject.older_analysis_entity_id = datingSummary.analysis_entity_id;
                     // Assuming datingSummary has older_type
-                    siteDatingSummary.older_type = datingSummary.older_type;
+                    siteDatingObject.older_type = datingSummary.older_type;
                 }
     
-                if(datingSummary.dating_range_high_value > siteDatingSummary.age_younger || siteDatingSummary.age_younger == null) {
-                    siteDatingSummary.age_younger = datingSummary.dating_range_high_value;
-                    siteDatingSummary.younger_dataset_id = datingSummary.dataset_id;
-                    siteDatingSummary.younger_analysis_entity_id = datingSummary.analysis_entity_id;
+                if(datingSummary.dating_range_high_value > siteDatingObject.age_younger || siteDatingObject.age_younger == null) {
+                    siteDatingObject.age_younger = datingSummary.dating_range_high_value;
+                    siteDatingObject.younger_dataset_id = datingSummary.dataset_id;
+                    siteDatingObject.younger_analysis_entity_id = datingSummary.analysis_entity_id;
                     // Assuming datingSummary has younger_type
-                    siteDatingSummary.younger_type = datingSummary.younger_type;
+                    siteDatingObject.younger_type = datingSummary.younger_type;
                 }
             }
             else {
-                //console.warn("This dataset has a dating range type ("+datingSummary.dating_range_age_type_id+") that is not AD, so it will not be included in the site dating summary");
+                console.warn("This dataset has a dating range type ("+datingSummary.dating_range_age_type_id+") that is not AD, so it will not be included in the site dating summary");
             }
         });
 
-        return siteDatingSummary;
+
+        return siteDatingObject;
     }
 
     getDendroDatingExtremes(site) {
@@ -656,6 +567,99 @@ class DatingModule {
 
         return siteDatingObject;
     }
+
+    async fetchSiteTimeDataOLD(site) {
+        let siteDatingObject = {
+            age_older: null,
+            older_dataset_id: null,
+            older_analysis_entity_id: null,
+            older_type: null,
+            age_younger: null,
+            younger_dataset_id: null,
+            younger_analysis_entity_id: null,
+            younger_type: null,
+            // date_type: null, // Consider if you need separate older/younger type
+        };
+    
+        site.datasets.forEach(dataset => {
+            let datingSummary = this.getNormalizedDatingSpanFromDataset(dataset);
+            if(datingSummary.dating_range_age_type_id == 1) { //dating_range_age_type_id is an "AD" dating
+                if(datingSummary.dating_range_low_value < siteDatingObject.age_older || siteDatingObject.age_older == null) {
+                    siteDatingObject.age_older = datingSummary.dating_range_low_value;
+                    siteDatingObject.older_dataset_id = datingSummary.dataset_id;
+                    siteDatingObject.older_analysis_entity_id = datingSummary.analysis_entity_id;
+                    // Assuming datingSummary has older_type
+                    siteDatingObject.older_type = datingSummary.older_type;
+                }
+    
+                if(datingSummary.dating_range_high_value > siteDatingObject.age_younger || siteDatingObject.age_younger == null) {
+                    siteDatingObject.age_younger = datingSummary.dating_range_high_value;
+                    siteDatingObject.younger_dataset_id = datingSummary.dataset_id;
+                    siteDatingObject.younger_analysis_entity_id = datingSummary.analysis_entity_id;
+                    // Assuming datingSummary has younger_type
+                    siteDatingObject.younger_type = datingSummary.younger_type;
+                }
+            }
+            else {
+                console.warn("This dataset has a dating range type ("+datingSummary.dating_range_age_type_id+") that is not AD, so it will not be included in the site dating summary");
+            }
+        });
+    
+        let dl = new DendroLib();
+        site.data_groups.forEach(dataGroup => {
+            if(dataGroup.method_ids.includes(10)) { //if this is a dendro data group
+                let oldestGerminationYear = dl.getOldestGerminationYear(dataGroup);
+                if(!oldestGerminationYear || !oldestGerminationYear.value) {
+                    oldestGerminationYear = dl.getYoungestGerminationYear(dataGroup);
+                }
+                let youngestFellingYear = dl.getYoungestFellingYear(dataGroup);
+                if(!youngestFellingYear || !youngestFellingYear.value) {
+                    youngestFellingYear = dl.getOldestFellingYear(dataGroup);
+                }
+    
+                if(oldestGerminationYear.value != null && (oldestGerminationYear.value < siteDatingObject.age_older || siteDatingObject.age_older == null)) {
+                    siteDatingObject.age_older = oldestGerminationYear.value;
+                    siteDatingObject.older_dataset_id = dataGroup.dataset_id;
+                    // Potentially fetch and assign older_analysis_entity_id if relevant for dendro
+                    siteDatingObject.older_type = "dendro";
+                }
+                if(youngestFellingYear.value != null && (youngestFellingYear.value > siteDatingObject.age_younger || siteDatingObject.age_younger == null)) {
+                    siteDatingObject.age_younger = youngestFellingYear.value;
+                    siteDatingObject.younger_dataset_id = dataGroup.dataset_id;
+                    // Potentially fetch and assign younger_analysis_entity_id if relevant for dendro
+                    siteDatingObject.younger_type = "dendro";
+                }
+            }
+        });
+    
+        // Consider the logic here: if dendro data is present, it might overwrite
+        // the older/younger type even if an earlier AD date was more extreme.
+        // You might need a more sophisticated way to determine the overall
+        // oldest and youngest and their types.
+    
+        if(siteDatingObject.older_type == "dendro") { // Check older_type instead of date_type
+            const currentYear = new Date().getFullYear();
+            const diff = currentYear - 1950;
+    
+            if (siteDatingObject.age_older !== null) {
+                siteDatingObject.age_older = siteDatingObject.age_older - diff;
+            }
+        }
+        if(siteDatingObject.younger_type == "dendro") { // Check younger_type instead of date_type
+            const currentYear = new Date().getFullYear();
+            const diff = currentYear - 1950;
+    
+            if (siteDatingObject.age_younger !== null) {
+                siteDatingObject.age_younger = siteDatingObject.age_younger - diff;
+            }
+            //FTURE ME: PLEASE CHECK THAT THIS BP CALC IS CORRECT :D
+        }
+    
+        site.chronology_extremes = siteDatingObject;
+        return siteDatingObject;
+    }
+
+    
 
 }
 

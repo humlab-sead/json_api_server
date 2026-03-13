@@ -247,55 +247,6 @@ class EcoCodes {
         return aggregatedEcocodes;
     }
 
-    async fetchEcoCodesForSitesOLD(siteIds) {
-        console.log("getEcoCodesForSites");
-
-        let bundles = await this.app.getObjectFromCache("site_ecocode_bundles", { site_id : { $in : siteIds } }, true);
-
-        let ecocodes = [];
-
-        //timespan
-        let timeBinsNum = 10;
-        let timeBins = [];
-
-        //Find out what the max/min (oldest/youngest) points are in this total timespan
-        bundles.sort((a, b) => {
-            if(a.site_age_summary.oldest > b.site_age_summary.oldest) {
-                return 1;
-            }
-            if(a.site_age_summary.oldest < b.site_age_summary.oldest) {
-                return -1;
-            }
-        });
-        let oldest = bundles[0].site_age_summary.oldest;
-        
-        bundles.sort((a, b) => {
-            if(a.site_age_summary.youngest < b.site_age_summary.youngest) {
-                return 1;
-            }
-            if(a.site_age_summary.youngest > b.site_age_summary.youngest) {
-                return -1;
-            }
-        });
-        let youngest = bundles[0].site_age_summary.youngest;
-
-        let binSize = (oldest - youngest) / timeBinsNum;
-
-        for(let i = 0; i < timeBinsNum; i++) {
-            timeBins.push({
-                older: oldest - (binSize * i),
-                younger: (oldest - (binSize * i)) - binSize,
-                ecocodes: []
-            });
-        }
-
-        bundles.forEach(bundle => {
-            //bin these by time
-
-            //bundle.ecocode_bundles
-        });
-    }
-
     async getEcoCodesForSample(physicalSampleId) {
         let pgClient = await this.app.getDbConnection();
         if(!pgClient) {

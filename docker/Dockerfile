@@ -15,9 +15,11 @@ WORKDIR /
 # Build-time ARG
 ARG JAS_REF=main
 ARG MODE=prod
+ARG DOMAIN=localhost
 
 # Persist the mode for runtime
 ENV MODE=${MODE}
+ENV DOMAIN=${DOMAIN}
 
 RUN git clone --recurse-submodules https://github.com/humlab-sead/json_api_server.git \
     && cd json_api_server \
@@ -32,4 +34,7 @@ RUN npm install --legacy-peer-deps
 RUN npm install -g nodemon
 
 # Use conditional CMD based on MODE
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://${DOMAIN}:8484/health || exit 1
+
 CMD ["sh", "-c", "if [ \"$MODE\" = \"dev\" ]; then nodemon --legacy-watch /json_api_server/src/index.js; else node /json_api_server/src/index.js; fi"]
