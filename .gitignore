@@ -2,3 +2,6 @@
 node_modules
 mongo-cluster
 test
+.vscode
+mcp.json
+settings.json
