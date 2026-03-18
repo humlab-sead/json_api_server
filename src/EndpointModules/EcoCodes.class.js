@@ -32,6 +32,24 @@ class EcoCodes {
             }
         });
 
+        this.app.expressApp.get('/ecocodes/dataset/:datasetid', async (req, res) => {
+            let datasetId = parseInt(req.params.datasetid);
+            if(datasetId) {
+                let ecoCodes = await this.getEcoCodesForDataset(datasetId);
+                res.header("Content-type", "application/json");
+                res.end(JSON.stringify(ecoCodes, null, 2));
+            }
+        });
+
+        this.app.expressApp.get('/ecocodes/dataset/:datasetid/samples', async (req, res) => {
+            let datasetId = parseInt(req.params.datasetid);
+            if(datasetId) {
+                let ecoCodes = await this.getEcoCodesForDatasetBySample(datasetId);
+                res.header("Content-type", "application/json");
+                res.end(JSON.stringify(ecoCodes, null, 2));
+            }
+        });
+
         this.app.expressApp.get('/ecocodes/site/:siteid/samples', async (req, res) => {
             let siteId = parseInt(req.params.siteid);
             if(siteId) {
@@ -245,6 +263,140 @@ class EcoCodes {
         }
     
         return aggregatedEcocodes;
+    }
+
+    async getEcoCodesForDataset(datasetId) {
+        let pgClient = await this.app.getDbConnection();
+        if(!pgClient) {
+            return false;
+        }
+
+        let aeResult = await pgClient.query(
+            'SELECT * FROM tbl_analysis_entities WHERE dataset_id=$1',
+            [datasetId]
+        );
+
+        let abundancePromises = aeResult.rows.map(ae =>
+            pgClient.query('SELECT * FROM tbl_abundances WHERE analysis_entity_id=$1', [ae.analysis_entity_id])
+        );
+        let abundanceResults = await Promise.all(abundancePromises);
+        this.app.releaseDbConnection(pgClient);
+
+        let allAbundances = abundanceResults.flatMap(r => r.rows);
+
+        let fetchPromises = [];
+        let ecocodeBundles = [];
+
+        allAbundances.forEach(abundance => {
+            let promise = this.fetchEcoCodesForTaxon(abundance.taxon_id);
+            fetchPromises.push(promise);
+            promise.then(ecoCodes => {
+                if(ecoCodes === false) {
+                    return;
+                }
+                ecoCodes.ecocodes.forEach(ecoCode => {
+                    let bundleFound = false;
+                    for(let bundleKey in ecocodeBundles) {
+                        if(ecocodeBundles[bundleKey].ecocode.ecocode_definition_id == ecoCode.ecocode_definition_id) {
+                            bundleFound = true;
+                            if(!ecocodeBundles[bundleKey].taxa.includes(abundance.taxon_id)) {
+                                ecocodeBundles[bundleKey].taxa.push(abundance.taxon_id);
+                            }
+                            ecocodeBundles[bundleKey].abundance += abundance.abundance;
+                        }
+                    }
+                    if(!bundleFound) {
+                        ecocodeBundles.push({
+                            ecocode: ecoCode,
+                            taxa: [abundance.taxon_id],
+                            abundance: abundance.abundance
+                        });
+                    }
+                });
+            });
+        });
+
+        await Promise.all(fetchPromises);
+
+        return {
+            api_source: this.app.appName+"-"+this.app.appVersion,
+            dataset_id: datasetId,
+            ecocode_bundles: ecocodeBundles
+        };
+    }
+
+    async getEcoCodesForDatasetBySample(datasetId) {
+        let pgClient = await this.app.getDbConnection();
+        if(!pgClient) {
+            return false;
+        }
+
+        let aeResult = await pgClient.query(
+            'SELECT * FROM tbl_analysis_entities WHERE dataset_id=$1',
+            [datasetId]
+        );
+
+        let abundancePromises = aeResult.rows.map(ae =>
+            pgClient.query('SELECT * FROM tbl_abundances WHERE analysis_entity_id=$1', [ae.analysis_entity_id])
+                .then(r => ({ physical_sample_id: ae.physical_sample_id, rows: r.rows }))
+        );
+        let abundanceResults = await Promise.all(abundancePromises);
+        this.app.releaseDbConnection(pgClient);
+
+        // Build a map of physical_sample_id -> abundances
+        let sampleMap = {};
+        for(let { physical_sample_id, rows } of abundanceResults) {
+            if(!sampleMap[physical_sample_id]) {
+                sampleMap[physical_sample_id] = [];
+            }
+            sampleMap[physical_sample_id].push(...rows);
+        }
+
+        let sampleEcoCodes = Object.keys(sampleMap).map(id => ({
+            physical_sample_id: parseInt(id),
+            ecocodes: []
+        }));
+
+        let fetchPromises = [];
+
+        sampleEcoCodes.forEach(sampleEcoCode => {
+            sampleMap[sampleEcoCode.physical_sample_id].forEach(abundance => {
+                let promise = this.fetchEcoCodesForTaxon(abundance.taxon_id);
+                fetchPromises.push(promise);
+                promise.then(ecoCodes => {
+                    if(ecoCodes === false) {
+                        return;
+                    }
+                    ecoCodes.ecocodes.forEach(ecoCode => {
+                        let bundleFound = false;
+                        for(let bundleKey in sampleEcoCode.ecocodes) {
+                            if(sampleEcoCode.ecocodes[bundleKey].ecocode.ecocode_definition_id == ecoCode.ecocode_definition_id) {
+                                bundleFound = true;
+                                if(!sampleEcoCode.ecocodes[bundleKey].taxa.includes(abundance.taxon_id)) {
+                                    sampleEcoCode.ecocodes[bundleKey].taxa.push(abundance.taxon_id);
+                                }
+                                sampleEcoCode.ecocodes[bundleKey].abundance += abundance.abundance;
+                            }
+                        }
+                        if(!bundleFound) {
+                            sampleEcoCode.ecocodes.push({
+                                ecocode: ecoCode,
+                                taxa: [abundance.taxon_id],
+                                abundance: abundance.abundance
+                            });
+                        }
+                    });
+                });
+            });
+        });
+
+        await Promise.all(fetchPromises);
+
+        return {
+            api_source: this.app.appName+"-"+this.app.appVersion,
+            dataset_id: datasetId,
+            ecocode_bundles: sampleEcoCodes
+        };
     }
 
     async getEcoCodesForSample(physicalSampleId) {
