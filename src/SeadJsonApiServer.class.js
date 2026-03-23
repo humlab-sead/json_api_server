@@ -23,6 +23,7 @@ import Chronology from "./EndpointModules/Chronology.class.js";
 import Taxa from "./EndpointModules/Taxa.class.js";
 import Graphs from "./EndpointModules/Graphs.class.js";
 import Viewstates from "./EndpointModules/Viewstates.class.js";
+import MCR from "./EndpointModules/MCR.class.js";
 import AuthenticationHandler from './AuthenticationHandler.class.js';
 import basicAuth from 'basic-auth';
 
@@ -30,7 +31,7 @@ import { Client as ESClient } from "@elastic/elasticsearch";
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.53.0";
+const appVersion = "1.54.0";
 
 class SeadJsonApiServer {
     constructor() {
@@ -100,6 +101,7 @@ class SeadJsonApiServer {
             this.taxa = new Taxa(this);
             this.graphs = new Graphs(this);
             this.viewstates = new Viewstates(this);
+            this.mcr = new MCR(this);
 
             this.run();
         });
