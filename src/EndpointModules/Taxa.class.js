@@ -6,19 +6,11 @@ class Taxa {
 
         this.app.expressApp.post('/graphs/toptaxa/:methodId?', async (req, res) => {
             let siteIds = req.body;
-            if(typeof siteIds != "object") {
+            if(!this.isValidSiteIdsInput(siteIds)) {
                 res.status(400);
                 res.send("Bad input - should be an array of site IDs");
                 return;
             }
-            
-            siteIds.forEach(siteId => {
-                if(!parseInt(siteId)) {
-                    res.status(400);
-                    res.send("Bad input - should be an array of site IDs");
-                    return;
-                }
-            });
 
             let methodId = req.params.methodId ? parseInt(req.params.methodId) : 3;
             let taxaList = await this.fetchTaxaForSites(siteIds, 20, methodId);
@@ -46,6 +38,17 @@ class Taxa {
             });
         });
 
+    }
+
+    isValidSiteIdsInput(siteIds) {
+        if(!Array.isArray(siteIds)) {
+            return false;
+        }
+
+        return siteIds.every(siteId => {
+            const numericSiteId = Number(siteId);
+            return Number.isInteger(numericSiteId) && numericSiteId > 0;
+        });
     }
 
     async fetchTaxonReferences(taxonId) {
