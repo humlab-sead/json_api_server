@@ -7,18 +7,11 @@ class Graphs {
         //add a graph endpoint for rendering an overview of domain data for a site
         this.app.expressApp.post('/graphs/site/domains_overview', async (req, res) => {
           let siteIds = req.body;
-          if(typeof siteIds != "object") {
-              res.status(400);
-              res.send("Bad input - should be an array of site IDs");
-              return;
+          if(!this.isValidSiteIdsInput(siteIds)) {
+            res.status(400);
+            res.send("Bad input - should be an array of site IDs");
+            return;
           }
-          siteIds.forEach(siteId => {
-            if(!parseInt(siteId)) {
-                res.status(400);
-                res.send("Bad input - should be an array of site IDs");
-                return;
-            }
-        });
 
           let data = await this.fetchDomainsOverviewForSites(siteIds);
           res.header("Content-type", "application/json");
@@ -27,19 +20,11 @@ class Graphs {
 
         this.app.expressApp.post('/graphs/analysis_methods', async (req, res) => {
           let siteIds = req.body;
-          if(typeof siteIds != "object") {
-              res.status(400);
-              res.send("Bad input - should be an array of site IDs");
-              return;
+          if(!this.isValidSiteIdsInput(siteIds)) {
+            res.status(400);
+            res.send("Bad input - should be an array of site IDs");
+            return;
           }
-          
-          siteIds.forEach(siteId => {
-              if(!parseInt(siteId)) {
-                  res.status(400);
-                  res.send("Bad input - should be an array of site IDs");
-                  return;
-              }
-          });
 
           let analysisMethods = await this.fetchAnalysisMethodsSummaryForSites(siteIds);
           res.header("Content-type", "application/json");
@@ -48,19 +33,11 @@ class Graphs {
 
         this.app.expressApp.post('/graphs/datings', async (req, res) => {
           let siteIds = req.body;
-          if(typeof siteIds != "object") {
+          if(!this.isValidSiteIdsInput(siteIds)) {
               res.status(400);
               res.send("Bad input - should be an array of site IDs");
               return;
           }
-          
-          siteIds.forEach(siteId => {
-              if(!parseInt(siteId)) {
-                  res.status(400);
-                  res.send("Bad input - should be an array of site IDs");
-                  return;
-              }
-          });
 
           let datings = await this.fetchDatingsSummaryForSites(siteIds);
           res.header("Content-type", "application/json");
@@ -70,19 +47,11 @@ class Graphs {
         
         this.app.expressApp.post('/graphs/site/domain_sample_summary', async (req, res) => {
           let siteIds = req.body;
-          if(typeof siteIds != "object") {
+          if(!this.isValidSiteIdsInput(siteIds)) {
               res.status(400);
               res.send("Bad input - should be an array of site IDs");
               return;
           }
-
-          siteIds.forEach(siteId => {
-              if(!parseInt(siteId)) {
-                  res.status(400);
-                  res.send("Bad input - should be an array of site IDs");
-                  return;
-              }
-          });
           let data = await this.fetchDomainSampleSummaryForSites(siteIds);
           res.header("Content-type", "application/json");
           res.end(JSON.stringify(data, null, 2));
@@ -91,19 +60,11 @@ class Graphs {
         this.app.expressApp.post('/graphs/data_count', async (req, res) => {
           let siteIds = req.body.siteIds;
           let mongoPath = req.body.path;
-          if(typeof siteIds != "object") {
+          if(!this.isValidSiteIdsInput(siteIds)) {
               res.status(400);
               res.send("Bad input - should be an array of site IDs");
               return;
           }
-          
-          siteIds.forEach(siteId => {
-              if(!parseInt(siteId)) {
-                  res.status(400);
-                  res.send("Bad input - should be an array of site IDs");
-                  return;
-              }
-          });
 
           if(!mongoPath) {
             res.status(400);
@@ -122,19 +83,11 @@ class Graphs {
           let mongoPath = req.body.path;
           let idField = req.body.idField;
           let nameField = req.body.nameField;
-          if(typeof siteIds != "object") {
+          if(!this.isValidSiteIdsInput(siteIds)) {
               res.status(400);
               res.send("Bad input - should be an array of site IDs");
               return;
           }
-          
-          siteIds.forEach(siteId => {
-              if(!parseInt(siteId)) {
-                  res.status(400);
-                  res.send("Bad input - should be an array of site IDs");
-                  return;
-              }
-          });
 
           if(!mongoPath) {
             res.status(400);
@@ -183,19 +136,11 @@ class Graphs {
 
         this.app.expressApp.post('/graphs/feature_types/:perSite?', async (req, res) => {
           let siteIds = req.body.siteIds;
-          if(typeof siteIds != "object") {
+          if(!this.isValidSiteIdsInput(siteIds)) {
               res.status(400);
               res.send("Bad input - should be an array of site IDs");
               return;
           }
-          
-          siteIds.forEach(siteId => {
-              if(!parseInt(siteId)) {
-                  res.status(400);
-                  res.send("Bad input - should be an array of site IDs");
-                  return;
-              }
-          });
 
           let data = [];
           if(req.params.perSite === "true") {
@@ -224,19 +169,11 @@ class Graphs {
 
         this.app.expressApp.post('/graphs/dating_overview', async (req, res) => {
           let siteIds = req.body;
-          if(typeof siteIds != "object") {
+          if(!this.isValidSiteIdsInput(siteIds)) {
               res.status(400);
               res.send("Bad input - should be an array of site IDs");
               return;
           }
-          
-          siteIds.forEach(siteId => {
-              if(!parseInt(siteId)) {
-                  res.status(400);
-                  res.send("Bad input - should be an array of site IDs");
-                  return;
-              }
-          });
 
           let data = await this.fetchDatingOverviewForSites(siteIds);
           res.header("Content-type", "application/json");
@@ -250,19 +187,11 @@ class Graphs {
           req.body.variable;
           req.body.groupBy;
 
-          if(typeof siteIds != "object") {
+          if(!this.isValidSiteIdsInput(siteIds)) {
               res.status(400);
               res.send("Bad input - should be an array of site IDs");
               return;
           }
-          
-          siteIds.forEach(siteId => {
-              if(!parseInt(siteId)) {
-                  res.status(400);
-                  res.send("Bad input - should be an array of site IDs");
-                  return;
-              }
-          });
 
           let data = await this.fetchDynamicChart(req.body);
           res.header("Content-type", "application/json");
@@ -272,19 +201,11 @@ class Graphs {
         this.app.expressApp.post('/graphs/grouped_data_by_variable', async (req, res) => {
           let siteIds = req.body.siteIds;
           let variableName = req.body.variableName;
-          if(typeof siteIds != "object") {
+          if(!this.isValidSiteIdsInput(siteIds)) {
               res.status(400);
               res.send("Bad input - should be an array of site IDs");
               return;
           }
-          
-          siteIds.forEach(siteId => {
-              if(!parseInt(siteId)) {
-                  res.status(400);
-                  res.send("Bad input - should be an array of site IDs");
-                  return;
-              }
-          });
 
           if(!variableName) {
             res.status(400);
@@ -299,19 +220,11 @@ class Graphs {
 
         this.app.expressApp.post('/graphs/temporal_distributon', async (req, res) => {
             let siteIds = req.body;
-            if(typeof siteIds != "object") {
+            if(!this.isValidSiteIdsInput(siteIds)) {
                 res.status(400);
                 res.send("Bad input - should be an array of site IDs");
                 return;
             }
-            
-            siteIds.forEach(siteId => {
-                if(!parseInt(siteId)) {
-                    res.status(400);
-                    res.send("Bad input - should be an array of site IDs");
-                    return;
-                }
-            });
 
             let chartData = await this.fetchTemporalDistributionSummaryForSites(siteIds);
             res.header("Content-type", "application/json");
@@ -320,19 +233,11 @@ class Graphs {
 
         this.app.expressApp.post('/graphs/sample_methods', async (req, res) => {
             let siteIds = req.body;
-            if(typeof siteIds != "object") {
+            if(!this.isValidSiteIdsInput(siteIds)) {
                 res.status(400);
                 res.send("Bad input - should be an array of site IDs");
                 return;
             }
-            
-            siteIds.forEach(siteId => {
-                if(!parseInt(siteId)) {
-                    res.status(400);
-                    res.send("Bad input - should be an array of site IDs");
-                    return;
-                }
-            });
 
             let data = await this.fetchSampleMethodsSummaryForSites(siteIds);
             res.header("Content-type", "application/json");
@@ -341,7 +246,7 @@ class Graphs {
 
         this.app.expressApp.post('/graphs/ecocodes', async (req, res) => {
           let siteIds = req.body;
-          if(typeof siteIds != "object") {
+          if(!this.isValidSiteIdsInput(siteIds)) {
               res.status(400);
               res.send("Bad input - should be an array of site IDs");
               return;
@@ -353,6 +258,17 @@ class Graphs {
           });
 
         });
+    }
+
+    isValidSiteIdsInput(siteIds) {
+      if(!Array.isArray(siteIds)) {
+        return false;
+      }
+
+      return siteIds.every(siteId => {
+        const numericSiteId = Number(siteId);
+        return Number.isInteger(numericSiteId) && numericSiteId > 0;
+      });
     }
 
     async fetchEcocodesSummaryForSites(siteIds) {
