@@ -70,19 +70,11 @@ class EcoCodes {
 
         this.app.expressApp.post('/ecocodes/sites/individual/:ecocodeId', async (req, res) => { //the endpoint url for this seems kinda dumb, just saying
             let siteIds = req.body;
-            if(typeof siteIds != "object") {
+            if(!this.isValidSiteIdsInput(siteIds)) {
                 res.status(400);
                 res.send("Bad input - should be an array of site IDs");
                 return;
             }
-
-            siteIds.forEach(siteId => {
-                if(!parseInt(siteId)) {
-                    res.status(400);
-                    res.send("Bad input - should be an array of site IDs");
-                    return;
-                }
-            });
 
             let summaries = await this.getSingleEcoCodeForSites(siteIds, req.params.ecocodeId);
 
@@ -92,23 +84,26 @@ class EcoCodes {
 
         this.app.expressApp.post('/ecocodes/sites/:aggregationType', async (req, res) => {
             let siteIds = req.body;
-            if(typeof siteIds != "object") {
+            if(!this.isValidSiteIdsInput(siteIds)) {
                 res.status(400);
                 res.send("Bad input - should be an array of site IDs");
                 return;
             }
-            
-            siteIds.forEach(siteId => {
-                if(!parseInt(siteId)) {
-                    res.status(400);
-                    res.send("Bad input - should be an array of site IDs");
-                    return;
-                }
-            });
 
             let data = await this.fetchEcoCodesForSites(siteIds, req.params.aggregationType);
             res.header("Content-type", "application/json");
             res.end(JSON.stringify(data, null, 2));
+        });
+    }
+
+    isValidSiteIdsInput(siteIds) {
+        if(!Array.isArray(siteIds)) {
+            return false;
+        }
+
+        return siteIds.every(siteId => {
+            const numericSiteId = Number(siteId);
+            return Number.isInteger(numericSiteId) && numericSiteId > 0;
         });
     }
 
