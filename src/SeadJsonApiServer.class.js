@@ -24,6 +24,7 @@ import Taxa from "./EndpointModules/Taxa.class.js";
 import Graphs from "./EndpointModules/Graphs.class.js";
 import Viewstates from "./EndpointModules/Viewstates.class.js";
 import MCR from "./EndpointModules/MCR.class.js";
+import Search from "./EndpointModules/Search.class.js";
 import AuthenticationHandler from './AuthenticationHandler.class.js';
 import basicAuth from 'basic-auth';
 
@@ -74,8 +75,16 @@ class SeadJsonApiServer {
         this.expressApp.use(bodyParser.json());
 
         const artificialLatency = parseInt(process.env.ARTIFICIAL_LATENCY_MS) || 0;
+        const nodeEnv = (process.env.NODE_ENV || "undefined").toLowerCase();
         if(artificialLatency > 0) {
-            console.log(`Artificial latency enabled: ${artificialLatency}ms`);
+            console.warn("============================================================");
+            console.warn(`WARNING: ARTIFICIAL_LATENCY_MS is enabled (${artificialLatency}ms).`);
+            console.warn("All API endpoints will be delayed by this amount.");
+            console.warn(`NODE_ENV=${nodeEnv}`);
+            if(!["development", "dev", "test"].includes(nodeEnv)) {
+                console.warn("WARNING: Artificial latency is enabled outside development/test.");
+            }
+            console.warn("============================================================");
             this.expressApp.use((req, res, next) => setTimeout(next, artificialLatency));
         }
 
@@ -102,6 +111,7 @@ class SeadJsonApiServer {
             this.graphs = new Graphs(this);
             this.viewstates = new Viewstates(this);
             this.mcr = new MCR(this);
+            this.search = new Search(this);
 
             this.run();
         });
@@ -277,7 +287,14 @@ class SeadJsonApiServer {
             res.send(JSON.stringify(siteIds, null, 2));
         });
 
-        this.expressApp.get('/site/:siteId/:noCache?', async (req, res) => {
+        this.expressApp.get('/site/:siteId/:noCache?/:alternativeFetchMethod?', async (req, res) => {
+            if(req.params.alternativeFetchMethod) {
+                let site = await this.getSitePostgres(req.params.siteId, true, true, req.params.noCache == "true" ? true : false);
+                res.header("Content-type", "application/json");
+                res.send(JSON.stringify(site, null, 2));
+                return;
+            }
+
             let site = await this.getSite(req.params.siteId, true, true, req.params.noCache == "true" ? true : false);
             res.header("Content-type", "application/json");
             res.send(JSON.stringify(site, null, 2));
@@ -285,7 +302,7 @@ class SeadJsonApiServer {
 
         this.expressApp.post('/export/bulk/sites', async (req, res) => {
             let siteIds = req.body;
-            if(typeof siteIds != "object") {
+            if(!this.isValidSiteIdsInput(siteIds)) {
                 res.status(400);
                 res.send("Bad input - should be an array of site IDs\n");
                 return;
@@ -333,18 +350,11 @@ class SeadJsonApiServer {
         this.expressApp.post('/export/sites', async (req, res) => {
             let siteIds = req.body.siteIds;
             let methodIds = req.body.methods ? req.body.methods : [];
-            if(typeof siteIds != "object") {
+            if(!this.isValidSiteIdsInput(siteIds)) {
                 res.status(400);
                 res.send("Bad input - should be an array of site IDs\n");
                 return;
             }
-            siteIds.forEach(siteId => {
-                if(!parseInt(siteId)) {
-                    res.status(400);
-                    res.send("Bad input - should be an array of site IDs\n");
-                    return;
-                }
-            });
             let data = await this.exportSites(siteIds, methodIds);
             let jsonData = JSON.stringify(data, null, 2);
 
@@ -501,18 +511,11 @@ class SeadJsonApiServer {
         this.expressApp.post('/datasetsummaries', async (req, res) => {
             let siteIds = req.body;
             //console.log(siteIds);
-            if(typeof siteIds != "object") {
+            if(!this.isValidSiteIdsInput(siteIds)) {
                 res.status(400);
                 res.send("Bad input - should be an array of site IDs\n");
                 return;
             }
-            siteIds.forEach(siteId => {
-                if(!parseInt(siteId)) {
-                    res.status(400);
-                    res.send("Bad input - should be an array of site IDs\n");
-                    return;
-                }
-            })
 
             let datasetSummaries = await this.datasetSummaries(siteIds);
             res.header("Content-type", "application/json");
@@ -1308,6 +1311,634 @@ class SeadJsonApiServer {
         });
 
         console.timeEnd("Preload of sites complete");
+    }
+
+    async getSitePostgres(siteId, verbose = true, fetchMethodSpecificData = true, noCache = false) {
+        if(verbose) console.log("Request for site", siteId, "(Postgres consolidated)");
+
+        let site = null;
+        if(verbose && noCache) {
+            console.log("getSitePostgres - No cache requested");
+        }
+        if(this.useSiteCaching && !noCache) {
+            site = await this.getSiteFromCache(siteId);
+            if(site) {
+                return site;
+            }
+        }
+
+        if(verbose) console.time("Done fetching site "+siteId+" (Postgres consolidated)");
+
+        let pgClient = await this.getDbConnection();
+        if(!pgClient) {
+            console.error("Failed to get Postgres DB connection!");
+            return false;
+        }
+
+        try {
+            if(verbose) console.time("Fetched consolidated site payload for site "+siteId);
+
+            const sql = `
+            WITH
+            site_data AS (
+                SELECT *
+                FROM tbl_sites
+                WHERE site_id = $1
+            ),
+            sample_groups AS (
+                SELECT *
+                FROM tbl_sample_groups
+                WHERE site_id = $1
+            ),
+            sample_group_coords AS (
+                SELECT
+                    sgc.sample_group_id,
+                    sgc.position_accuracy,
+                    cmd.method_id AS coordinate_method_id,
+                    cmd.dimension_id,
+                    sgc.sample_group_position::float AS measurement,
+                    d.unit_id
+                FROM tbl_sample_group_coordinates sgc
+                JOIN tbl_coordinate_method_dimensions cmd ON sgc.coordinate_method_dimension_id = cmd.coordinate_method_dimension_id
+                JOIN tbl_dimensions d ON d.dimension_id = cmd.dimension_id
+                WHERE sgc.sample_group_id IN (SELECT sample_group_id FROM sample_groups)
+            ),
+            sample_group_refs AS (
+                SELECT
+                    sgr.sample_group_id,
+                    sgr.biblio_id,
+                    b.doi,
+                    b.isbn,
+                    b.notes,
+                    b.title,
+                    b.year,
+                    b.authors,
+                    b.full_reference,
+                    b.url
+                FROM tbl_sample_group_references sgr
+                INNER JOIN tbl_biblio b ON b.biblio_id = sgr.biblio_id
+                WHERE sgr.sample_group_id IN (SELECT sample_group_id FROM sample_groups)
+            ),
+            sample_group_desc AS (
+                SELECT
+                    sgd.*,
+                    sgdt.sample_group_description_type_id AS type_id,
+                    sgdt.type_name,
+                    sgdt.type_description
+                FROM tbl_sample_group_descriptions sgd
+                LEFT JOIN tbl_sample_group_description_types sgdt ON sgd.sample_group_description_type_id = sgdt.sample_group_description_type_id
+                WHERE sgd.sample_group_id IN (SELECT sample_group_id FROM sample_groups)
+            ),
+            sample_group_contexts AS (
+                SELECT *
+                FROM tbl_sample_group_sampling_contexts
+                WHERE sampling_context_id IN (
+                    SELECT DISTINCT sampling_context_id
+                    FROM sample_groups
+                    WHERE sampling_context_id IS NOT NULL
+                )
+            ),
+            sample_group_notes AS (
+                SELECT *
+                FROM tbl_sample_group_notes
+                WHERE sample_group_id IN (SELECT sample_group_id FROM sample_groups)
+            ),
+            site_locations AS (
+                SELECT
+                    l.location_id,
+                    l.location_name,
+                    l.default_lat_dd,
+                    l.default_long_dd,
+                    l.location_type_id,
+                    lt.location_type,
+                    lt.description AS location_description
+                FROM tbl_site_locations sl
+                LEFT JOIN tbl_locations l ON sl.location_id = l.location_id
+                LEFT JOIN tbl_location_types lt ON l.location_type_id = lt.location_type_id
+                WHERE sl.site_id = $1
+            ),
+            physical_samples AS (
+                SELECT
+                    ps.*,
+                    st.type_name AS sample_type_name,
+                    st.description AS sample_type_description
+                FROM tbl_physical_samples ps
+                LEFT JOIN tbl_sample_types st ON ps.sample_type_id = st.sample_type_id
+                WHERE ps.sample_group_id IN (SELECT sample_group_id FROM sample_groups)
+            ),
+            sample_features AS (
+                SELECT *
+                FROM tbl_physical_sample_features
+                LEFT JOIN tbl_features ON tbl_physical_sample_features.feature_id = tbl_features.feature_id
+                LEFT JOIN tbl_feature_types ON tbl_features.feature_type_id = tbl_feature_types.feature_type_id
+                WHERE physical_sample_id IN (SELECT physical_sample_id FROM physical_samples)
+            ),
+            sample_descriptions AS (
+                SELECT *
+                FROM tbl_sample_descriptions
+                LEFT JOIN tbl_sample_description_types ON tbl_sample_descriptions.sample_description_type_id = tbl_sample_description_types.sample_description_type_id
+                WHERE tbl_sample_descriptions.physical_sample_id IN (SELECT physical_sample_id FROM physical_samples)
+            ),
+            sample_locations AS (
+                SELECT *
+                FROM tbl_sample_locations
+                LEFT JOIN tbl_sample_location_types ON tbl_sample_locations.sample_location_type_id = tbl_sample_location_types.sample_location_type_id
+                WHERE tbl_sample_locations.physical_sample_id IN (SELECT physical_sample_id FROM physical_samples)
+            ),
+            sample_alt_refs AS (
+                SELECT *
+                FROM tbl_sample_alt_refs
+                LEFT JOIN tbl_alt_ref_types ON tbl_sample_alt_refs.alt_ref_type_id = tbl_alt_ref_types.alt_ref_type_id
+                WHERE tbl_sample_alt_refs.physical_sample_id IN (SELECT physical_sample_id FROM physical_samples)
+            ),
+            sample_dimensions AS (
+                SELECT
+                    tbl_sample_dimensions.*,
+                    tbl_dimensions.unit_id
+                FROM tbl_sample_dimensions
+                LEFT JOIN tbl_methods ON tbl_sample_dimensions.method_id = tbl_methods.method_id
+                LEFT JOIN tbl_dimensions ON tbl_dimensions.dimension_id = tbl_sample_dimensions.dimension_id
+                WHERE tbl_sample_dimensions.physical_sample_id IN (SELECT physical_sample_id FROM physical_samples)
+            ),
+            sample_coordinates AS (
+                SELECT
+                    tbl_sample_coordinates.physical_sample_id,
+                    tbl_sample_coordinates.measurement::float AS measurement,
+                    tbl_sample_coordinates.accuracy,
+                    tbl_coordinate_method_dimensions.dimension_id,
+                    tbl_coordinate_method_dimensions.method_id AS coordinate_method_id
+                FROM tbl_sample_coordinates
+                JOIN tbl_coordinate_method_dimensions ON tbl_sample_coordinates.coordinate_method_dimension_id = tbl_coordinate_method_dimensions.coordinate_method_dimension_id
+                WHERE tbl_sample_coordinates.physical_sample_id IN (SELECT physical_sample_id FROM physical_samples)
+            ),
+            sample_horizons AS (
+                SELECT *
+                FROM tbl_sample_horizons
+                JOIN tbl_horizons ON tbl_sample_horizons.horizon_id = tbl_horizons.horizon_id
+                WHERE physical_sample_id IN (SELECT physical_sample_id FROM physical_samples)
+            ),
+            analysis_entities AS (
+                SELECT *
+                FROM tbl_analysis_entities
+                WHERE physical_sample_id IN (SELECT physical_sample_id FROM physical_samples)
+            ),
+            analysis_entity_prep_methods AS (
+                SELECT *
+                FROM tbl_analysis_entity_prep_methods
+                WHERE analysis_entity_id IN (SELECT analysis_entity_id FROM analysis_entities)
+            ),
+            dataset_ids AS (
+                SELECT DISTINCT dataset_id
+                FROM analysis_entities
+                WHERE dataset_id IS NOT NULL
+            ),
+            datasets AS (
+                SELECT
+                    d.*,
+                    m.method_group_id
+                FROM tbl_datasets d
+                LEFT JOIN tbl_methods m ON d.method_id = m.method_id
+                WHERE d.dataset_id IN (SELECT dataset_id FROM dataset_ids)
+            ),
+            dataset_contacts AS (
+                SELECT *
+                FROM tbl_dataset_contacts
+                WHERE dataset_id IN (SELECT dataset_id FROM dataset_ids)
+            ),
+            dataset_projects AS (
+                SELECT
+                    p.project_id,
+                    p.project_type_id,
+                    p.project_stage_id,
+                    p.project_name,
+                    p.project_abbrev_name,
+                    p.description,
+                    pt.project_type_name,
+                    pt.description AS project_type_description
+                FROM tbl_projects p
+                JOIN tbl_project_types pt ON pt.project_type_id = p.project_type_id
+                WHERE p.project_id IN (
+                    SELECT DISTINCT project_id
+                    FROM datasets
+                    WHERE project_id IS NOT NULL
+                )
+            ),
+            dataset_contacts_lookup AS (
+                SELECT DISTINCT ON (tbl_dataset_contacts.contact_id)
+                    tbl_dataset_contacts.*,
+                    tbl_contact_types.contact_type_name AS contact_type,
+                    tbl_contact_types.description AS contact_type_description,
+                    tbl_contacts.address_1 AS contact_address_1,
+                    tbl_contacts.address_2 AS contact_address_2,
+                    tbl_contacts.location_id AS contact_location_id,
+                    tbl_contacts.email AS contact_email,
+                    tbl_contacts.first_name AS contact_first_name,
+                    tbl_contacts.last_name AS contact_last_name,
+                    tbl_contacts.phone_number AS contact_phone,
+                    tbl_contacts.url AS contact_url,
+                    tbl_locations.location_name AS contact_location_name
+                FROM tbl_sites
+                JOIN tbl_sample_groups ON tbl_sample_groups.site_id = tbl_sites.site_id
+                JOIN tbl_physical_samples ON tbl_physical_samples.sample_group_id = tbl_sample_groups.sample_group_id
+                JOIN tbl_analysis_entities ON tbl_analysis_entities.physical_sample_id = tbl_physical_samples.physical_sample_id
+                JOIN tbl_datasets ON tbl_datasets.dataset_id = tbl_analysis_entities.dataset_id
+                JOIN tbl_dataset_contacts ON tbl_dataset_contacts.dataset_id = tbl_datasets.dataset_id
+                JOIN tbl_contact_types ON tbl_contact_types.contact_type_id = tbl_dataset_contacts.contact_type_id
+                JOIN tbl_contacts ON tbl_contacts.contact_id = tbl_dataset_contacts.contact_id
+                LEFT JOIN tbl_locations ON tbl_locations.location_id = tbl_contacts.location_id
+                WHERE tbl_sites.site_id = $1
+            ),
+            site_biblio AS (
+                SELECT *
+                FROM tbl_site_references
+                LEFT JOIN tbl_biblio ON tbl_site_references.biblio_id = tbl_biblio.biblio_id
+                WHERE site_id = $1
+            ),
+            dataset_biblio_lookup AS (
+                SELECT *
+                FROM tbl_biblio
+                WHERE biblio_id IN (
+                    SELECT DISTINCT biblio_id
+                    FROM datasets
+                    WHERE biblio_id IS NOT NULL
+                )
+            ),
+            other_records AS (
+                SELECT
+                    sor.biblio_id,
+                    sor.record_type_id,
+                    sor.description,
+                    rt.record_type_name,
+                    rt.record_type_description,
+                    to_jsonb(b) AS biblio
+                FROM tbl_site_other_records sor
+                INNER JOIN tbl_record_types rt ON rt.record_type_id = sor.record_type_id
+                LEFT JOIN tbl_biblio b ON b.biblio_id = sor.biblio_id
+                WHERE sor.site_id = $1
+            ),
+            domain_facets AS (
+                SELECT fc.facet_id, fc.clause, f.facet_code, f.display_title
+                FROM facet.facet_clause fc
+                JOIN facet.facet f ON f.facet_id = fc.facet_id
+                WHERE f.facet_group_id = 999
+            ),
+            method_ids AS (
+                SELECT DISTINCT method_id
+                FROM (
+                    SELECT method_id FROM sample_groups WHERE method_id IS NOT NULL
+                    UNION ALL
+                    SELECT coordinate_method_id AS method_id FROM sample_group_coords WHERE coordinate_method_id IS NOT NULL
+                    UNION ALL
+                    SELECT method_id FROM sample_dimensions WHERE method_id IS NOT NULL
+                    UNION ALL
+                    SELECT coordinate_method_id AS method_id FROM sample_coordinates WHERE coordinate_method_id IS NOT NULL
+                    UNION ALL
+                    SELECT method_id FROM sample_horizons WHERE method_id IS NOT NULL
+                    UNION ALL
+                    SELECT method_id FROM datasets WHERE method_id IS NOT NULL
+                ) m
+            ),
+            methods_lookup AS (
+                SELECT *
+                FROM tbl_methods
+                WHERE method_id IN (SELECT method_id FROM method_ids)
+            ),
+            prep_methods_lookup AS (
+                SELECT *
+                FROM tbl_methods
+                WHERE method_id IN (
+                    SELECT DISTINCT method_id
+                    FROM analysis_entity_prep_methods
+                    WHERE method_id IS NOT NULL
+                )
+            ),
+            dimension_ids AS (
+                SELECT DISTINCT dimension_id
+                FROM (
+                    SELECT dimension_id FROM sample_group_coords WHERE dimension_id IS NOT NULL
+                    UNION ALL
+                    SELECT dimension_id FROM sample_dimensions WHERE dimension_id IS NOT NULL
+                    UNION ALL
+                    SELECT dimension_id FROM sample_coordinates WHERE dimension_id IS NOT NULL
+                ) d
+            ),
+            dimensions_lookup AS (
+                SELECT *
+                FROM tbl_dimensions
+                WHERE dimension_id IN (SELECT dimension_id FROM dimension_ids)
+            ),
+            unit_ids AS (
+                SELECT DISTINCT unit_id
+                FROM (
+                    SELECT unit_id FROM dimensions_lookup WHERE unit_id IS NOT NULL
+                    UNION ALL
+                    SELECT unit_id FROM methods_lookup WHERE unit_id IS NOT NULL
+                ) u
+            ),
+            units_lookup AS (
+                SELECT *
+                FROM tbl_units
+                WHERE unit_id IN (SELECT unit_id FROM unit_ids)
+            )
+            SELECT
+                (SELECT to_jsonb(sd) FROM site_data sd LIMIT 1) AS site,
+                (SELECT COALESCE(jsonb_agg(row_to_json(x)), '[]'::jsonb) FROM site_biblio x) AS site_biblio,
+                (SELECT COALESCE(jsonb_agg(row_to_json(x)), '[]'::jsonb) FROM sample_groups x) AS sample_groups,
+                (SELECT COALESCE(jsonb_agg(row_to_json(x)), '[]'::jsonb) FROM sample_group_coords x) AS sample_group_coords,
+                (SELECT COALESCE(jsonb_agg(row_to_json(x)), '[]'::jsonb) FROM sample_group_refs x) AS sample_group_refs,
+                (SELECT COALESCE(jsonb_agg(row_to_json(x)), '[]'::jsonb) FROM sample_group_desc x) AS sample_group_desc,
+                (SELECT COALESCE(jsonb_agg(row_to_json(x)), '[]'::jsonb) FROM sample_group_contexts x) AS sample_group_contexts,
+                (SELECT COALESCE(jsonb_agg(row_to_json(x)), '[]'::jsonb) FROM sample_group_notes x) AS sample_group_notes,
+                (SELECT COALESCE(jsonb_agg(row_to_json(x)), '[]'::jsonb) FROM site_locations x) AS site_locations,
+                (SELECT COALESCE(jsonb_agg(row_to_json(x)), '[]'::jsonb) FROM physical_samples x) AS physical_samples,
+                (SELECT COALESCE(jsonb_agg(row_to_json(x)), '[]'::jsonb) FROM sample_features x) AS sample_features,
+                (SELECT COALESCE(jsonb_agg(row_to_json(x)), '[]'::jsonb) FROM sample_descriptions x) AS sample_descriptions,
+                (SELECT COALESCE(jsonb_agg(row_to_json(x)), '[]'::jsonb) FROM sample_locations x) AS sample_locations,
+                (SELECT COALESCE(jsonb_agg(row_to_json(x)), '[]'::jsonb) FROM sample_alt_refs x) AS sample_alt_refs,
+                (SELECT COALESCE(jsonb_agg(row_to_json(x)), '[]'::jsonb) FROM sample_dimensions x) AS sample_dimensions,
+                (SELECT COALESCE(jsonb_agg(row_to_json(x)), '[]'::jsonb) FROM sample_coordinates x) AS sample_coordinates,
+                (SELECT COALESCE(jsonb_agg(row_to_json(x)), '[]'::jsonb) FROM sample_horizons x) AS sample_horizons,
+                (SELECT COALESCE(jsonb_agg(row_to_json(x)), '[]'::jsonb) FROM analysis_entities x) AS analysis_entities,
+                (SELECT COALESCE(jsonb_agg(row_to_json(x)), '[]'::jsonb) FROM analysis_entity_prep_methods x) AS analysis_entity_prep_methods,
+                (SELECT COALESCE(jsonb_agg(row_to_json(x)), '[]'::jsonb) FROM datasets x) AS datasets,
+                (SELECT COALESCE(jsonb_agg(row_to_json(x)), '[]'::jsonb) FROM dataset_contacts x) AS dataset_contacts,
+                (SELECT COALESCE(jsonb_agg(row_to_json(x)), '[]'::jsonb) FROM dataset_projects x) AS dataset_projects,
+                (SELECT COALESCE(jsonb_agg(row_to_json(x)), '[]'::jsonb) FROM dataset_contacts_lookup x) AS dataset_contacts_lookup,
+                (SELECT COALESCE(jsonb_agg(row_to_json(x)), '[]'::jsonb) FROM dataset_biblio_lookup x) AS dataset_biblio_lookup,
+                (SELECT COALESCE(jsonb_agg(row_to_json(x)), '[]'::jsonb) FROM other_records x) AS other_records,
+                (SELECT COALESCE(jsonb_agg(row_to_json(x)), '[]'::jsonb) FROM domain_facets x) AS domain_facets,
+                (SELECT COALESCE(jsonb_agg(row_to_json(x)), '[]'::jsonb) FROM methods_lookup x) AS methods_lookup,
+                (SELECT COALESCE(jsonb_agg(row_to_json(x)), '[]'::jsonb) FROM prep_methods_lookup x) AS prep_methods_lookup,
+                (SELECT COALESCE(jsonb_agg(row_to_json(x)), '[]'::jsonb) FROM dimensions_lookup x) AS dimensions_lookup,
+                (SELECT COALESCE(jsonb_agg(row_to_json(x)), '[]'::jsonb) FROM units_lookup x) AS units_lookup
+            `;
+
+            const data = await pgClient.query(sql, [siteId]);
+            const payload = data.rows[0];
+
+            if(!payload || !payload.site) {
+                console.warn("No site found for site_id", siteId);
+                return false;
+            }
+
+            const asArray = (value) => Array.isArray(value) ? value : [];
+
+            site = payload.site;
+            site.data_groups = [];
+            site.api_source = appName+"-"+appVersion;
+            site.lookup_tables = {
+                biblio: [],
+                units: asArray(payload.units_lookup),
+                dimensions: asArray(payload.dimensions_lookup),
+                dataset_contacts: asArray(payload.dataset_contacts_lookup),
+                methods: asArray(payload.methods_lookup),
+                prep_methods: asArray(payload.prep_methods_lookup),
+                domains: [],
+            };
+
+            site.biblio = asArray(payload.site_biblio);
+            site.location = asArray(payload.site_locations);
+            site.other_records = asArray(payload.other_records);
+            site.sample_groups = asArray(payload.sample_groups);
+            site.datasets = asArray(payload.datasets);
+
+            const sampleGroupsById = new Map();
+            site.sample_groups.forEach(sampleGroup => {
+                sampleGroup.coordinates = [];
+                sampleGroup.biblio = [];
+                sampleGroup.descriptions = [];
+                sampleGroup.sampling_context = [];
+                sampleGroup.notes = [];
+                sampleGroup.physical_samples = [];
+                sampleGroup.sampling_method_id = sampleGroup.method_id;
+                sampleGroupsById.set(sampleGroup.sample_group_id, sampleGroup);
+            });
+
+            asArray(payload.sample_group_coords).forEach(coord => {
+                const sampleGroup = sampleGroupsById.get(coord.sample_group_id);
+                if(sampleGroup) {
+                    sampleGroup.coordinates.push({
+                        accuracy: coord.position_accuracy,
+                        coordinate_method_id: coord.coordinate_method_id,
+                        dimension_id: coord.dimension_id,
+                        measurement: parseFloat(coord.measurement),
+                    });
+                }
+            });
+
+            asArray(payload.sample_group_refs).forEach(ref => {
+                const sampleGroup = sampleGroupsById.get(ref.sample_group_id);
+                if(sampleGroup) {
+                    sampleGroup.biblio.push(ref);
+                }
+            });
+
+            asArray(payload.sample_group_desc).forEach(desc => {
+                const sampleGroup = sampleGroupsById.get(desc.sample_group_id);
+                if(sampleGroup) {
+                    sampleGroup.descriptions.push(desc);
+                }
+            });
+
+            const contextsById = new Map();
+            asArray(payload.sample_group_contexts).forEach(context => {
+                if(!contextsById.has(context.sampling_context_id)) {
+                    contextsById.set(context.sampling_context_id, []);
+                }
+                contextsById.get(context.sampling_context_id).push(context);
+            });
+            site.sample_groups.forEach(sampleGroup => {
+                sampleGroup.sampling_context = contextsById.get(sampleGroup.sampling_context_id) || [];
+            });
+
+            asArray(payload.sample_group_notes).forEach(note => {
+                const sampleGroup = sampleGroupsById.get(note.sample_group_id);
+                if(sampleGroup) {
+                    sampleGroup.notes.push(note);
+                }
+            });
+
+            const physicalSamplesById = new Map();
+            asArray(payload.physical_samples).forEach(sample => {
+                sample.features = [];
+                sample.descriptions = [];
+                sample.locations = [];
+                sample.alt_refs = [];
+                sample.dimensions = [];
+                sample.coordinates = [];
+                sample.horizons = [];
+                sample.analysis_entities = [];
+
+                physicalSamplesById.set(sample.physical_sample_id, sample);
+                const sampleGroup = sampleGroupsById.get(sample.sample_group_id);
+                if(sampleGroup) {
+                    sampleGroup.physical_samples.push(sample);
+                }
+            });
+
+            asArray(payload.sample_features).forEach(feature => {
+                const sample = physicalSamplesById.get(feature.physical_sample_id);
+                if(sample) {
+                    sample.features.push(feature);
+                }
+            });
+
+            asArray(payload.sample_descriptions).forEach(description => {
+                const sample = physicalSamplesById.get(description.physical_sample_id);
+                if(sample) {
+                    sample.descriptions.push(description);
+                }
+            });
+
+            asArray(payload.sample_locations).forEach(location => {
+                const sample = physicalSamplesById.get(location.physical_sample_id);
+                if(sample) {
+                    sample.locations.push(location);
+                }
+            });
+
+            asArray(payload.sample_alt_refs).forEach(altRef => {
+                const sample = physicalSamplesById.get(altRef.physical_sample_id);
+                if(sample) {
+                    sample.alt_refs.push(altRef);
+                }
+            });
+
+            asArray(payload.sample_dimensions).forEach(dimension => {
+                const sample = physicalSamplesById.get(dimension.physical_sample_id);
+                if(sample) {
+                    sample.dimensions.push(dimension);
+                }
+            });
+
+            asArray(payload.sample_coordinates).forEach(coord => {
+                const sample = physicalSamplesById.get(coord.physical_sample_id);
+                if(sample) {
+                    sample.coordinates.push(coord);
+                }
+            });
+
+            const horizonLookupMap = new Map();
+            asArray(payload.sample_horizons).forEach(horizon => {
+                const sample = physicalSamplesById.get(horizon.physical_sample_id);
+                if(sample) {
+                    sample.horizons.push(horizon.horizon_id);
+                }
+                if(!horizonLookupMap.has(horizon.horizon_id)) {
+                    horizonLookupMap.set(horizon.horizon_id, {
+                        horizon_id: horizon.horizon_id,
+                        horizon_name: horizon.horizon_name,
+                        description: horizon.description,
+                        method_id: horizon.method_id
+                    });
+                }
+            });
+            if(horizonLookupMap.size > 0) {
+                site.lookup_tables.horizons = Array.from(horizonLookupMap.values());
+            }
+
+            const analysisEntitiesById = new Map();
+            asArray(payload.analysis_entities).forEach(analysisEntity => {
+                analysisEntity.prepMethods = [];
+                analysisEntitiesById.set(analysisEntity.analysis_entity_id, analysisEntity);
+
+                const sample = physicalSamplesById.get(analysisEntity.physical_sample_id);
+                if(sample) {
+                    sample.analysis_entities.push(analysisEntity);
+                }
+            });
+
+            asArray(payload.analysis_entity_prep_methods).forEach(prepMethod => {
+                const analysisEntity = analysisEntitiesById.get(prepMethod.analysis_entity_id);
+                if(analysisEntity && !analysisEntity.prepMethods.includes(prepMethod.method_id)) {
+                    analysisEntity.prepMethods.push(prepMethod.method_id);
+                }
+            });
+
+            const datasetById = new Map();
+            site.datasets.forEach(dataset => {
+                dataset.contacts = [];
+                datasetById.set(dataset.dataset_id, dataset);
+            });
+
+            asArray(payload.dataset_contacts).forEach(contact => {
+                const dataset = datasetById.get(contact.dataset_id);
+                if(dataset) {
+                    dataset.contacts.push(contact.contact_id);
+                }
+            });
+
+            const projectById = new Map();
+            asArray(payload.dataset_projects).forEach(project => {
+                projectById.set(project.project_id, project);
+            });
+            site.datasets.forEach(dataset => {
+                if(dataset.project_id && projectById.has(dataset.project_id)) {
+                    dataset.project = projectById.get(dataset.project_id);
+                }
+            });
+
+            const biblioById = new Map();
+            const addBiblio = (entry) => {
+                const biblioId = parseInt(entry?.biblio_id);
+                if(!entry || !biblioId) {
+                    return;
+                }
+                const existing = biblioById.get(biblioId);
+                if(!existing || Object.keys(entry).length > Object.keys(existing).length) {
+                    biblioById.set(biblioId, entry);
+                }
+            };
+            site.biblio.forEach(addBiblio);
+            site.sample_groups.forEach(sampleGroup => {
+                sampleGroup.biblio.forEach(addBiblio);
+            });
+            asArray(payload.dataset_biblio_lookup).forEach(addBiblio);
+            site.lookup_tables.biblio = Array.from(biblioById.values());
+
+            asArray(payload.domain_facets).forEach(facetClause => {
+                const rawMethodIds = facetClause.clause ? facetClause.clause.match(/\d+/g) : null;
+                const methodIds = rawMethodIds ? rawMethodIds.map(methodId => parseInt(methodId)) : [];
+                if(methodIds.length > 0) {
+                    site.lookup_tables.domains.push({
+                        facet_id: facetClause.facet_id,
+                        facet_code: facetClause.facet_code,
+                        title: facetClause.display_title,
+                        method_ids: methodIds
+                    });
+                }
+            });
+
+            await this.fetchDatingSummary(site);
+
+            if(verbose) console.timeEnd("Fetched consolidated site payload for site "+siteId);
+        }
+        catch(error) {
+            console.error("Failed in getSitePostgres for site", siteId);
+            console.error(error);
+            return false;
+        }
+        finally {
+            this.releaseDbConnection(pgClient);
+        }
+
+        if(fetchMethodSpecificData) {
+            if(verbose) console.time("Fetched method specific data for site "+siteId+" (Postgres consolidated)");
+            await this.fetchMethodSpecificData(site);
+            if(verbose) console.timeEnd("Fetched method specific data for site "+siteId+" (Postgres consolidated)");
+        }
+
+        if(verbose) console.time("Done post-processing primary data for site "+siteId+" (Postgres consolidated)");
+        await this.postProcessSiteData(site);
+        if(verbose) console.timeEnd("Done post-processing primary data for site "+siteId+" (Postgres consolidated)");
+
+        if(verbose) console.timeEnd("Done fetching site "+siteId+" (Postgres consolidated)");
+
+        if(this.useSiteCaching) {
+            this.saveSiteToCache(site);
+        }
+
+        return site;
     }
 
     async getSite(siteId, verbose = true, fetchMethodSpecificData = true, noCache = false) {
@@ -2585,14 +3216,11 @@ class SeadJsonApiServer {
             console.warn("Skipping cache lookup, all caching is disabled");
             return false;
         }
-        let foundObject = null;
-        let findResult = await this.mongo.collection(collection).find(identifierObject).toArray();
-        if(findResult.length > 0 && findMany == false) {
-            foundObject = findResult[0];
+        if(findMany) {
+            return await this.mongo.collection(collection).find(identifierObject).toArray();
         }
-        else if(findMany) {
-            return findResult;
-        }
+
+        let foundObject = await this.mongo.collection(collection).findOne(identifierObject);
 
         if(foundObject && (this.checkVersionMatch(foundObject.api_source, appName+"-"+appVersion) || this.acceptCacheVersionMismatch)) {
             return foundObject;
@@ -2609,6 +3237,17 @@ class SeadJsonApiServer {
         let v2 = parts[0]+"."+parts[1];
 
         return v1 == v2;
+    }
+
+    isValidSiteIdsInput(siteIds) {
+        if(!Array.isArray(siteIds)) {
+            return false;
+        }
+
+        return siteIds.every(siteId => {
+            const numericSiteId = Number(siteId);
+            return Number.isInteger(numericSiteId) && numericSiteId > 0;
+        });
     }
 
     async saveObjectToCache(collection, identifierObject, saveObject) {
