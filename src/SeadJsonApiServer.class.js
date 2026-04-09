@@ -288,14 +288,17 @@ class SeadJsonApiServer {
         });
 
         this.expressApp.get('/site/:siteId/:noCache?/:alternativeFetchMethod?', async (req, res) => {
-            if(req.params.alternativeFetchMethod) {
-                let site = await this.getSitePostgres(req.params.siteId, true, true, req.params.noCache == "true" ? true : false);
+            const noCache = req.params.noCache === "true";
+            const useAlternativeFetchMethod = req.params.alternativeFetchMethod === "true";
+
+            if(useAlternativeFetchMethod) {
+                let site = await this.getSitePostgres(req.params.siteId, true, true, noCache);
                 res.header("Content-type", "application/json");
                 res.send(JSON.stringify(site, null, 2));
                 return;
             }
 
-            let site = await this.getSite(req.params.siteId, true, true, req.params.noCache == "true" ? true : false);
+            let site = await this.getSite(req.params.siteId, true, true, noCache);
             res.header("Content-type", "application/json");
             res.send(JSON.stringify(site, null, 2));
         });
@@ -1928,6 +1931,8 @@ class SeadJsonApiServer {
             if(verbose) console.timeEnd("Fetched method specific data for site "+siteId+" (Postgres consolidated)");
         }
 
+        this.normalizeAnalysisEntityFieldOrder(site);
+
         if(verbose) console.time("Done post-processing primary data for site "+siteId+" (Postgres consolidated)");
         await this.postProcessSiteData(site);
         if(verbose) console.timeEnd("Done post-processing primary data for site "+siteId+" (Postgres consolidated)");
@@ -2122,6 +2127,46 @@ class SeadJsonApiServer {
             }
         }
         return false;
+    }
+
+    orderAnalysisEntityFields(analysisEntity) {
+        const orderedAnalysisEntity = {};
+        const prioritizedKeys = [
+            "dataset_id",
+            "date_updated",
+            "analysis_entity_id",
+            "physical_sample_id",
+            "prepMethods",
+            "measured_values",
+            "abundances"
+        ];
+
+        prioritizedKeys.forEach(key => {
+            if(Object.prototype.hasOwnProperty.call(analysisEntity, key)) {
+                orderedAnalysisEntity[key] = analysisEntity[key];
+            }
+        });
+
+        Object.keys(analysisEntity).forEach(key => {
+            if(!Object.prototype.hasOwnProperty.call(orderedAnalysisEntity, key)) {
+                orderedAnalysisEntity[key] = analysisEntity[key];
+            }
+        });
+
+        return orderedAnalysisEntity;
+    }
+
+    normalizeAnalysisEntityFieldOrder(site) {
+        site.sample_groups.forEach(sampleGroup => {
+            sampleGroup.physical_samples = sampleGroup.physical_samples.map(physicalSample => {
+                if(Array.isArray(physicalSample.analysis_entities)) {
+                    physicalSample.analysis_entities = physicalSample.analysis_entities.map(analysisEntity => {
+                        return this.orderAnalysisEntityFields(analysisEntity);
+                    });
+                }
+                return physicalSample;
+            });
+        });
     }
 
     async postProcessSiteData(site) {
