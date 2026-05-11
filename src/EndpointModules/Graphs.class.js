@@ -31,6 +31,19 @@ class Graphs {
           res.end(JSON.stringify(analysisMethods, null, 2));
         });
 
+        this.app.expressApp.post('/graphs/countries', async (req, res) => {
+          let siteIds = req.body;
+          if(!this.isValidSiteIdsInput(siteIds)) {
+            res.status(400);
+            res.send("Bad input - should be an array of site IDs");
+            return;
+          }
+
+          let countries = await this.fetchCountriesSummaryForSites(siteIds);
+          res.header("Content-type", "application/json");
+          res.end(JSON.stringify(countries, null, 2));
+        });
+
         this.app.expressApp.post('/graphs/datings', async (req, res) => {
           let siteIds = req.body;
           if(!this.isValidSiteIdsInput(siteIds)) {
@@ -1410,6 +1423,63 @@ class Graphs {
       };
 
       if (this.app.useGraphCaching) {
+        this.app.saveObjectToCache("graph_cache", identifierObject, resultObject);
+      }
+
+      return resultObject;
+    }
+
+    async fetchCountriesSummaryForSites(siteIds) {
+      let cacheId = crypto.createHash('sha256');
+      siteIds.sort((a, b) => a - b);
+      cacheId = cacheId.update('countries' + JSON.stringify(siteIds)).digest('hex');
+      let identifierObject = { cache_id: cacheId };
+
+      if(this.app.useGraphCaching) {
+        let cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
+        if (cachedData !== false) {
+          return cachedData;
+        }
+      }
+
+      let pipeline = [
+        { $match: { site_id: { $in: siteIds } } },
+        { $unwind: "$location" },
+        {
+          $match: {
+            "location.location_name": { $type: "string", $ne: "" },
+            $or: [
+              { "location.location_type_id": 1 },
+              { "location.location_type": "Country" }
+            ]
+          }
+        },
+        {
+          $group: {
+            _id: "$location.location_id",
+            country_name: { $first: "$location.location_name" },
+            site_ids: { $addToSet: "$site_id" }
+          }
+        },
+        {
+          $project: {
+            country_id: "$_id",
+            country_name: 1,
+            site_count: { $size: "$site_ids" },
+            _id: 0
+          }
+        },
+        { $sort: { site_count: -1, country_name: 1 } }
+      ];
+
+      let countries = await this.app.mongo.collection('sites').aggregate(pipeline).toArray();
+
+      let resultObject = {
+        cache_id: cacheId,
+        countries
+      };
+
+      if(this.app.useGraphCaching) {
         this.app.saveObjectToCache("graph_cache", identifierObject, resultObject);
       }
 
