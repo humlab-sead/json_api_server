@@ -25,6 +25,7 @@ import Graphs from "./EndpointModules/Graphs.class.js";
 import Viewstates from "./EndpointModules/Viewstates.class.js";
 import MCR from "./EndpointModules/MCR.class.js";
 import Search from "./EndpointModules/Search.class.js";
+import Images from "./EndpointModules/Images.class.js";
 import AuthenticationHandler from './AuthenticationHandler.class.js';
 import basicAuth from 'basic-auth';
 
@@ -32,7 +33,7 @@ import { Client as ESClient } from "@elastic/elasticsearch";
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.55.0";
+const appVersion = "1.56.0";
 
 class SeadJsonApiServer {
     constructor() {
@@ -112,6 +113,7 @@ class SeadJsonApiServer {
             this.viewstates = new Viewstates(this);
             this.mcr = new MCR(this);
             this.search = new Search(this);
+            this.images = new Images(this);
 
             this.run();
         });
@@ -808,6 +810,7 @@ class SeadJsonApiServer {
         taxon = rows[0];
 
         taxon.api_source = appName+"-"+appVersion;
+        taxon.server_version = appVersion;
 
         let generaRes = await this.fetchFromTable("tbl_taxa_tree_genera", "genus_id", taxon.genus_id);
         taxon.genus = generaRes[0];
@@ -1686,6 +1689,7 @@ class SeadJsonApiServer {
             site = payload.site;
             site.data_groups = [];
             site.api_source = appName+"-"+appVersion;
+            site.server_version = appVersion;
             site.lookup_tables = {
                 biblio: [],
                 units: asArray(payload.units_lookup),
@@ -1974,6 +1978,7 @@ class SeadJsonApiServer {
         site = siteData.rows[0];
         site.data_groups = [];
         site.api_source = appName+"-"+appVersion;
+        site.server_version = appVersion;
         site.lookup_tables = {
             biblio: [],
             units: [],
