@@ -13,10 +13,11 @@ const seadJsonApiServer = new SeadJsonApiServer();
 
 process.on('SIGTERM', function (code) {
     console.log('SIGTERM received...', code);
+    seadJsonApiServer.shutdown();
 });
 
 process.on('SIGINT', function (code) {
-    console.log(code, 'received', );
+    console.log(code, 'received');
     seadJsonApiServer.shutdown();
 });
 

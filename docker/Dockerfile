@@ -37,4 +37,4 @@ RUN npm install -g nodemon
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://${DOMAIN}:8484/health || exit 1
 
-CMD ["sh", "-c", "if [ \"$MODE\" = \"dev\" ]; then nodemon --legacy-watch /json_api_server/src/index.js; else node /json_api_server/src/index.js; fi"]
+CMD ["sh", "-c", "if [ \"$MODE\" = \"dev\" ]; then nodemon --legacy-watch /json_api_server/src/index.js; else exec node /json_api_server/src/index.js; fi"]

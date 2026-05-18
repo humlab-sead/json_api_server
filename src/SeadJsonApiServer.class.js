@@ -33,7 +33,7 @@ import { Client as ESClient } from "@elastic/elasticsearch";
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.56.0";
+const appVersion = "1.57.0";
 
 class SeadJsonApiServer {
     constructor() {
@@ -3782,26 +3782,48 @@ class SeadJsonApiServer {
 
     shutdown() {
         console.log("Shutdown called");
-        this.pgPool.end();
 
-        let p1 = new Promise((resolve, reject) => {
-            this.server.close(() => {
-                console.log('Server shutdown');
+        // Force-exit after 9 seconds to stay within Docker's 10s stop timeout
+        const forceExitTimer = setTimeout(() => {
+            console.error("Graceful shutdown timed out, forcing exit");
+            process.exit(1);
+        }, 9000);
+        forceExitTimer.unref();
+
+        const p1 = new Promise((resolve) => {
+            if(this.server) {
+                this.server.close(() => {
+                    console.log('HTTP server closed');
+                    resolve();
+                });
+            } else {
                 resolve();
-            });
+            }
         });
 
-        let p2 = new Promise((resolve, reject) => {
-            this.httpWsServer.close(() => {
-                console.log('Websocket server shutdown');
+        const p2 = new Promise((resolve) => {
+            if(this.httpWsServer) {
+                this.httpWsServer.close(() => {
+                    console.log('WebSocket server closed');
+                    resolve();
+                });
+            } else {
                 resolve();
-            });
+            }
         });
-        
-        Promise.all([p1, p2]).then(() => {
+
+        const p3 = this.pgPool ? this.pgPool.end().then(() => console.log('Postgres pool closed')) : Promise.resolve();
+
+        const p4 = this.mongoClient ? this.mongoClient.close().then(() => console.log('MongoDB client closed')) : Promise.resolve();
+
+        Promise.all([p1, p2, p3, p4]).then(() => {
+            clearTimeout(forceExitTimer);
+            console.log('Shutdown complete');
             process.exit(0);
+        }).catch((err) => {
+            console.error('Error during shutdown:', err);
+            process.exit(1);
         });
-        
     }
 }
 
