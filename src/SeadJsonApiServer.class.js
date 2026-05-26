@@ -33,7 +33,7 @@ import { Client as ESClient } from "@elastic/elasticsearch";
 
 
 const appName = "sead-json-api-server";
-const appVersion = "1.57.0";
+const appVersion = "1.57.1";
 
 class SeadJsonApiServer {
     constructor() {
@@ -841,7 +841,7 @@ class SeadJsonApiServer {
         JOIN tbl_ecocode_definitions ON tbl_ecocode_definitions.ecocode_definition_id=tbl_ecocodes.ecocode_definition_id
         JOIN tbl_ecocode_groups ON tbl_ecocode_groups.ecocode_group_id=tbl_ecocode_definitions.ecocode_group_id
         JOIN tbl_ecocode_systems ON tbl_ecocode_systems.ecocode_system_id=tbl_ecocode_groups.ecocode_system_id
-        WHERE taxon_id=$1`;
+        WHERE tbl_ecocode_groups.ecocode_group_id IN (2,3) AND taxon_id=$1`;
         let ecocodeRes = await pgClient.query(ecocodeSql, [taxonId]);
 
         let ecocodes = {
