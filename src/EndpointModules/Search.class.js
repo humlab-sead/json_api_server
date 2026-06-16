@@ -17,6 +17,15 @@ class Search {
                 return;
             }
 
+            const domainMeta = this.resolveSearchDomain(req.query.domainCode || "");
+            if(domainMeta === false) {
+                res.status(400);
+                res.send(JSON.stringify({
+                    error: "Invalid domainCode. Must be one of: general, palaeoentomology, archaeobotany, pollen, geoarchaeology, dendrochronology, ceramic, isotope, adna"
+                }, null, 2));
+                return;
+            }
+
             let decodedQuery = req.params.search;
             try {
                 decodedQuery = decodeURIComponent(req.params.search);
@@ -42,7 +51,7 @@ class Search {
                 : 1;
 
             try {
-                const searchResults = await this.categorySearchPostgres(categoryMeta, searchTerm, page, perCategoryLimit);
+                const searchResults = await this.categorySearchPostgres(categoryMeta, searchTerm, page, perCategoryLimit, domainMeta);
                 res.header("Content-type", "application/json");
                 res.send(JSON.stringify(searchResults, null, 2));
             }
@@ -98,7 +107,35 @@ class Search {
         return categoryLookup[category];
     }
 
-    buildCategorySearchResponse(searchTerm, categoryMeta, page, perCategoryLimit, rows) {
+    resolveSearchDomain(domainCode) {
+        const domainLookup = {
+            "": null,
+            general: null,
+            palaeoentomology: { methodIds: [3, 6] },
+            archaeobotany: { methodIds: [4, 8] },
+            pollen: { methodIds: [14, 15, 21] },
+            geoarchaeology: { methodIds: [32, 33, 35, 36, 37, 94, 106] },
+            dendrochronology: { methodIds: [10] },
+            ceramic: { methodIds: [172, 171] },
+            isotope: { methodIds: [175] },
+            adna: { recordType: "DNA" }
+        };
+
+        const normalizedCode = typeof domainCode == "string"
+            ? domainCode.trim().toLowerCase()
+            : "";
+
+        if(!Object.prototype.hasOwnProperty.call(domainLookup, normalizedCode)) {
+            return false;
+        }
+
+        return {
+            code: normalizedCode || "general",
+            filter: domainLookup[normalizedCode]
+        };
+    }
+
+    buildCategorySearchResponse(searchTerm, categoryMeta, page, perCategoryLimit, rows, domainMeta) {
         let totalCount = 0;
         const items = [];
 
@@ -142,6 +179,10 @@ class Search {
             query: searchTerm,
             algorithm: "postgres_category_search_v2",
             category: categoryMeta,
+            domain: {
+                code: domainMeta?.code || "general",
+                enabled: !!domainMeta?.filter
+            },
             pagination: {
                 page,
                 limit: perCategoryLimit,
@@ -153,7 +194,7 @@ class Search {
         };
     }
 
-    async categorySearchPostgres(categoryMeta, searchTerm, page = 1, perCategoryLimit = 20) {
+    async categorySearchPostgres(categoryMeta, searchTerm, page = 1, perCategoryLimit = 20, domainMeta = { code: "general", filter: null }) {
         const pgClient = await this.app.getDbConnection();
         if(!pgClient) {
             throw new Error("Could not acquire Postgres connection");
@@ -170,6 +211,25 @@ class Search {
                 SELECT
                     trim($1)::text AS raw_query,
                     websearch_to_tsquery('simple', trim($1)) AS tsq
+            ),
+            domain_scope AS (
+                SELECT ($4::int[] IS NOT NULL OR $5::text IS NOT NULL) AS enabled
+            ),
+            domain_methods AS (
+                SELECT m.method_id
+                FROM tbl_methods m
+                LEFT JOIN tbl_record_types rt ON rt.record_type_id = m.record_type_id
+                WHERE
+                    ($4::int[] IS NOT NULL AND m.method_id = ANY($4::int[]))
+                    OR ($5::text IS NOT NULL AND rt.record_type_name = $5::text)
+            ),
+            domain_site_ids AS (
+                SELECT DISTINCT sg.site_id
+                FROM tbl_sample_groups sg
+                JOIN tbl_physical_samples ps ON ps.sample_group_id = sg.sample_group_id
+                JOIN tbl_analysis_entities ae ON ae.physical_sample_id = ps.physical_sample_id
+                JOIN tbl_datasets d ON d.dataset_id = ae.dataset_id
+                JOIN domain_methods dm ON dm.method_id = d.method_id
             ),
             hits_raw AS (
                 SELECT
@@ -201,6 +261,10 @@ class Search {
                 FROM tbl_sites s
                 CROSS JOIN params p
                 WHERE s.site_name IS NOT NULL
+                    AND (
+                        NOT (SELECT enabled FROM domain_scope)
+                        OR s.site_id IN (SELECT site_id FROM domain_site_ids)
+                    )
                     AND (
                         to_tsvector('simple', s.site_name) @@ p.tsq
                         OR s.site_name ILIKE '%' || p.raw_query || '%'
@@ -278,6 +342,25 @@ class Search {
                     trim($1)::text AS raw_query,
                     websearch_to_tsquery('simple', trim($1)) AS tsq
             ),
+            domain_scope AS (
+                SELECT ($4::int[] IS NOT NULL OR $5::text IS NOT NULL) AS enabled
+            ),
+            domain_methods AS (
+                SELECT m.method_id
+                FROM tbl_methods m
+                LEFT JOIN tbl_record_types rt ON rt.record_type_id = m.record_type_id
+                WHERE
+                    ($4::int[] IS NOT NULL AND m.method_id = ANY($4::int[]))
+                    OR ($5::text IS NOT NULL AND rt.record_type_name = $5::text)
+            ),
+            domain_sample_group_ids AS (
+                SELECT DISTINCT sg.sample_group_id
+                FROM tbl_sample_groups sg
+                JOIN tbl_physical_samples ps ON ps.sample_group_id = sg.sample_group_id
+                JOIN tbl_analysis_entities ae ON ae.physical_sample_id = ps.physical_sample_id
+                JOIN tbl_datasets d ON d.dataset_id = ae.dataset_id
+                JOIN domain_methods dm ON dm.method_id = d.method_id
+            ),
             hits_raw AS (
                 SELECT
                     s.site_id,
@@ -320,6 +403,11 @@ class Search {
                 JOIN tbl_sites s ON s.site_id = sg.site_id
                 CROSS JOIN params p
                 WHERE
+                    (
+                        NOT (SELECT enabled FROM domain_scope)
+                        OR sg.sample_group_id IN (SELECT sample_group_id FROM domain_sample_group_ids)
+                    )
+                    AND
                     (
                         to_tsvector('simple', coalesce(sg.sample_group_name, '')) @@ p.tsq
                         OR to_tsvector('simple', coalesce(sg.sample_group_description, '')) @@ p.tsq
@@ -411,6 +499,17 @@ class Search {
                     trim($1)::text AS raw_query,
                     websearch_to_tsquery('simple', trim($1)) AS tsq
             ),
+            domain_scope AS (
+                SELECT ($4::int[] IS NOT NULL OR $5::text IS NOT NULL) AS enabled
+            ),
+            domain_methods AS (
+                SELECT m.method_id
+                FROM tbl_methods m
+                LEFT JOIN tbl_record_types rt ON rt.record_type_id = m.record_type_id
+                WHERE
+                    ($4::int[] IS NOT NULL AND m.method_id = ANY($4::int[]))
+                    OR ($5::text IS NOT NULL AND rt.record_type_name = $5::text)
+            ),
             site_dataset_links AS (
                 SELECT
                     sg.site_id,
@@ -420,6 +519,11 @@ class Search {
                 JOIN tbl_physical_samples ps ON ps.sample_group_id = sg.sample_group_id
                 JOIN tbl_analysis_entities ae ON ae.physical_sample_id = ps.physical_sample_id
                 JOIN tbl_datasets d ON d.dataset_id = ae.dataset_id
+                JOIN domain_scope ds ON true
+                LEFT JOIN domain_methods dm ON dm.method_id = d.method_id
+                WHERE
+                    NOT ds.enabled
+                    OR dm.method_id IS NOT NULL
                 GROUP BY sg.site_id, d.dataset_id, d.dataset_name
             ),
             hits_raw AS (
@@ -542,6 +646,17 @@ class Search {
                     trim($1)::text AS raw_query,
                     websearch_to_tsquery('simple', trim($1)) AS tsq
             ),
+            domain_scope AS (
+                SELECT ($4::int[] IS NOT NULL OR $5::text IS NOT NULL) AS enabled
+            ),
+            domain_methods AS (
+                SELECT m.method_id
+                FROM tbl_methods m
+                LEFT JOIN tbl_record_types rt ON rt.record_type_id = m.record_type_id
+                WHERE
+                    ($4::int[] IS NOT NULL AND m.method_id = ANY($4::int[]))
+                    OR ($5::text IS NOT NULL AND rt.record_type_name = $5::text)
+            ),
             site_dataset_method_links AS (
                 SELECT
                     sg.site_id,
@@ -550,7 +665,13 @@ class Search {
                 JOIN tbl_physical_samples ps ON ps.sample_group_id = sg.sample_group_id
                 JOIN tbl_analysis_entities ae ON ae.physical_sample_id = ps.physical_sample_id
                 JOIN tbl_datasets d ON d.dataset_id = ae.dataset_id
+                JOIN domain_scope ds ON true
+                LEFT JOIN domain_methods dm ON dm.method_id = d.method_id
                 WHERE d.method_id IS NOT NULL
+                    AND (
+                        NOT ds.enabled
+                        OR dm.method_id IS NOT NULL
+                    )
                 GROUP BY sg.site_id, d.method_id
             ),
             method_name_sources AS (
@@ -559,7 +680,9 @@ class Search {
                 UNION
                 SELECT sg.site_id, sg.method_id
                 FROM tbl_sample_groups sg
+                CROSS JOIN domain_scope ds
                 WHERE sg.method_id IS NOT NULL
+                    AND NOT ds.enabled
             ),
             hits_raw AS (
                 SELECT
@@ -680,8 +803,17 @@ class Search {
         }
 
         try {
-            const result = await pgClient.query(sql, [searchTerm, offset, upperBound]);
-            return this.buildCategorySearchResponse(searchTerm, categoryMeta, page, perCategoryLimit, result.rows);
+            const domainMethodIds = domainMeta?.filter?.methodIds || null;
+            const domainRecordType = domainMeta?.filter?.recordType || null;
+
+            const result = await pgClient.query(sql, [
+                searchTerm,
+                offset,
+                upperBound,
+                domainMethodIds,
+                domainRecordType
+            ]);
+            return this.buildCategorySearchResponse(searchTerm, categoryMeta, page, perCategoryLimit, result.rows, domainMeta);
         }
         finally {
             this.app.releaseDbConnection(pgClient);
