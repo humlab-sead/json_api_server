@@ -38,22 +38,25 @@ class MeasuredValuesModule {
             return false;
         }
 
-        let queryPromises = [];
-        site.sample_groups.forEach(sampleGroup => {
-            sampleGroup.physical_samples.forEach(physicalSample => {
-                physicalSample.analysis_entities.forEach(analysisEntity => {
-                    ;
-                    let promise = pgClient.query('SELECT * FROM tbl_measured_values WHERE analysis_entity_id=$1', [analysisEntity.analysis_entity_id]).then(measuredValues => {
-                        analysisEntity.measured_values = measuredValues.rows;
+        try {
+            let queryPromises = [];
+            site.sample_groups.forEach(sampleGroup => {
+                sampleGroup.physical_samples.forEach(physicalSample => {
+                    physicalSample.analysis_entities.forEach(analysisEntity => {
+                        ;
+                        let promise = pgClient.query('SELECT * FROM tbl_measured_values WHERE analysis_entity_id=$1', [analysisEntity.analysis_entity_id]).then(measuredValues => {
+                            analysisEntity.measured_values = measuredValues.rows;
+                        });
+                        queryPromises.push(promise);
                     });
-                    queryPromises.push(promise);
-                });
-            })
-        });
+                })
+            });
 
-        await Promise.all(queryPromises).then(() => {
-            this.app.releaseDbConnection(pgClient);
-        });
+            await Promise.all(queryPromises);
+        }
+        finally {
+            await this.app.releaseDbConnection(pgClient);
+        }
 
         return site;
     }

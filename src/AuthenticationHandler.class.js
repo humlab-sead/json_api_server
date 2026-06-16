@@ -24,8 +24,11 @@ export default class AuthenticationHandler {
         this.app.expressApp.use(session({
             secret: sessionSecret,
             resave: false,
-            saveUninitialized: true,
-            cookie: { secure: false } // Set to true if using HTTPS
+            saveUninitialized: false,
+            cookie: {
+                secure: false, // Set to true if using HTTPS
+                maxAge: 24 * 60 * 60 * 1000
+            }
         }));
 
         // Initialize Passport
@@ -78,7 +81,12 @@ export default class AuthenticationHandler {
 
         // Serialize user
         passport.serializeUser((user, done) => {
-            done(null, user);
+            done(null, {
+                provider: user.provider,
+                id: user.id,
+                displayName: user.displayName,
+                emails: user.emails
+            });
         });
 
         // Deserialize user

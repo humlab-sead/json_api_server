@@ -28,27 +28,30 @@ class AbundanceModule {
         if(!pgClient) {
             return false;
         }
-        let sql = `SELECT mcr_data FROM tbl_mcrdata_birmbeetledat WHERE taxon_id=$1 ORDER BY mcr_row ASC`;
-        
-        let queryPromises = [];
-        for(let key in taxa) {
-            let queryPromise = pgClient.query(sql, [taxa[key].taxon_id]).then(result => {
-                //taxa[key].mcrMatrix = result.rows;
+        try {
+            let sql = `SELECT mcr_data FROM tbl_mcrdata_birmbeetledat WHERE taxon_id=$1 ORDER BY mcr_row ASC`;
 
-                let matrix = [];
-                result.rows.forEach(row => {
-                    let matrixRow = row.mcr_data;
-                    matrix.push(matrixRow);
+            let queryPromises = [];
+            for(let key in taxa) {
+                let queryPromise = pgClient.query(sql, [taxa[key].taxon_id]).then(result => {
+                    //taxa[key].mcrMatrix = result.rows;
+
+                    let matrix = [];
+                    result.rows.forEach(row => {
+                        let matrixRow = row.mcr_data;
+                        matrix.push(matrixRow);
+                    });
+                    taxa[key].mcrMatrix = matrix;
                 });
-                taxa[key].mcrMatrix = matrix;
-            });
 
-            queryPromises.push(queryPromise);
+                queryPromises.push(queryPromise);
+            }
+
+            await Promise.all(queryPromises);
         }
-
-        await Promise.all(queryPromises);
-
-        this.app.releaseDbConnection(pgClient);
+        finally {
+            await this.app.releaseDbConnection(pgClient);
+        }
     }
 
     siteHasModuleMethods(site) {
@@ -143,18 +146,19 @@ class AbundanceModule {
             return false;
         }
         
-        let queriesExecuted = 0;
-        let queryPromises = [];
+        try {
+            let queriesExecuted = 0;
+            let queryPromises = [];
 
-        site.sample_groups.forEach(sampleGroup => {
-            sampleGroup.physical_samples.forEach(physicalSample => {
-                physicalSample.analysis_entities.forEach(analysisEntity => {
-                    let promise = pgClient.query('SELECT * FROM tbl_abundances WHERE analysis_entity_id=$1', [analysisEntity.analysis_entity_id]).then(async data => {
-                        queriesExecuted++;
-                        analysisEntity.abundances = data.rows;
+            site.sample_groups.forEach(sampleGroup => {
+                sampleGroup.physical_samples.forEach(physicalSample => {
+                    physicalSample.analysis_entities.forEach(analysisEntity => {
+                        let promise = pgClient.query('SELECT * FROM tbl_abundances WHERE analysis_entity_id=$1', [analysisEntity.analysis_entity_id]).then(async data => {
+                            queriesExecuted++;
+                            analysisEntity.abundances = data.rows;
 
-                        for(let key in analysisEntity.abundances) {
-                            let abundance = analysisEntity.abundances[key];
+                            for(let key in analysisEntity.abundances) {
+                                let abundance = analysisEntity.abundances[key];
 
                             //Fetch abundance identification levels
                             let sql = `
@@ -325,20 +329,23 @@ class AbundanceModule {
                                 });
 
                             }
-                            
 
-                        }
-                        
+
+                            }
+
+                        });
+                        queryPromises.push(promise);
                     });
-                    queryPromises.push(promise);
                 });
             });
-        });
 
 
-        await Promise.all(queryPromises);
-        this.app.releaseDbConnection(pgClient);
-        //console.log("Abundance queries executed: "+queriesExecuted);
+            await Promise.all(queryPromises);
+            //console.log("Abundance queries executed: "+queriesExecuted);
+        }
+        finally {
+            await this.app.releaseDbConnection(pgClient);
+        }
         
         return site;
     }

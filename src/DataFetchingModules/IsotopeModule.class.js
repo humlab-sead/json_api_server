@@ -29,65 +29,68 @@ class IsotopeModule {
             return false;
         }
 
-        let sql = `
-        SELECT 
-        tbl_isotopes.isotope_id,
-        tbl_isotopes.isotope_measurement_id,
-        tbl_isotopes.measurement_value,
-        tbl_isotopes.unit_id,
-        tbl_isotopes.isotope_value_specifier_id,
-        tbl_isotope_measurements.isotope_standard_id AS measurement_standard_id,
-        tbl_isotope_measurements.method_id AS measurement_method_id,
-        tbl_isotope_measurements.isotope_type_id AS measurement_isotope_type_id
-        FROM tbl_isotopes
-        LEFT JOIN tbl_isotope_value_specifiers ON tbl_isotopes.isotope_value_specifier_id=tbl_isotope_value_specifiers.isotope_value_specifier_id
-        LEFT JOIN tbl_isotope_measurements ON tbl_isotope_measurements.isotope_measurement_id=tbl_isotopes.isotope_measurement_id
-        WHERE analysis_entity_id=$1
-        `;
+        try {
+            let sql = `
+            SELECT
+            tbl_isotopes.isotope_id,
+            tbl_isotopes.isotope_measurement_id,
+            tbl_isotopes.measurement_value,
+            tbl_isotopes.unit_id,
+            tbl_isotopes.isotope_value_specifier_id,
+            tbl_isotope_measurements.isotope_standard_id AS measurement_standard_id,
+            tbl_isotope_measurements.method_id AS measurement_method_id,
+            tbl_isotope_measurements.isotope_type_id AS measurement_isotope_type_id
+            FROM tbl_isotopes
+            LEFT JOIN tbl_isotope_value_specifiers ON tbl_isotopes.isotope_value_specifier_id=tbl_isotope_value_specifiers.isotope_value_specifier_id
+            LEFT JOIN tbl_isotope_measurements ON tbl_isotope_measurements.isotope_measurement_id=tbl_isotopes.isotope_measurement_id
+            WHERE analysis_entity_id=$1
+            `;
 
-        for(let key in site.sample_groups) {
-            let sampleGroup = site.sample_groups[key];
-            for(let key2 in sampleGroup.physical_samples) {
-                let physicalSample = sampleGroup.physical_samples[key2];
-                for(let key3 in physicalSample.analysis_entities) {
-                    let analysisEntity = physicalSample.analysis_entities[key3];
-                    let isotopes = await pgClient.query(sql, [analysisEntity.analysis_entity_id]);
-                    analysisEntity.isotopes = isotopes.rows;
+            for(let key in site.sample_groups) {
+                let sampleGroup = site.sample_groups[key];
+                for(let key2 in sampleGroup.physical_samples) {
+                    let physicalSample = sampleGroup.physical_samples[key2];
+                    for(let key3 in physicalSample.analysis_entities) {
+                        let analysisEntity = physicalSample.analysis_entities[key3];
+                        let isotopes = await pgClient.query(sql, [analysisEntity.analysis_entity_id]);
+                        analysisEntity.isotopes = isotopes.rows;
 
-                    //things to fetch into lookup tables:
-                    //isotope_value_specifier_id
-                    //unit_id
-                    //isotope_type_id
+                        //things to fetch into lookup tables:
+                        //isotope_value_specifier_id
+                        //unit_id
+                        //isotope_type_id
 
-                    for(let key4 in isotopes.rows) {
-                        let isoItem = isotopes.rows[key4];
-                        if(isoItem.isotope_value_specifier_id) {
-                            await this.fetchIsotopeValueSpecifiers(site, isoItem.isotope_value_specifier_id);
-                        }
-                        if(isoItem.measurement_isotope_type_id) {
-                            await this.fetchIsotopeTypes(site, isoItem.measurement_isotope_type_id);
-                        }
+                        for(let key4 in isotopes.rows) {
+                            let isoItem = isotopes.rows[key4];
+                            if(isoItem.isotope_value_specifier_id) {
+                                await this.fetchIsotopeValueSpecifiers(site, isoItem.isotope_value_specifier_id);
+                            }
+                            if(isoItem.measurement_isotope_type_id) {
+                                await this.fetchIsotopeTypes(site, isoItem.measurement_isotope_type_id);
+                            }
 
-                        if(isoItem.measurement_standard_id) {
-                            await this.fetchIsotopeStandard(site, isoItem.measurement_standard_id);
-                        }
-                        
-                        if(isoItem.unit_id) {
-                            let unit = this.app.getUnitByUnitId(site, isoItem.unit_id);
-                            if(!unit) {
-                                let unit = await this.app.fetchUnit(isoItem.unit_id);
-                                if(unit) {
-                                    this.app.addUnitToLocalLookup(site, unit);
+                            if(isoItem.measurement_standard_id) {
+                                await this.fetchIsotopeStandard(site, isoItem.measurement_standard_id);
+                            }
+
+                            if(isoItem.unit_id) {
+                                let unit = this.app.getUnitByUnitId(site, isoItem.unit_id);
+                                if(!unit) {
+                                    let unit = await this.app.fetchUnit(isoItem.unit_id);
+                                    if(unit) {
+                                        this.app.addUnitToLocalLookup(site, unit);
+                                    }
                                 }
                             }
                         }
-                    }
 
+                    }
                 }
             }
         }
-
-        await this.app.releaseDbConnection(pgClient);
+        finally {
+            await this.app.releaseDbConnection(pgClient);
+        }
         return site;
     }
 
@@ -114,13 +117,17 @@ class IsotopeModule {
         }
 
         let isotopeStandard = null;
-
-        let sql = `SELECT *
-        FROM tbl_isotope_standards
-        WHERE isotope_standard_id=$1
-        `;
-        let res = await pgClient.query(sql, [isotope_standard_id]);
-        await this.app.releaseDbConnection(pgClient);
+        let res = null;
+        try {
+            let sql = `SELECT *
+            FROM tbl_isotope_standards
+            WHERE isotope_standard_id=$1
+            `;
+            res = await pgClient.query(sql, [isotope_standard_id]);
+        }
+        finally {
+            await this.app.releaseDbConnection(pgClient);
+        }
         if(res.rows.length > 0) {
             isotopeStandard = res.rows[0];
         }
@@ -153,13 +160,17 @@ class IsotopeModule {
             }
     
             let isotopeType = null;
-    
-            let sql = `SELECT *
-            FROM tbl_isotope_types
-            WHERE isotope_type_id=$1
-            `;
-            let res = await pgClient.query(sql, [isotope_type_id]);
-            await this.app.releaseDbConnection(pgClient);
+            let res = null;
+            try {
+                let sql = `SELECT *
+                FROM tbl_isotope_types
+                WHERE isotope_type_id=$1
+                `;
+                res = await pgClient.query(sql, [isotope_type_id]);
+            }
+            finally {
+                await this.app.releaseDbConnection(pgClient);
+            }
             if(res.rows.length > 0) {
                 isotopeType = res.rows[0];
             }
@@ -193,13 +204,17 @@ class IsotopeModule {
         }
 
         let isotopeValueSpecifier = null;
-
-        let sql = `SELECT *
-        FROM tbl_isotope_value_specifiers
-        WHERE isotope_value_specifier_id=$1
-        `;
-        let res = await pgClient.query(sql, [isotope_value_specifier_id]);
-        await this.app.releaseDbConnection(pgClient);
+        let res = null;
+        try {
+            let sql = `SELECT *
+            FROM tbl_isotope_value_specifiers
+            WHERE isotope_value_specifier_id=$1
+            `;
+            res = await pgClient.query(sql, [isotope_value_specifier_id]);
+        }
+        finally {
+            await this.app.releaseDbConnection(pgClient);
+        }
         if(res.rows.length > 0) {
             isotopeValueSpecifier = res.rows[0];
         }

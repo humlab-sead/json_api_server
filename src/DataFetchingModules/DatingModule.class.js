@@ -96,127 +96,130 @@ class DatingModule {
             return false;
         }
 
-        let sql = `
-        SELECT
-        tbl_relative_dates.relative_date_id,
-        tbl_relative_dates.relative_age_id,
-        tbl_relative_dates.method_id,
-        tbl_relative_dates.notes,
-        tbl_relative_dates.dating_uncertainty_id,
-        tbl_relative_ages.relative_age_id,
-        tbl_relative_ages.relative_age_type_id,
-        tbl_relative_ages.relative_age_name,
-        tbl_relative_ages.description AS rel_age_desc,
-        tbl_relative_ages.c14_age_older,
-        tbl_relative_ages.c14_age_younger,
-        tbl_relative_ages.cal_age_older,
-        tbl_relative_ages.cal_age_younger,
-        tbl_relative_ages.notes AS relative_age_notes,
-        tbl_relative_ages.location_id AS relative_age_location_id,
-        tbl_relative_ages.abbreviation AS relative_age_abbreviation,
-        tbl_relative_age_types.relative_age_type_id,
-        tbl_relative_age_types.age_type,
-        tbl_relative_age_types.description as age_description,
-        tbl_locations.location_name AS age_location_name,
-        tbl_locations.location_type_id AS age_location_type_id,
-        tbl_locations.default_lat_dd AS age_default_lat_dd,
-        tbl_locations.default_long_dd AS age_default_long_dd,
-        tbl_location_types.location_type AS age_location_type,
-        tbl_location_types.description AS age_location_desc
-        FROM public.tbl_relative_dates
-        LEFT JOIN tbl_relative_ages ON tbl_relative_ages.relative_age_id = tbl_relative_dates.relative_age_id
-        LEFT JOIN tbl_relative_age_types ON tbl_relative_age_types.relative_age_type_id = tbl_relative_ages.relative_age_type_id
-        LEFT JOIN tbl_locations ON tbl_locations.location_id = tbl_relative_ages.location_id
-        LEFT JOIN tbl_location_types ON tbl_location_types.location_type_id = tbl_locations.location_type_id
-        WHERE analysis_entity_id=$1;
-        `;
+        try {
+            let sql = `
+            SELECT
+            tbl_relative_dates.relative_date_id,
+            tbl_relative_dates.relative_age_id,
+            tbl_relative_dates.method_id,
+            tbl_relative_dates.notes,
+            tbl_relative_dates.dating_uncertainty_id,
+            tbl_relative_ages.relative_age_id,
+            tbl_relative_ages.relative_age_type_id,
+            tbl_relative_ages.relative_age_name,
+            tbl_relative_ages.description AS rel_age_desc,
+            tbl_relative_ages.c14_age_older,
+            tbl_relative_ages.c14_age_younger,
+            tbl_relative_ages.cal_age_older,
+            tbl_relative_ages.cal_age_younger,
+            tbl_relative_ages.notes AS relative_age_notes,
+            tbl_relative_ages.location_id AS relative_age_location_id,
+            tbl_relative_ages.abbreviation AS relative_age_abbreviation,
+            tbl_relative_age_types.relative_age_type_id,
+            tbl_relative_age_types.age_type,
+            tbl_relative_age_types.description as age_description,
+            tbl_locations.location_name AS age_location_name,
+            tbl_locations.location_type_id AS age_location_type_id,
+            tbl_locations.default_lat_dd AS age_default_lat_dd,
+            tbl_locations.default_long_dd AS age_default_long_dd,
+            tbl_location_types.location_type AS age_location_type,
+            tbl_location_types.description AS age_location_desc
+            FROM public.tbl_relative_dates
+            LEFT JOIN tbl_relative_ages ON tbl_relative_ages.relative_age_id = tbl_relative_dates.relative_age_id
+            LEFT JOIN tbl_relative_age_types ON tbl_relative_age_types.relative_age_type_id = tbl_relative_ages.relative_age_type_id
+            LEFT JOIN tbl_locations ON tbl_locations.location_id = tbl_relative_ages.location_id
+            LEFT JOIN tbl_location_types ON tbl_location_types.location_type_id = tbl_locations.location_type_id
+            WHERE analysis_entity_id=$1;
+            `;
 
-        let c14stdSql = `
-        SELECT 
-        tbl_analysis_entities.*,
-        tbl_geochronology.*,
-        tbl_dating_uncertainty.description AS dating_uncertainty_desc,
-        tbl_dating_uncertainty.uncertainty AS dating_uncertainty
-        FROM tbl_analysis_entities
-        JOIN tbl_geochronology ON tbl_geochronology.analysis_entity_id = tbl_analysis_entities.analysis_entity_id
-        LEFT JOIN tbl_dating_uncertainty ON tbl_dating_uncertainty.dating_uncertainty_id = tbl_geochronology.dating_uncertainty_id
-        WHERE tbl_analysis_entities.analysis_entity_id=$1;
-        `;
+            let c14stdSql = `
+            SELECT
+            tbl_analysis_entities.*,
+            tbl_geochronology.*,
+            tbl_dating_uncertainty.description AS dating_uncertainty_desc,
+            tbl_dating_uncertainty.uncertainty AS dating_uncertainty
+            FROM tbl_analysis_entities
+            JOIN tbl_geochronology ON tbl_geochronology.analysis_entity_id = tbl_analysis_entities.analysis_entity_id
+            LEFT JOIN tbl_dating_uncertainty ON tbl_dating_uncertainty.dating_uncertainty_id = tbl_geochronology.dating_uncertainty_id
+            WHERE tbl_analysis_entities.analysis_entity_id=$1;
+            `;
 
-        let entityAgesSql = `
-        SELECT * FROM tbl_analysis_entity_ages
-        WHERE analysis_entity_id=$1`; //this is already implemented in fetchAnalysisEntitiesAges() method, but that is for creating a site wide age summary
-        
-        let queriesExecuted = 0;
-        let queryPromises = [];
-        
-        site.sample_groups.forEach(sampleGroup => {
-            sampleGroup.physical_samples.forEach(physicalSample => {
-                physicalSample.analysis_entities.forEach(analysisEntity => {
+            let entityAgesSql = `
+            SELECT * FROM tbl_analysis_entity_ages
+            WHERE analysis_entity_id=$1`; //this is already implemented in fetchAnalysisEntitiesAges() method, but that is for creating a site wide age summary
 
-                    //Here we need to check what dataset this AE is linked to
-                    //if it is a dataset with method_id 151 (among others) then it's 'C14 std'
-                    //which needs to be handled/fetched differently from the other dating methods
+            let queriesExecuted = 0;
+            let queryPromises = [];
 
-                    let specialTreatment = false;
-                    for(let key in site.datasets) {
-                        if(analysisEntity.dataset_id == site.datasets[key].dataset_id) {
-                            if(this.c14StdMethodIds.includes(site.datasets[key].method_id)) {
-                                //This needs special treatment
-                                specialTreatment = true;
+            site.sample_groups.forEach(sampleGroup => {
+                sampleGroup.physical_samples.forEach(physicalSample => {
+                    physicalSample.analysis_entities.forEach(analysisEntity => {
+
+                        //Here we need to check what dataset this AE is linked to
+                        //if it is a dataset with method_id 151 (among others) then it's 'C14 std'
+                        //which needs to be handled/fetched differently from the other dating methods
+
+                        let specialTreatment = false;
+                        for(let key in site.datasets) {
+                            if(analysisEntity.dataset_id == site.datasets[key].dataset_id) {
+                                if(this.c14StdMethodIds.includes(site.datasets[key].method_id)) {
+                                    //This needs special treatment
+                                    specialTreatment = true;
+                                }
                             }
                         }
-                    }
 
-                    let promise = null;
-                    if(!specialTreatment) {
-                        promise = pgClient.query(sql, [analysisEntity.analysis_entity_id]).then(values => {
-                            analysisEntity.dating_values = values.rows[0];
+                        let promise = null;
+                        if(!specialTreatment) {
+                            promise = pgClient.query(sql, [analysisEntity.analysis_entity_id]).then(values => {
+                                analysisEntity.dating_values = values.rows[0];
+                            });
+                            queriesExecuted++;
+                        }
+                        else {
+                            promise = pgClient.query(c14stdSql, [analysisEntity.analysis_entity_id]).then(async values => {
+                                let r = values.rows[0];
+                                analysisEntity.dating_values = {
+                                    "geochron_id": r.geochron_id,
+                                    "dating_lab_id": r.dating_lab_id,
+                                    "lab_number": r.lab_number,
+                                    "age": r.age,
+                                    "error_older": r.error_older,
+                                    "error_younger": r.error_younger,
+                                    "delta_13c": r.delta_13c,
+                                    "notes": r.notes,
+                                    "dating_uncertainty_id": r.dating_uncertainty_id,
+                                    "dating_uncertainty": r.dating_uncertainty,
+                                    "dating_uncertainty_desc": r.dating_uncertainty_desc
+                                };
+
+                                //if dating_lab_id seems to be a number and we don't already have his lab
+                                //among the lookups, add it
+                                const datingLabId = parseInt(r.dating_lab_id);
+                                if(!Number.isNaN(datingLabId)) {
+                                    await this.fetchDatingLab(site, datingLabId);
+                                }
+                            });
+                            queriesExecuted++;
+                        }
+
+                        let entityAgePromise = pgClient.query(entityAgesSql, [analysisEntity.analysis_entity_id]).then(values => {
+                            analysisEntity.entity_ages = values.rows[0];
                         });
-                        queriesExecuted++;
-                    }
-                    else {
-                        promise = pgClient.query(c14stdSql, [analysisEntity.analysis_entity_id]).then(values => {
-                            let r = values.rows[0];
-                            analysisEntity.dating_values = {
-                                "geochron_id": r.geochron_id,
-                                "dating_lab_id": r.dating_lab_id,
-                                "lab_number": r.lab_number,
-                                "age": r.age,
-                                "error_older": r.error_older,
-                                "error_younger": r.error_younger,
-                                "delta_13c": r.delta_13c,
-                                "notes": r.notes,
-                                "dating_uncertainty_id": r.dating_uncertainty_id,
-                                "dating_uncertainty": r.dating_uncertainty,
-                                "dating_uncertainty_desc": r.dating_uncertainty_desc
-                            };
 
-                            //if dating_lab_id seems to be a number and we don't already have his lab 
-                            //among the lookups, add it
-                            const datingLabId = parseInt(r.dating_lab_id);
-                            if(datingLabId != NaN) {
-                                let labFetchPromise = this.fetchDatingLab(site, datingLabId);
-                                queryPromises.push(labFetchPromise);
-                            }
-                        });
-                        queriesExecuted++;
-                    }
+                        queryPromises.push(promise);
+                        queryPromises.push(entityAgePromise);
 
-                    pgClient.query(entityAgesSql, [analysisEntity.analysis_entity_id]).then(values => {
-                        analysisEntity.entity_ages = values.rows[0];
                     });
+                })
+            });
 
-                    queryPromises.push(promise);
-                    
-                });
-            })
-        });
-
-        await Promise.all(queryPromises).then(() => {
-            this.app.releaseDbConnection(pgClient);
+            await Promise.all(queryPromises);
             //console.log("Dating module executed "+queriesExecuted+" queries for site "+site.site_id);
-        });
+        }
+        finally {
+            await this.app.releaseDbConnection(pgClient);
+        }
 
         return site;
     }
@@ -331,7 +334,8 @@ class DatingModule {
             site.lookup_tables.labs = [];
         }
 
-        return pgClient.query("SELECT * FROM tbl_dating_labs WHERE dating_lab_id=$1", [datingLabId]).then(values => {
+        try {
+            let values = await pgClient.query("SELECT * FROM tbl_dating_labs WHERE dating_lab_id=$1", [datingLabId]);
             let labMeta = values.rows[0];
             let foundLab = false;
             site.lookup_tables.labs.forEach(lab => {
@@ -342,8 +346,10 @@ class DatingModule {
             if(!foundLab) {
                 site.lookup_tables.labs.push(labMeta);
             }
-            this.app.releaseDbConnection(pgClient);
-        });
+        }
+        finally {
+            await this.app.releaseDbConnection(pgClient);
+        }
     }
 
     getDataGroupByMethod(dataGroups, methodId) {

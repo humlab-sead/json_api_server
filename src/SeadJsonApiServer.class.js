@@ -32,8 +32,9 @@ import basicAuth from 'basic-auth';
 import { Client as ESClient } from "@elastic/elasticsearch";
 
 
+const packageJson = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 const appName = "sead-json-api-server";
-const appVersion = "1.57.1";
+const appVersion = packageJson.version;
 
 class SeadJsonApiServer {
     constructor() {
@@ -372,8 +373,12 @@ class SeadJsonApiServer {
 
         this.expressApp.get('/sample/:sampleId', async (req, res) => {
             console.log(req.path);
+            let pgClient = null;
             try {
-                const pgClient = await this.getDbConnection();
+                pgClient = await this.getDbConnection();
+                if(!pgClient) {
+                    throw new Error("Could not acquire Postgres connection");
+                }
                 let data = await pgClient.query('SELECT * FROM tbl_analysis_entities WHERE physical_sample_id=$1', [req.params.sampleId]);
                 let datasets = this.groupAnalysisEntitiesByDataset(data.rows);
                 return res.send(JSON.stringify(datasets));
@@ -384,6 +389,11 @@ class SeadJsonApiServer {
                 return res.send(JSON.stringify({
                     error: "Internal server error"
                 }));
+            }
+            finally {
+                if(pgClient) {
+                    await this.releaseDbConnection(pgClient);
+                }
             }
         });
 
@@ -1237,8 +1247,13 @@ class SeadJsonApiServer {
         console.time("Preload of taxa complete");
         console.log("Preloading taxa");
 
-        let taxaData = await pgClient.query('SELECT * FROM tbl_taxa_tree_master ORDER BY taxon_id');
-        this.releaseDbConnection(pgClient);
+        let taxaData = null;
+        try {
+            taxaData = await pgClient.query('SELECT * FROM tbl_taxa_tree_master ORDER BY taxon_id');
+        }
+        finally {
+            await this.releaseDbConnection(pgClient);
+        }
 
         console.log("Will fetch taxa data for "+taxaData.rows.length+" sites");
 
@@ -1247,28 +1262,23 @@ class SeadJsonApiServer {
             taxonIds.push(taxaData.rows[key].taxon_id);
         }
 
-        let pendingFetches = 0;
-
-        await new Promise((resolve, reject) => {
-            const fetchCheckInterval = setInterval(() => {
-                if(taxonIds.length > 0 && pendingFetches < this.maxConcurrentFetches) {
-                    pendingFetches++;
-                    let taxonId = taxonIds.shift();
+        const workerCount = Math.max(1, Math.min(this.maxConcurrentFetches, taxonIds.length));
+        const workers = Array.from({ length: workerCount }, async () => {
+            while(taxonIds.length > 0) {
+                let taxonId = taxonIds.shift();
+                try {
                     console.time("Fetched taxon "+taxonId);
-                    this.getTaxon(taxonId, false).then(() => {
-                        console.timeEnd("Fetched taxon "+taxonId);
-                        pendingFetches--;
-                    }).catch(error => {
-                        console.log("Failed fetching taxon "+taxonId);
-                        console.log(error);
-                    });
+                    await this.getTaxon(taxonId, false);
+                    console.timeEnd("Fetched taxon "+taxonId);
                 }
-                if(taxonIds.length == 0) {
-                    clearInterval(fetchCheckInterval);
-                    resolve();
+                catch(error) {
+                    console.timeEnd("Fetched taxon "+taxonId);
+                    console.log("Failed fetching taxon "+taxonId);
+                    console.log(error);
                 }
-            }, 10);
+            }
         });
+        await Promise.all(workers);
 
         console.timeEnd("Preload of taxa complete");
     }
@@ -1286,8 +1296,13 @@ class SeadJsonApiServer {
         console.time("Preload of sites complete");
         console.log("Preloading sites");
 
-        let siteData = await pgClient.query('SELECT * FROM tbl_sites ORDER BY site_id');
-        this.releaseDbConnection(pgClient);
+        let siteData = null;
+        try {
+            siteData = await pgClient.query('SELECT * FROM tbl_sites ORDER BY site_id');
+        }
+        finally {
+            await this.releaseDbConnection(pgClient);
+        }
 
         console.log("Will fetch site data for "+siteData.rows.length+" sites");
 
@@ -1296,25 +1311,23 @@ class SeadJsonApiServer {
             siteIds.push(siteData.rows[key].site_id);
         }
 
-        let pendingFetches = 0;
-
-        await new Promise((resolve, reject) => {
-            const fetchCheckInterval = setInterval(() => {
-                if(siteIds.length > 0 && pendingFetches < this.maxConcurrentFetches) {
-                    pendingFetches++;
-                    let siteId = siteIds.shift();
+        const workerCount = Math.max(1, Math.min(this.maxConcurrentFetches, siteIds.length));
+        const workers = Array.from({ length: workerCount }, async () => {
+            while(siteIds.length > 0) {
+                let siteId = siteIds.shift();
+                try {
                     console.time("Fetched site "+siteId);
-                    this.getSite(siteId, false).then(() => {
-                        console.timeEnd("Fetched site "+siteId);
-                        pendingFetches--;
-                    });
+                    await this.getSite(siteId, false);
+                    console.timeEnd("Fetched site "+siteId);
                 }
-                if(siteIds.length == 0) {
-                    clearInterval(fetchCheckInterval);
-                    resolve();
+                catch(error) {
+                    console.timeEnd("Fetched site "+siteId);
+                    console.log("Failed fetching site "+siteId);
+                    console.log(error);
                 }
-            }, 10);
+            }
         });
+        await Promise.all(workers);
 
         console.timeEnd("Preload of sites complete");
     }
@@ -1944,7 +1957,7 @@ class SeadJsonApiServer {
         if(verbose) console.timeEnd("Done fetching site "+siteId+" (Postgres consolidated)");
 
         if(this.useSiteCaching) {
-            this.saveSiteToCache(site);
+            await this.saveSiteToCache(site);
         }
 
         return site;
@@ -1971,8 +1984,14 @@ class SeadJsonApiServer {
             console.error("Failed to get Postgres DB connection!");
             return false;
         }
-        if(verbose) console.time("Fetched basic site data for site "+siteId);
-        let siteData = await pgClient.query('SELECT * FROM tbl_sites WHERE site_id=$1', [siteId]);
+        let siteData = null;
+        try {
+            if(verbose) console.time("Fetched basic site data for site "+siteId);
+            siteData = await pgClient.query('SELECT * FROM tbl_sites WHERE site_id=$1', [siteId]);
+        }
+        finally {
+            await this.releaseDbConnection(pgClient);
+        }
 
         //if it doesn't exist, return false
         if(siteData.rows.length == 0) {
@@ -1995,7 +2014,6 @@ class SeadJsonApiServer {
         };
 
         if(verbose) console.timeEnd("Fetched basic site data for site "+siteId);
-        this.releaseDbConnection(pgClient);
 
         if(verbose) console.time("Fetched biblio for site "+siteId);
         await this.fetchSiteBiblio(site);
@@ -2072,7 +2090,7 @@ class SeadJsonApiServer {
 
         if(this.useSiteCaching) {
             //Store in cache
-            this.saveSiteToCache(site);
+            await this.saveSiteToCache(site);
         }
 
         return site;
@@ -2083,35 +2101,39 @@ class SeadJsonApiServer {
         if(!pgClient) {
             return false;
         }
-        let sql = `SELECT tbl_methods.*,
-        tbl_units.description AS unit_desc,
-        tbl_units.unit_id,
-        tbl_units.unit_abbrev,
-        tbl_units.unit_name
-        FROM tbl_methods
-        LEFT JOIN tbl_units ON tbl_units.unit_id=tbl_methods.unit_id
-        WHERE method_id=$1
-        `;
-        let res = await pgClient.query(sql, [method_id]);
+        try {
+            let sql = `SELECT tbl_methods.*,
+            tbl_units.description AS unit_desc,
+            tbl_units.unit_id,
+            tbl_units.unit_abbrev,
+            tbl_units.unit_name
+            FROM tbl_methods
+            LEFT JOIN tbl_units ON tbl_units.unit_id=tbl_methods.unit_id
+            WHERE method_id=$1
+            `;
+            let res = await pgClient.query(sql, [method_id]);
 
-        if(res.rows.length == 0) {
-            console.warn("No method found for method_id", method_id);
-            return false;
+            if(res.rows.length == 0) {
+                console.warn("No method found for method_id", method_id);
+                return false;
+            }
+
+            let method = {
+                method_id: res.rows[0].method_id,
+                biblio_id: res.rows[0].biblio_id,
+                method_name: res.rows[0].method_name,
+                description: res.rows[0].description,
+                method_abbrev_or_alt_name: res.rows[0].method_abbrev_or_alt_name,
+                method_group_id: res.rows[0].method_group_id,
+                record_type_id: res.rows[0].record_type_id,
+                unit_id: res.rows[0].unit_id,
+            };
+
+            return method;
         }
-
-        let method = {
-            method_id: res.rows[0].method_id,
-            biblio_id: res.rows[0].biblio_id,
-            method_name: res.rows[0].method_name,
-            description: res.rows[0].description,
-            method_abbrev_or_alt_name: res.rows[0].method_abbrev_or_alt_name,
-            method_group_id: res.rows[0].method_group_id,
-            record_type_id: res.rows[0].record_type_id,
-            unit_id: res.rows[0].unit_id,
-        };
-
-        this.releaseDbConnection(pgClient);
-        return method;
+        finally {
+            await this.releaseDbConnection(pgClient);
+        }
     }
 
     getMethodByMethodId(site, method_id) {
@@ -3327,7 +3349,7 @@ class SeadJsonApiServer {
     async saveSiteToCache(site) {
         if(this.cacheStorageMethod == "mongo") {
             await this.mongo.collection('sites').deleteOne({ site_id: parseInt(site.site_id) });
-            this.mongo.collection('sites').insertOne(site);
+            await this.mongo.collection('sites').insertOne(site);
         }
         if(this.cacheStorageMethod == "file") {
             fs.writeFileSync("site_cache/site_"+site.site_id+".json", JSON.stringify(site, null, 2));
@@ -3709,6 +3731,9 @@ class SeadJsonApiServer {
     }
 
     async releaseDbConnection(dbConn) {
+        if(!dbConn) {
+            return false;
+        }
         if(this.useStaticDbConnection) {
             //Never release if using static conn
             return true;
