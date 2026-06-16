@@ -1,6 +1,6 @@
 DO $$
 DECLARE
-    analysis_id INTEGER := 206343;
+    analysis_id INTEGER := 16350;
     table_name TEXT;
     count_result INTEGER;
 BEGIN
