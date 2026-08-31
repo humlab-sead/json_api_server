@@ -99,6 +99,7 @@ class DatingModule {
         try {
             let sql = `
             SELECT
+            tbl_relative_dates.analysis_entity_id,
             tbl_relative_dates.relative_date_id,
             tbl_relative_dates.relative_age_id,
             tbl_relative_dates.method_id,
@@ -129,7 +130,8 @@ class DatingModule {
             LEFT JOIN tbl_relative_age_types ON tbl_relative_age_types.relative_age_type_id = tbl_relative_ages.relative_age_type_id
             LEFT JOIN tbl_locations ON tbl_locations.location_id = tbl_relative_ages.location_id
             LEFT JOIN tbl_location_types ON tbl_location_types.location_type_id = tbl_locations.location_type_id
-            WHERE analysis_entity_id=$1;
+            WHERE tbl_relative_dates.analysis_entity_id = ANY($1::bigint[])
+            ORDER BY tbl_relative_dates.analysis_entity_id, tbl_relative_dates.relative_date_id;
             `;
 
             let c14stdSql = `
@@ -141,81 +143,104 @@ class DatingModule {
             FROM tbl_analysis_entities
             JOIN tbl_geochronology ON tbl_geochronology.analysis_entity_id = tbl_analysis_entities.analysis_entity_id
             LEFT JOIN tbl_dating_uncertainty ON tbl_dating_uncertainty.dating_uncertainty_id = tbl_geochronology.dating_uncertainty_id
-            WHERE tbl_analysis_entities.analysis_entity_id=$1;
+            WHERE tbl_analysis_entities.analysis_entity_id = ANY($1::bigint[]);
             `;
 
             let entityAgesSql = `
             SELECT * FROM tbl_analysis_entity_ages
-            WHERE analysis_entity_id=$1`; //this is already implemented in fetchAnalysisEntitiesAges() method, but that is for creating a site wide age summary
+            WHERE analysis_entity_id = ANY($1::bigint[])`; //this is already implemented in fetchAnalysisEntitiesAges() method, but that is for creating a site wide age summary
 
-            let queriesExecuted = 0;
-            let queryPromises = [];
+            //Split the site's analysis entities by how they need to be dated,
+            //then run one query per group instead of two queries per entity.
+            const relativeDateEntities = [];
+            const c14StdEntities = [];
+            const allEntities = [];
+
+            const c14StdDatasetIds = new Set();
+            site.datasets.forEach(dataset => {
+                if(this.c14StdMethodIds.includes(dataset.method_id)) {
+                    c14StdDatasetIds.add(String(dataset.dataset_id));
+                }
+            });
 
             site.sample_groups.forEach(sampleGroup => {
                 sampleGroup.physical_samples.forEach(physicalSample => {
                     physicalSample.analysis_entities.forEach(analysisEntity => {
-
-                        //Here we need to check what dataset this AE is linked to
-                        //if it is a dataset with method_id 151 (among others) then it's 'C14 std'
-                        //which needs to be handled/fetched differently from the other dating methods
-
-                        let specialTreatment = false;
-                        for(let key in site.datasets) {
-                            if(analysisEntity.dataset_id == site.datasets[key].dataset_id) {
-                                if(this.c14StdMethodIds.includes(site.datasets[key].method_id)) {
-                                    //This needs special treatment
-                                    specialTreatment = true;
-                                }
-                            }
-                        }
-
-                        let promise = null;
-                        if(!specialTreatment) {
-                            promise = pgClient.query(sql, [analysisEntity.analysis_entity_id]).then(values => {
-                                analysisEntity.dating_values = values.rows[0];
-                            });
-                            queriesExecuted++;
+                        allEntities.push(analysisEntity);
+                        if(c14StdDatasetIds.has(String(analysisEntity.dataset_id))) {
+                            c14StdEntities.push(analysisEntity);
                         }
                         else {
-                            promise = pgClient.query(c14stdSql, [analysisEntity.analysis_entity_id]).then(async values => {
-                                let r = values.rows[0];
-                                analysisEntity.dating_values = {
-                                    "geochron_id": r.geochron_id,
-                                    "dating_lab_id": r.dating_lab_id,
-                                    "lab_number": r.lab_number,
-                                    "age": r.age,
-                                    "error_older": r.error_older,
-                                    "error_younger": r.error_younger,
-                                    "delta_13c": r.delta_13c,
-                                    "notes": r.notes,
-                                    "dating_uncertainty_id": r.dating_uncertainty_id,
-                                    "dating_uncertainty": r.dating_uncertainty,
-                                    "dating_uncertainty_desc": r.dating_uncertainty_desc
-                                };
-
-                                //if dating_lab_id seems to be a number and we don't already have his lab
-                                //among the lookups, add it
-                                const datingLabId = parseInt(r.dating_lab_id);
-                                if(!Number.isNaN(datingLabId)) {
-                                    await this.fetchDatingLab(site, datingLabId);
-                                }
-                            });
-                            queriesExecuted++;
+                            relativeDateEntities.push(analysisEntity);
                         }
-
-                        let entityAgePromise = pgClient.query(entityAgesSql, [analysisEntity.analysis_entity_id]).then(values => {
-                            analysisEntity.entity_ages = values.rows[0];
-                        });
-
-                        queryPromises.push(promise);
-                        queryPromises.push(entityAgePromise);
-
                     });
                 })
             });
 
-            await Promise.all(queryPromises);
-            //console.log("Dating module executed "+queriesExecuted+" queries for site "+site.site_id);
+            if(relativeDateEntities.length > 0) {
+                const relativeDates = await pgClient.query(sql,
+                    [relativeDateEntities.map(analysisEntity => analysisEntity.analysis_entity_id)]);
+                //Only the first row per entity was ever used. Ordering by
+                //relative_date_id makes which one that is deterministic; eight
+                //analysis entities in the database have more than one.
+                const datingValuesByEntity = new Map();
+                relativeDates.rows.forEach(row => {
+                    const key = String(row.analysis_entity_id);
+                    if(!datingValuesByEntity.has(key)) {
+                        //analysis_entity_id is selected only to group the rows;
+                        //the per-entity query it replaces did not select it.
+                        delete row.analysis_entity_id;
+                        datingValuesByEntity.set(key, row);
+                    }
+                });
+                relativeDateEntities.forEach(analysisEntity => {
+                    analysisEntity.dating_values = datingValuesByEntity.get(String(analysisEntity.analysis_entity_id));
+                });
+            }
+
+            if(c14StdEntities.length > 0) {
+                const c14Rows = await pgClient.query(c14stdSql,
+                    [c14StdEntities.map(analysisEntity => analysisEntity.analysis_entity_id)]);
+                const c14ByEntity = new Map(c14Rows.rows.map(row => [String(row.analysis_entity_id), row]));
+
+                const datingLabIds = [];
+                c14StdEntities.forEach(analysisEntity => {
+                    const r = c14ByEntity.get(String(analysisEntity.analysis_entity_id));
+                    if(!r) {
+                        analysisEntity.dating_values = undefined;
+                        return;
+                    }
+                    analysisEntity.dating_values = {
+                        "geochron_id": r.geochron_id,
+                        "dating_lab_id": r.dating_lab_id,
+                        "lab_number": r.lab_number,
+                        "age": r.age,
+                        "error_older": r.error_older,
+                        "error_younger": r.error_younger,
+                        "delta_13c": r.delta_13c,
+                        "notes": r.notes,
+                        "dating_uncertainty_id": r.dating_uncertainty_id,
+                        "dating_uncertainty": r.dating_uncertainty,
+                        "dating_uncertainty_desc": r.dating_uncertainty_desc
+                    };
+
+                    const datingLabId = parseInt(r.dating_lab_id);
+                    if(!Number.isNaN(datingLabId) && !datingLabIds.includes(datingLabId)) {
+                        datingLabIds.push(datingLabId);
+                    }
+                });
+
+                await this.fetchDatingLabs(site, pgClient, datingLabIds);
+            }
+
+            if(allEntities.length > 0) {
+                const entityAges = await pgClient.query(entityAgesSql,
+                    [allEntities.map(analysisEntity => analysisEntity.analysis_entity_id)]);
+                const agesByEntity = new Map(entityAges.rows.map(row => [String(row.analysis_entity_id), row]));
+                allEntities.forEach(analysisEntity => {
+                    analysisEntity.entity_ages = agesByEntity.get(String(analysisEntity.analysis_entity_id));
+                });
+            }
         }
         finally {
             await this.app.releaseDbConnection(pgClient);
@@ -324,32 +349,31 @@ class DatingModule {
         return dating;
     }
 
-    async fetchDatingLab(site, datingLabId) {
-        let pgClient = await this.app.getDbConnection();
-        if(!pgClient) {
-            return false;
+    /**
+     * Resolves a set of dating labs into the site's lab lookup.
+     *
+     * Replaces fetchDatingLab(), which took its own pooled connection and ran a
+     * query for every C14 analysis entity of the site.
+     */
+    async fetchDatingLabs(site, pgClient, datingLabIds) {
+        if(datingLabIds.length == 0) {
+            return;
         }
-        
+
         if(typeof site.lookup_tables.labs == "undefined") {
             site.lookup_tables.labs = [];
         }
 
-        try {
-            let values = await pgClient.query("SELECT * FROM tbl_dating_labs WHERE dating_lab_id=$1", [datingLabId]);
-            let labMeta = values.rows[0];
-            let foundLab = false;
-            site.lookup_tables.labs.forEach(lab => {
-                if(lab.dating_lab_id == datingLabId) {
-                    foundLab = true;
-                }
-            });
-            if(!foundLab) {
-                site.lookup_tables.labs.push(labMeta);
+        const values = await pgClient.query(
+            "SELECT * FROM tbl_dating_labs WHERE dating_lab_id = ANY($1::int[])", [datingLabIds]);
+        const labsById = new Map(values.rows.map(lab => [String(lab.dating_lab_id), lab]));
+
+        datingLabIds.forEach(datingLabId => {
+            const alreadyPresent = site.lookup_tables.labs.some(lab => lab && lab.dating_lab_id == datingLabId);
+            if(!alreadyPresent) {
+                site.lookup_tables.labs.push(labsById.get(String(datingLabId)));
             }
-        }
-        finally {
-            await this.app.releaseDbConnection(pgClient);
-        }
+        });
     }
 
     getDataGroupByMethod(dataGroups, methodId) {

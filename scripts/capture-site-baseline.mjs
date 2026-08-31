@@ -35,9 +35,11 @@ export const DEFAULT_SITES = [
     76,     // 1286 samples, 5855 analysis entities, abundances + measured values
     79,     // largest core fetch: 1419 samples, 142 datasets
     259,    // measured values (method group 2)
+    3581,   // the only site with analysis entities carrying two relative dates
     3718,   // ceramics (method 171), 480 single-AE datasets
     4149,   // dendrochronology (method 10), 690 fragmented datasets
     4355,   // worst case for AbundanceModule: 5573 abundance rows
+    4635,   // C14 std dating: 57 geochronology rows across 3 dating labs
     5587,   // large abundance site
     5130,   // 20 site_references: exercises the unawaited biblio lookup hardest
     5615,   // large abundance site
