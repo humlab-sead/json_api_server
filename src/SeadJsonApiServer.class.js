@@ -67,6 +67,11 @@ class SeadJsonApiServer {
         console.log(esClient);
         */
 
+        //Opt-in instrumentation used by the site-fetch harness to count how many
+        //SQL round-trips a request actually makes. Inert unless JAS_QUERY_STATS=true.
+        this.queryStatsEnabled = process.env.JAS_QUERY_STATS == "true";
+        this.queryStats = { count: 0 };
+
         this.staticDbConnection = null;
         console.log("Starting up SEAD JSON API Server "+appVersion);
         if(this.useSiteCaching) {
@@ -234,6 +239,20 @@ class SeadJsonApiServer {
     }
 
     setupEndpoints() {
+        if(this.queryStatsEnabled) {
+            //Harness support: lets a benchmark read the SQL round-trip counter
+            //before and after a request to get the query count for that request.
+            this.expressApp.get('/debug/query-stats', (req, res) => {
+                res.header("Content-type", "application/json");
+                res.send(JSON.stringify({ count: this.queryStats.count }, null, 2));
+            });
+            this.expressApp.get('/debug/query-stats/reset', (req, res) => {
+                this.queryStats.count = 0;
+                res.header("Content-type", "application/json");
+                res.send(JSON.stringify({ count: this.queryStats.count }, null, 2));
+            });
+        }
+
         this.expressApp.all('*', (req, res, next) => {
             //don't log the healthcheck endpoint, since it's called so often
             if (req.path !== '/health') {
@@ -3692,6 +3711,29 @@ class SeadJsonApiServer {
         }
     };
 
+    /**
+     * Wraps a pg client so that every query() call increments a counter. Returns
+     * the client untouched unless JAS_QUERY_STATS=true, so production behaviour
+     * and object identity are unaffected.
+     */
+    instrumentDbConnection(dbcon) {
+        if(!this.queryStatsEnabled || !dbcon) {
+            return dbcon;
+        }
+        return new Proxy(dbcon, {
+            get: (target, property, receiver) => {
+                if(property == "query") {
+                    return (...args) => {
+                        this.queryStats.count++;
+                        return target.query(...args);
+                    };
+                }
+                const value = Reflect.get(target, property, receiver);
+                return typeof value == "function" ? value.bind(target) : value;
+            }
+        });
+    }
+
     async getDbConnection() {
         if(this.useStaticDbConnection) {
             //check health of postgres connection
@@ -3712,7 +3754,7 @@ class SeadJsonApiServer {
                 console.warn("Static postgres connection is not healthy, attempting to reconnect.");
                 this.staticDbConnection = await this.pgPool.connect();
             }
-            return this.staticDbConnection;
+            return this.instrumentDbConnection(this.staticDbConnection);
         }
         else {
             let dbcon = false;
@@ -3728,7 +3770,7 @@ class SeadJsonApiServer {
                 console.error(error);
                 return false;
             }
-            return dbcon;
+            return this.instrumentDbConnection(dbcon);
         }
     }
 
