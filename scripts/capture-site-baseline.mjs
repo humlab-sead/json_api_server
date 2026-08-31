@@ -8,14 +8,15 @@
  *
  * Usage:
  *   node scripts/capture-site-baseline.mjs --out baseline/main
- *   node scripts/capture-site-baseline.mjs --out baseline/alt --alternative
+ *   node scripts/capture-site-baseline.mjs --out baseline/old --method true
  *   node scripts/capture-site-baseline.mjs --out baseline/run2 --sites 1,2,79
  *
  * Options:
  *   --out <dir>        output directory (required)
  *   --base <url>       server base URL (default http://localhost:8485)
  *   --sites <list>     comma-separated site ids (default: the standard test set)
- *   --alternative      request the alternativeFetchMethod path
+ *   --method <name>    fetch implementation: "true" (original per-row),
+ *                      "postgres" (single CTE), or omitted for the default
  *   --timeout <ms>     per-site timeout (default 600000)
  */
 
@@ -38,19 +39,20 @@ export const DEFAULT_SITES = [
     4149,   // dendrochronology (method 10), 690 fragmented datasets
     4355,   // worst case for AbundanceModule: 5573 abundance rows
     5587,   // large abundance site
+    5130,   // 20 site_references: exercises the unawaited biblio lookup hardest
     5615,   // large abundance site
     6486,   // aDNA (method 175)
     999999, // edge case: nonexistent site id
 ];
 
 export function parseArgs(argv) {
-    const args = { base: "http://localhost:8485", timeout: 600000, alternative: false };
+    const args = { base: "http://localhost:8485", timeout: 600000, method: "false" };
     for(let i = 0; i < argv.length; i++) {
         const arg = argv[i];
         if(arg == "--out") args.out = argv[++i];
         else if(arg == "--base") args.base = argv[++i];
         else if(arg == "--sites") args.sites = argv[++i].split(",").map(s => parseInt(s.trim()));
-        else if(arg == "--alternative") args.alternative = true;
+        else if(arg == "--method") args.method = argv[++i];
         else if(arg == "--timeout") args.timeout = parseInt(argv[++i]);
         else throw new Error("Unknown argument: " + arg);
     }
@@ -71,13 +73,18 @@ export async function readQueryStats(base) {
     }
 }
 
-export function siteUrl(base, siteId, alternative) {
+/**
+ * Builds the site URL. The third path segment selects the fetch implementation:
+ * "true" is the original per-row getSite(), "postgres" is the single-CTE
+ * getSitePostgres(), and anything else (including "false") is the default.
+ */
+export function siteUrl(base, siteId, fetchMethod) {
     // /site/:siteId/:noCache?/:alternativeFetchMethod?
-    return base + "/site/" + siteId + "/true/" + (alternative ? "true" : "false");
+    return base + "/site/" + siteId + "/true/" + (fetchMethod || "false");
 }
 
 export async function captureSite(base, siteId, options = {}) {
-    const url = siteUrl(base, siteId, options.alternative);
+    const url = siteUrl(base, siteId, options.method);
     const before = await readQueryStats(base);
     const started = Date.now();
     const response = await fetch(url, { signal: AbortSignal.timeout(options.timeout || 600000) });
@@ -103,7 +110,7 @@ async function main() {
 
     const stats = [];
     console.log("Capturing " + args.sites.length + " site(s) from " + args.base +
-        (args.alternative ? " [alternativeFetchMethod]" : " [default path]"));
+        " [fetch method: " + args.method + "]");
 
     for(const siteId of args.sites) {
         process.stdout.write("  site " + siteId + " … ");

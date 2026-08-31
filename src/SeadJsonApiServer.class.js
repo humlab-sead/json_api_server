@@ -244,7 +244,16 @@ class SeadJsonApiServer {
             //before and after a request to get the query count for that request.
             this.expressApp.get('/debug/query-stats', (req, res) => {
                 res.header("Content-type", "application/json");
-                res.send(JSON.stringify({ count: this.queryStats.count }, null, 2));
+                res.send(JSON.stringify({
+                    count: this.queryStats.count,
+                    //Pool counters, so a benchmark can assert that the pool
+                    //returns to idle after a request rather than leaking.
+                    pool: this.pgPool ? {
+                        total: this.pgPool.totalCount,
+                        idle: this.pgPool.idleCount,
+                        waiting: this.pgPool.waitingCount,
+                    } : null,
+                }, null, 2));
             });
             this.expressApp.get('/debug/query-stats/reset', (req, res) => {
                 this.queryStats.count = 0;
@@ -313,16 +322,24 @@ class SeadJsonApiServer {
 
         this.expressApp.get('/site/:siteId/:noCache?/:alternativeFetchMethod?', async (req, res) => {
             const noCache = req.params.noCache === "true";
-            const useAlternativeFetchMethod = req.params.alternativeFetchMethod === "true";
+            const fetchMethod = req.params.alternativeFetchMethod;
 
-            if(useAlternativeFetchMethod) {
-                let site = await this.getSitePostgres(req.params.siteId, true, true, noCache);
-                res.header("Content-type", "application/json");
-                res.send(JSON.stringify(site, null, 2));
-                return;
+            //The default is now the consolidated fetch. The two older
+            //implementations stay reachable so that they can be compared against
+            //it in production for a release before being removed:
+            //  true     - the original per-row implementation (getSite)
+            //  postgres - the single-CTE implementation (getSitePostgres)
+            let site = null;
+            if(fetchMethod === "true") {
+                site = await this.getSite(req.params.siteId, true, true, noCache);
+            }
+            else if(fetchMethod === "postgres") {
+                site = await this.getSitePostgres(req.params.siteId, true, true, noCache);
+            }
+            else {
+                site = await this.getSiteConsolidated(req.params.siteId, true, true, noCache);
             }
 
-            let site = await this.getSite(req.params.siteId, true, true, noCache);
             res.header("Content-type", "application/json");
             res.send(JSON.stringify(site, null, 2));
         });
@@ -1980,6 +1997,793 @@ class SeadJsonApiServer {
         if(this.useSiteCaching) {
             await this.saveSiteToCache(site);
         }
+
+        return site;
+    }
+
+    /**
+     * Consolidated core site fetch.
+     *
+     * Replaces the ~14 per-row fetchX() helpers that getSite() calls with a fixed
+     * number of set-based queries — one per table cluster, each pulling every row
+     * for the whole site in a single round trip — which are then assembled in JS.
+     *
+     * This deliberately uses plain row-returning queries rather than aggregating
+     * the whole payload into jsonb inside SQL the way getSitePostgres() does.
+     * Going through jsonb bypasses the pg driver's type parsers and silently
+     * changes the payload: `numeric` arrives as a JSON number instead of a
+     * string, `bigint` likewise, and `timestamptz` as a full-microsecond string
+     * instead of a JS Date. Keeping the driver in the loop preserves the existing
+     * output types for free, which is what makes this a drop-in replacement.
+     */
+    async getSiteConsolidated(siteId, verbose = true, fetchMethodSpecificData = true, noCache = false) {
+        if(verbose) console.log("Request for site", siteId, "(consolidated)");
+
+        let site = null;
+        if(verbose && noCache) {
+            console.log("getSiteConsolidated - No cache requested");
+        }
+        if(this.useSiteCaching && !noCache) {
+            site = await this.getSiteFromCache(siteId);
+            if(site) {
+                return site;
+            }
+        }
+
+        if(verbose) console.time("Done fetching site "+siteId+" (consolidated)");
+
+        let pgClient = await this.getDbConnection();
+        if(!pgClient) {
+            console.error("Failed to get Postgres DB connection!");
+            return false;
+        }
+
+        try {
+            if(verbose) console.time("Fetched consolidated core data for site "+siteId);
+            site = await this.fetchSiteCoreData(pgClient, siteId);
+            if(verbose) console.timeEnd("Fetched consolidated core data for site "+siteId);
+        }
+        catch(error) {
+            console.error("Failed in getSiteConsolidated for site", siteId);
+            console.error(error);
+            return false;
+        }
+        finally {
+            await this.releaseDbConnection(pgClient);
+        }
+
+        if(!site) {
+            console.warn("No site found for site_id", siteId);
+            return false;
+        }
+
+        if(fetchMethodSpecificData) {
+            if(verbose) console.time("Fetched method specific data for site "+siteId+" (consolidated)");
+            await this.fetchMethodSpecificData(site);
+            if(verbose) console.timeEnd("Fetched method specific data for site "+siteId+" (consolidated)");
+        }
+
+        if(verbose) console.time("Done post-processing primary data for site "+siteId+" (consolidated)");
+        await this.postProcessSiteData(site);
+        if(verbose) console.timeEnd("Done post-processing primary data for site "+siteId+" (consolidated)");
+
+        if(verbose) console.timeEnd("Done fetching site "+siteId+" (consolidated)");
+
+        if(this.useSiteCaching) {
+            await this.saveSiteToCache(site);
+        }
+
+        return site;
+    }
+
+    /**
+     * Groups rows by a column, returning a Map of key -> array of rows.
+     * Keys are stringified so that a bigint returned as a string by the driver
+     * lines up with the same id held as a number elsewhere in the payload.
+     */
+    groupRowsBy(rows, column) {
+        const grouped = new Map();
+        rows.forEach(row => {
+            const key = String(row[column]);
+            if(!grouped.has(key)) {
+                grouped.set(key, []);
+            }
+            grouped.get(key).push(row);
+        });
+        return grouped;
+    }
+
+    /**
+     * Issues every query needed for the core site payload and assembles it.
+     *
+     * Returns null when the site does not exist. Runs on a caller-supplied
+     * connection so that the whole core fetch borrows exactly one connection.
+     */
+    async fetchSiteCoreData(pgClient, siteId) {
+        const siteData = await pgClient.query('SELECT * FROM tbl_sites WHERE site_id=$1', [siteId]);
+        if(siteData.rows.length == 0) {
+            return null;
+        }
+
+        const site = siteData.rows[0];
+        site.data_groups = [];
+        site.api_source = appName+"-"+appVersion;
+        site.server_version = appVersion;
+        site.lookup_tables = {
+            biblio: [],
+            units: [],
+            dimensions: [],
+            dataset_contacts: [],
+            methods: [],
+            prep_methods: [],
+            domains: [],
+        };
+
+        //Ids of the lookup rows this site turns out to need, collected as the
+        //payload is assembled and resolved in a handful of queries at the end.
+        const dimensionIds = [];
+        const unitIds = [];
+
+        //Methods reach the lookup through two different shapes in getSite():
+        //fetchMethodByMethodId() returns a hand-picked eight-field projection,
+        //while the sampling-method and dataset-method paths push the whole
+        //tbl_methods row. Dedup is first-wins, so the source that discovers a
+        //method first also decides which shape it keeps.
+        const methodSources = [];
+        //Returns true when this call is the one that added the method, which is
+        //what the unit lookup below keys off.
+        const noteMethodId = (methodId, shape = "projected") => {
+            if(!parseInt(methodId) || methodSources.some(source => source.methodId == methodId)) {
+                return false;
+            }
+            methodSources.push({ methodId, shape });
+            return true;
+        };
+        const noteDimensionId = (dimensionId) => {
+            if(parseInt(dimensionId) && !dimensionIds.includes(dimensionId)) dimensionIds.push(dimensionId);
+        };
+        const noteUnitId = (unitId) => {
+            if(parseInt(unitId) && !unitIds.includes(unitId)) unitIds.push(unitId);
+        };
+        //A coordinate method contributes its own unit to the unit lookup, but
+        //only when that coordinate is what first put the method in the lookup:
+        //getSite() gates the unit fetch on the method not already being known,
+        //so a method already seen as a sampling method never contributes one.
+        //Dataset methods carry their unit as a nested `unit` property instead,
+        //and sampling/prep/horizon methods contribute none at all.
+        const unitContributingMethodIds = [];
+        const noteUnitContributingMethodId = (methodId) => {
+            if(parseInt(methodId) && !unitContributingMethodIds.includes(methodId)) {
+                unitContributingMethodIds.push(methodId);
+            }
+        };
+
+        // --- Site references -------------------------------------------------
+        const siteBiblio = await pgClient.query(`
+            SELECT * FROM tbl_site_references
+            LEFT JOIN tbl_biblio ON tbl_site_references.biblio_id = tbl_biblio.biblio_id
+            WHERE site_id=$1
+            ORDER BY tbl_site_references.biblio_id
+            `, [site.site_id]);
+        site.biblio = siteBiblio.rows;
+
+        //The lookup holds the plain tbl_biblio row, not the joined site_reference
+        //row, so that lookup_tables.biblio carries no site_reference columns.
+        const siteBiblioIds = site.biblio
+            .map(biblio => biblio.biblio_id)
+            .filter(biblioId => parseInt(biblioId));
+
+        // --- Sample groups ---------------------------------------------------
+        const sampleGroups = await pgClient.query(
+            'SELECT * FROM tbl_sample_groups WHERE site_id=$1 ORDER BY sample_group_id', [site.site_id]);
+        site.sample_groups = sampleGroups.rows;
+        const sampleGroupIds = site.sample_groups.map(sampleGroup => sampleGroup.sample_group_id);
+
+        site.sample_groups.forEach(sampleGroup => {
+            sampleGroup.coordinates = [];
+            sampleGroup.biblio = [];
+            sampleGroup.descriptions = [];
+            sampleGroup.sampling_context = [];
+            sampleGroup.notes = [];
+            sampleGroup.physical_samples = [];
+        });
+        const sampleGroupsById = new Map(site.sample_groups.map(sampleGroup => [String(sampleGroup.sample_group_id), sampleGroup]));
+
+        if(sampleGroupIds.length > 0) {
+            //Same joins as the per-group query in fetchSampleGroups: the inner
+            //joins are load-bearing, they drop coordinates whose dimension has
+            //no unit, so they must not be relaxed into left joins.
+            const sampleGroupCoords = await pgClient.query(`
+                SELECT
+                tbl_sample_group_coordinates.sample_group_id,
+                tbl_sample_group_coordinates.position_accuracy,
+                tbl_sample_group_coordinates.sample_group_position,
+                tbl_coordinate_method_dimensions.method_id AS coordinate_method_id,
+                tbl_coordinate_method_dimensions.dimension_id,
+                tbl_dimensions.unit_id
+                FROM tbl_sample_group_coordinates
+                JOIN tbl_coordinate_method_dimensions ON tbl_sample_group_coordinates.coordinate_method_dimension_id=tbl_coordinate_method_dimensions.coordinate_method_dimension_id
+                JOIN tbl_methods ON tbl_methods.method_id=tbl_coordinate_method_dimensions.method_id
+                JOIN tbl_dimensions ON tbl_dimensions.dimension_id=tbl_coordinate_method_dimensions.dimension_id
+                JOIN tbl_units ON tbl_units.unit_id=tbl_dimensions.unit_id
+                WHERE tbl_sample_group_coordinates.sample_group_id = ANY($1::int[])
+                ORDER BY tbl_sample_group_coordinates.sample_group_id, tbl_coordinate_method_dimensions.dimension_id
+                `, [sampleGroupIds]);
+
+            sampleGroupCoords.rows.forEach(coord => {
+                const sampleGroup = sampleGroupsById.get(String(coord.sample_group_id));
+                if(!sampleGroup) {
+                    return;
+                }
+                sampleGroup.coordinates.push({
+                    accuracy: coord.position_accuracy,
+                    coordinate_method_id: coord.coordinate_method_id,
+                    dimension_id: coord.dimension_id,
+                    measurement: parseFloat(coord.sample_group_position),
+                });
+                if(noteMethodId(coord.coordinate_method_id)) {
+                    noteUnitContributingMethodId(coord.coordinate_method_id);
+                }
+                noteDimensionId(coord.dimension_id);
+                noteUnitId(coord.unit_id);
+            });
+
+            const sampleGroupRefs = await pgClient.query(`
+                SELECT
+                tbl_sample_group_references.sample_group_id,
+                tbl_sample_group_references.biblio_id,
+                tbl_biblio.doi,
+                tbl_biblio.isbn,
+                tbl_biblio.notes,
+                tbl_biblio.title,
+                tbl_biblio.year,
+                tbl_biblio.authors,
+                tbl_biblio.full_reference,
+                tbl_biblio.url
+                FROM tbl_sample_group_references
+                INNER JOIN tbl_biblio ON tbl_biblio.biblio_id = tbl_sample_group_references.biblio_id
+                WHERE tbl_sample_group_references.sample_group_id = ANY($1::int[])
+                ORDER BY tbl_sample_group_references.sample_group_id, tbl_sample_group_references.biblio_id
+                `, [sampleGroupIds]);
+
+            sampleGroupRefs.rows.forEach(ref => {
+                const sampleGroup = sampleGroupsById.get(String(ref.sample_group_id));
+                if(!sampleGroup) {
+                    return;
+                }
+                //sample_group_id is only carried to group the rows; the per-group
+                //query it replaces did not select it.
+                const { sample_group_id, ...biblio } = ref;
+                sampleGroup.biblio.push(biblio);
+            });
+
+            const sampleGroupDescriptions = await pgClient.query(`
+                SELECT
+                tbl_sample_group_descriptions.*,
+                tbl_sample_group_description_types.sample_group_description_type_id AS type_id,
+                tbl_sample_group_description_types.type_name,
+                tbl_sample_group_description_types.type_description
+                FROM tbl_sample_group_descriptions
+                LEFT JOIN tbl_sample_group_description_types ON tbl_sample_group_descriptions.sample_group_description_type_id = tbl_sample_group_description_types.sample_group_description_type_id
+                WHERE tbl_sample_group_descriptions.sample_group_id = ANY($1::int[])
+                ORDER BY tbl_sample_group_descriptions.sample_group_id, tbl_sample_group_descriptions.sample_group_description_id
+                `, [sampleGroupIds]);
+            this.groupRowsBy(sampleGroupDescriptions.rows, "sample_group_id").forEach((rows, key) => {
+                const sampleGroup = sampleGroupsById.get(key);
+                if(sampleGroup) sampleGroup.descriptions = rows;
+            });
+
+            const samplingContextIds = site.sample_groups
+                .map(sampleGroup => sampleGroup.sampling_context_id)
+                .filter(contextId => parseInt(contextId));
+            if(samplingContextIds.length > 0) {
+                const samplingContexts = await pgClient.query(
+                    'SELECT * FROM tbl_sample_group_sampling_contexts WHERE sampling_context_id = ANY($1::int[]) ORDER BY sampling_context_id',
+                    [samplingContextIds]);
+                const contextsById = this.groupRowsBy(samplingContexts.rows, "sampling_context_id");
+                site.sample_groups.forEach(sampleGroup => {
+                    sampleGroup.sampling_context = contextsById.get(String(sampleGroup.sampling_context_id)) || [];
+                });
+            }
+
+            const sampleGroupNotes = await pgClient.query(
+                'SELECT * FROM tbl_sample_group_notes WHERE sample_group_id = ANY($1::int[]) ORDER BY sample_group_id, sample_group_note_id',
+                [sampleGroupIds]);
+            this.groupRowsBy(sampleGroupNotes.rows, "sample_group_id").forEach((rows, key) => {
+                const sampleGroup = sampleGroupsById.get(key);
+                if(sampleGroup) sampleGroup.notes = rows;
+            });
+        }
+
+        // --- Site location ---------------------------------------------------
+        const siteLocations = await pgClient.query(`
+            SELECT
+            tbl_locations.location_id,
+            tbl_locations.location_name,
+            tbl_locations.default_lat_dd,
+            tbl_locations.default_long_dd,
+            tbl_locations.location_type_id,
+            tbl_location_types.location_type,
+            tbl_location_types.description AS location_description
+            FROM tbl_site_locations
+            LEFT JOIN tbl_locations ON tbl_site_locations.location_id = tbl_locations.location_id
+            LEFT JOIN tbl_location_types ON tbl_locations.location_type_id = tbl_location_types.location_type_id
+            WHERE site_id=$1
+            ORDER BY tbl_locations.location_id
+            `, [site.site_id]);
+        site.location = siteLocations.rows;
+
+        // --- Sample group sampling methods -----------------------------------
+        site.sample_groups.forEach(sampleGroup => {
+            sampleGroup.sampling_method_id = sampleGroup.method_id;
+            noteMethodId(sampleGroup.method_id, "full");
+        });
+
+        // --- Physical samples and their satellites ---------------------------
+        let physicalSampleIds = [];
+        const physicalSamplesById = new Map();
+        if(sampleGroupIds.length > 0) {
+            const physicalSamples = await pgClient.query(`
+                SELECT
+                tbl_physical_samples.*,
+                tbl_sample_types.type_name AS sample_type_name,
+                tbl_sample_types.description AS sample_type_description
+                FROM tbl_physical_samples
+                LEFT JOIN tbl_sample_types ON tbl_physical_samples.sample_type_id = tbl_sample_types.sample_type_id
+                WHERE sample_group_id = ANY($1::int[])
+                ORDER BY sample_group_id, physical_sample_id
+                `, [sampleGroupIds]);
+
+            physicalSamples.rows.forEach(sample => {
+                sample.features = [];
+                sample.descriptions = [];
+                sample.locations = [];
+                sample.alt_refs = [];
+                sample.dimensions = [];
+                sample.coordinates = [];
+                sample.horizons = [];
+                sample.analysis_entities = [];
+                physicalSamplesById.set(String(sample.physical_sample_id), sample);
+                const sampleGroup = sampleGroupsById.get(String(sample.sample_group_id));
+                if(sampleGroup) {
+                    sampleGroup.physical_samples.push(sample);
+                }
+            });
+            physicalSampleIds = physicalSamples.rows.map(sample => sample.physical_sample_id);
+        }
+
+        const attachToSamples = (rows, property) => {
+            this.groupRowsBy(rows, "physical_sample_id").forEach((grouped, key) => {
+                const sample = physicalSamplesById.get(key);
+                if(sample) sample[property] = grouped;
+            });
+        };
+
+        if(physicalSampleIds.length > 0) {
+            const sampleFeatures = await pgClient.query(`
+                SELECT *
+                FROM tbl_physical_sample_features
+                LEFT JOIN tbl_features ON tbl_physical_sample_features.feature_id = tbl_features.feature_id
+                LEFT JOIN tbl_feature_types ON tbl_features.feature_type_id = tbl_feature_types.feature_type_id
+                WHERE physical_sample_id = ANY($1::int[])
+                ORDER BY physical_sample_id, tbl_physical_sample_features.feature_id
+                `, [physicalSampleIds]);
+            attachToSamples(sampleFeatures.rows, "features");
+
+            const sampleDescriptions = await pgClient.query(`
+                SELECT *
+                FROM tbl_sample_descriptions
+                LEFT JOIN tbl_sample_description_types ON tbl_sample_descriptions.sample_description_type_id = tbl_sample_description_types.sample_description_type_id
+                WHERE tbl_sample_descriptions.physical_sample_id = ANY($1::int[])
+                ORDER BY tbl_sample_descriptions.physical_sample_id, tbl_sample_descriptions.sample_description_id
+                `, [physicalSampleIds]);
+            attachToSamples(sampleDescriptions.rows, "descriptions");
+
+            const sampleLocations = await pgClient.query(`
+                SELECT *
+                FROM tbl_sample_locations
+                LEFT JOIN tbl_sample_location_types ON tbl_sample_locations.sample_location_type_id = tbl_sample_location_types.sample_location_type_id
+                WHERE tbl_sample_locations.physical_sample_id = ANY($1::int[])
+                ORDER BY tbl_sample_locations.physical_sample_id, tbl_sample_locations.sample_location_id
+                `, [physicalSampleIds]);
+            attachToSamples(sampleLocations.rows, "locations");
+
+            const sampleAltRefs = await pgClient.query(`
+                SELECT *
+                FROM tbl_sample_alt_refs
+                LEFT JOIN tbl_alt_ref_types ON tbl_sample_alt_refs.alt_ref_type_id = tbl_alt_ref_types.alt_ref_type_id
+                WHERE tbl_sample_alt_refs.physical_sample_id = ANY($1::int[])
+                ORDER BY tbl_sample_alt_refs.physical_sample_id, tbl_sample_alt_refs.sample_alt_ref_id
+                `, [physicalSampleIds]);
+            attachToSamples(sampleAltRefs.rows, "alt_refs");
+
+            //tbl_methods.method_id and tbl_dimensions.unit_id are selected after
+            //the wildcard on purpose: the per-sample query being replaced did the
+            //same, so method_id resolves to the joined method rather than the raw
+            //foreign key when the join misses.
+            const sampleDimensions = await pgClient.query(`
+                SELECT
+                tbl_sample_dimensions.*,
+                tbl_methods.method_id,
+                tbl_dimensions.unit_id
+                FROM tbl_sample_dimensions
+                LEFT JOIN tbl_methods ON tbl_sample_dimensions.method_id = tbl_methods.method_id
+                LEFT JOIN tbl_dimensions ON tbl_dimensions.dimension_id = tbl_sample_dimensions.dimension_id
+                WHERE tbl_sample_dimensions.physical_sample_id = ANY($1::int[])
+                ORDER BY tbl_sample_dimensions.physical_sample_id, tbl_sample_dimensions.sample_dimension_id
+                `, [physicalSampleIds]);
+            attachToSamples(sampleDimensions.rows, "dimensions");
+            sampleDimensions.rows.forEach(dimension => {
+                noteDimensionId(dimension.dimension_id);
+                noteMethodId(dimension.method_id);
+                noteUnitId(dimension.unit_id);
+            });
+
+            const sampleCoordinates = await pgClient.query(`
+                SELECT
+                tbl_sample_coordinates.physical_sample_id,
+                tbl_sample_coordinates.measurement::float,
+                tbl_sample_coordinates.accuracy,
+                tbl_coordinate_method_dimensions.dimension_id,
+                tbl_coordinate_method_dimensions.method_id AS coordinate_method_id
+                FROM tbl_sample_coordinates
+                JOIN tbl_coordinate_method_dimensions ON tbl_sample_coordinates.coordinate_method_dimension_id = tbl_coordinate_method_dimensions.coordinate_method_dimension_id
+                WHERE tbl_sample_coordinates.physical_sample_id = ANY($1::int[])
+                ORDER BY tbl_sample_coordinates.physical_sample_id, tbl_coordinate_method_dimensions.dimension_id
+                `, [physicalSampleIds]);
+            //physical_sample_id is only needed to group the rows; the per-sample
+            //query it replaces did not select it.
+            this.groupRowsBy(sampleCoordinates.rows, "physical_sample_id").forEach((rows, key) => {
+                const sample = physicalSamplesById.get(key);
+                if(sample) {
+                    sample.coordinates = rows.map(row => {
+                        const { physical_sample_id, ...coordinate } = row;
+                        return coordinate;
+                    });
+                }
+            });
+            sampleCoordinates.rows.forEach(coordinate => {
+                noteDimensionId(coordinate.dimension_id);
+                if(noteMethodId(coordinate.coordinate_method_id)) {
+                    noteUnitContributingMethodId(coordinate.coordinate_method_id);
+                }
+            });
+
+            const sampleHorizons = await pgClient.query(`
+                SELECT *
+                FROM tbl_sample_horizons
+                JOIN tbl_horizons ON tbl_sample_horizons.horizon_id = tbl_horizons.horizon_id
+                WHERE physical_sample_id = ANY($1::int[])
+                ORDER BY physical_sample_id, tbl_sample_horizons.horizon_id
+                `, [physicalSampleIds]);
+
+            //The lookup is created as soon as the site has any physical sample at
+            //all, even when none of them has a horizon, matching fetchPhysicalSamples.
+            site.lookup_tables.horizons = [];
+            const horizonsById = new Map();
+            sampleHorizons.rows.forEach(horizon => {
+                const sample = physicalSamplesById.get(String(horizon.physical_sample_id));
+                if(sample) {
+                    sample.horizons.push(horizon.horizon_id);
+                }
+                if(!horizonsById.has(horizon.horizon_id)) {
+                    horizonsById.set(horizon.horizon_id, {
+                        horizon_id: horizon.horizon_id,
+                        horizon_name: horizon.horizon_name,
+                        description: horizon.description,
+                        method_id: horizon.method_id,
+                    });
+                }
+            });
+            site.lookup_tables.horizons = Array.from(horizonsById.values());
+            site.lookup_tables.horizons.forEach(horizon => noteMethodId(horizon.method_id));
+        }
+
+        // --- Analysis entities -----------------------------------------------
+        let analysisEntities = [];
+        if(physicalSampleIds.length > 0) {
+            const analysisEntitiesResult = await pgClient.query(
+                'SELECT * FROM tbl_analysis_entities WHERE physical_sample_id = ANY($1::int[]) ORDER BY physical_sample_id, analysis_entity_id',
+                [physicalSampleIds]);
+            analysisEntities = analysisEntitiesResult.rows;
+            this.groupRowsBy(analysisEntities, "physical_sample_id").forEach((rows, key) => {
+                const sample = physicalSamplesById.get(key);
+                if(sample) sample.analysis_entities = rows;
+            });
+        }
+        const analysisEntityIds = analysisEntities.map(analysisEntity => analysisEntity.analysis_entity_id);
+        const analysisEntitiesById = new Map(analysisEntities.map(analysisEntity => [String(analysisEntity.analysis_entity_id), analysisEntity]));
+
+        // --- Datasets ---------------------------------------------------------
+        const datasetIds = [];
+        analysisEntities.forEach(analysisEntity => {
+            if(analysisEntity.dataset_id != null && !datasetIds.includes(analysisEntity.dataset_id)) {
+                datasetIds.push(analysisEntity.dataset_id);
+            }
+        });
+
+        site.datasets = [];
+        if(datasetIds.length > 0) {
+            const datasets = await pgClient.query(`
+                SELECT
+                tbl_datasets.*,
+                tbl_methods.method_group_id
+                FROM tbl_datasets
+                LEFT JOIN tbl_methods ON tbl_datasets.method_id = tbl_methods.method_id
+                WHERE dataset_id = ANY($1::int[])
+                ORDER BY dataset_id
+                `, [datasetIds]);
+            site.datasets = datasets.rows;
+
+            const datasetsById = new Map();
+            site.datasets.forEach(dataset => {
+                dataset.contacts = [];
+                datasetsById.set(String(dataset.dataset_id), dataset);
+            });
+
+            const datasetContacts = await pgClient.query(
+                'SELECT dataset_id, contact_id FROM tbl_dataset_contacts WHERE dataset_id = ANY($1::int[]) ORDER BY dataset_id, contact_id',
+                [datasetIds]);
+            datasetContacts.rows.forEach(contact => {
+                const dataset = datasetsById.get(String(contact.dataset_id));
+                if(dataset) dataset.contacts.push(contact.contact_id);
+            });
+
+            const projectIds = site.datasets
+                .map(dataset => dataset.project_id)
+                .filter(projectId => parseInt(projectId));
+            if(projectIds.length > 0) {
+                const projects = await pgClient.query(`
+                    SELECT tbl_projects.project_id,
+                    tbl_projects.project_type_id,
+                    tbl_projects.project_stage_id,
+                    tbl_projects.project_name,
+                    tbl_projects.project_abbrev_name,
+                    tbl_projects.description,
+                    tbl_project_types.project_type_name,
+                    tbl_project_types.description AS project_type_description
+                    FROM tbl_projects
+                    JOIN tbl_project_types ON tbl_project_types.project_type_id=tbl_projects.project_type_id
+                    WHERE project_id = ANY($1::int[])
+                    `, [projectIds]);
+                const projectsById = new Map(projects.rows.map(project => [String(project.project_id), project]));
+                site.datasets.forEach(dataset => {
+                    if(dataset.project_id && projectsById.has(String(dataset.project_id))) {
+                        dataset.project = projectsById.get(String(dataset.project_id));
+                    }
+                });
+            }
+        }
+
+        // --- Dataset contacts lookup -------------------------------------------
+        const datasetContactsLookup = await pgClient.query(`
+            SELECT DISTINCT ON (tbl_dataset_contacts.contact_id) tbl_dataset_contacts.*,
+            tbl_contact_types.contact_type_name AS contact_type,
+            tbl_contact_types.description AS contact_type_description,
+            tbl_contacts.address_1 AS contact_address_1,
+            tbl_contacts.address_2 AS contact_address_2,
+            tbl_contacts.location_id AS contact_location_id,
+            tbl_contacts.email AS contact_email,
+            tbl_contacts.first_name AS contact_first_name,
+            tbl_contacts.last_name AS contact_last_name,
+            tbl_contacts.phone_number AS contact_phone,
+            tbl_contacts.url AS contact_url,
+            tbl_locations.location_name AS contact_location_name
+            FROM tbl_sites
+            JOIN tbl_sample_groups ON tbl_sample_groups.site_id = tbl_sites.site_id
+            JOIN tbl_physical_samples ON tbl_physical_samples.sample_group_id=tbl_sample_groups.sample_group_id
+            JOIN tbl_analysis_entities ON tbl_analysis_entities.physical_sample_id=tbl_physical_samples.physical_sample_id
+            JOIN tbl_datasets ON tbl_datasets.dataset_id=tbl_analysis_entities.dataset_id
+            JOIN tbl_dataset_contacts ON tbl_dataset_contacts.dataset_id=tbl_datasets.dataset_id
+            JOIN tbl_contact_types ON tbl_contact_types.contact_type_id=tbl_dataset_contacts.contact_type_id
+            JOIN tbl_contacts ON tbl_contacts.contact_id=tbl_dataset_contacts.contact_id
+            LEFT JOIN tbl_locations ON tbl_locations.location_id=tbl_contacts.location_id
+            WHERE tbl_sites.site_id=$1
+            `, [site.site_id]);
+        site.lookup_tables.dataset_contacts = datasetContactsLookup.rows;
+
+        // --- Analysis entity prep methods --------------------------------------
+        const prepMethodIds = [];
+        analysisEntities.forEach(analysisEntity => {
+            analysisEntity.prepMethods = [];
+        });
+        if(analysisEntityIds.length > 0) {
+            const prepMethods = await pgClient.query(
+                'SELECT * FROM tbl_analysis_entity_prep_methods WHERE analysis_entity_id = ANY($1::bigint[]) ORDER BY analysis_entity_id, method_id',
+                [analysisEntityIds]);
+            prepMethods.rows.forEach(prepMethod => {
+                const analysisEntity = analysisEntitiesById.get(String(prepMethod.analysis_entity_id));
+                if(analysisEntity && !analysisEntity.prepMethods.includes(prepMethod.method_id)) {
+                    analysisEntity.prepMethods.push(prepMethod.method_id);
+                }
+                if(!prepMethodIds.includes(prepMethod.method_id)) {
+                    prepMethodIds.push(prepMethod.method_id);
+                }
+            });
+        }
+        if(prepMethodIds.length > 0) {
+            const prepMethodRows = await pgClient.query(
+                'SELECT * FROM tbl_methods WHERE method_id = ANY($1::int[])', [prepMethodIds]);
+            const prepMethodsById = new Map(prepMethodRows.rows.map(method => [String(method.method_id), method]));
+            //Preserve discovery order, as the loop this replaces did.
+            site.lookup_tables.prep_methods = prepMethodIds
+                .map(methodId => prepMethodsById.get(String(methodId)))
+                .filter(method => method);
+        }
+
+        // --- Other records ------------------------------------------------------
+        const otherRecords = await pgClient.query(`
+            SELECT
+            tbl_site_other_records.biblio_id,
+            tbl_site_other_records.record_type_id,
+            tbl_site_other_records.description,
+            tbl_record_types.record_type_name,
+            tbl_record_types.record_type_description
+            FROM tbl_site_other_records
+            INNER JOIN tbl_record_types ON tbl_record_types.record_type_id = tbl_site_other_records.record_type_id
+            WHERE site_id=$1
+            ORDER BY tbl_site_other_records.biblio_id
+            `, [site.site_id]);
+        site.other_records = otherRecords.rows;
+
+        // --- Biblio lookup -------------------------------------------------------
+        //Collected from site references, sample group references, dataset
+        //references and other records, then resolved in one query. The rows the
+        //lookup holds are plain tbl_biblio rows.
+        const biblioIds = [];
+        const noteBiblioId = (biblioId) => {
+            if(parseInt(biblioId) && !biblioIds.includes(biblioId)) biblioIds.push(biblioId);
+        };
+        siteBiblioIds.forEach(noteBiblioId);
+        site.sample_groups.forEach(sampleGroup => {
+            sampleGroup.biblio.forEach(biblio => noteBiblioId(biblio.biblio_id));
+        });
+        site.datasets.forEach(dataset => noteBiblioId(dataset.biblio_id));
+        const otherRecordBiblioIds = site.other_records
+            .map(otherRecord => otherRecord.biblio_id)
+            .filter(biblioId => parseInt(biblioId));
+        otherRecordBiblioIds.forEach(noteBiblioId);
+
+        if(biblioIds.length > 0) {
+            const biblioRows = await pgClient.query(
+                'SELECT * FROM tbl_biblio WHERE biblio_id = ANY($1::int[])', [biblioIds]);
+            const biblioById = new Map(biblioRows.rows.map(biblio => [String(biblio.biblio_id), biblio]));
+
+            //Sample group references are pushed into the lookup as the joined
+            //reference row rather than the plain tbl_biblio row, matching
+            //fetchSampleGroups; site and dataset references push the plain row.
+            const lookupBiblio = [];
+            const pushBiblio = (entry) => {
+                if(!entry) return;
+                if(!lookupBiblio.some(existing => existing.biblio_id == entry.biblio_id)) {
+                    lookupBiblio.push(entry);
+                }
+            };
+            siteBiblioIds.forEach(biblioId => pushBiblio(biblioById.get(String(biblioId))));
+            site.sample_groups.forEach(sampleGroup => {
+                sampleGroup.biblio.forEach(pushBiblio);
+            });
+            site.datasets.forEach(dataset => {
+                if(parseInt(dataset.biblio_id)) pushBiblio(biblioById.get(String(dataset.biblio_id)));
+            });
+            site.lookup_tables.biblio = lookupBiblio;
+
+            //Attach the full reference to each other record. The per-record query
+            //this replaces was issued without being awaited and on an
+            //already-released connection, so it almost never landed.
+            site.other_records.forEach(otherRecord => {
+                if(parseInt(otherRecord.biblio_id)) {
+                    otherRecord.biblio = biblioById.get(String(otherRecord.biblio_id));
+                }
+            });
+        }
+
+        // --- Domains --------------------------------------------------------------
+        const facetClauses = await pgClient.query(`
+            SELECT facet.facet_id, clause, facet_code, display_title FROM facet.facet_clause
+            JOIN facet.facet ON facet.facet_id=facet_clause.facet_id
+            WHERE facet_group_id=999
+            `);
+        facetClauses.rows.forEach(facetClause => {
+            const rawMethodIds = facetClause.clause ? facetClause.clause.match(/\d+/g) : null;
+            const clauseMethodIds = rawMethodIds ? rawMethodIds.map(methodId => parseInt(methodId)) : [];
+            if(clauseMethodIds.length > 0) {
+                site.lookup_tables.domains.push({
+                    facet_id: facetClause.facet_id,
+                    facet_code: facetClause.facet_code,
+                    title: facetClause.display_title,
+                    method_ids: clauseMethodIds,
+                });
+            }
+        });
+
+        // --- Dating summary --------------------------------------------------------
+        await this.fetchDatingSummary(site);
+
+        // --- Method, dimension and unit lookups -------------------------------------
+        //Dataset methods are resolved last and carry a nested `unit`, but only
+        //when the method is not already in the lookup from an earlier stage —
+        //fetchAnalysisMethods dedupes on method_id and the first entry wins.
+        site.datasets.forEach(dataset => noteMethodId(dataset.method_id, "dataset"));
+
+        const allMethodIds = methodSources.map(source => source.methodId);
+        let methodsById = new Map();
+        if(allMethodIds.length > 0) {
+            //The unit is joined so that the projected shape can take its unit_id
+            //from tbl_units, as fetchMethodByMethodId does.
+            const methodRows = await pgClient.query(`
+                SELECT tbl_methods.*, tbl_units.unit_id AS joined_unit_id
+                FROM tbl_methods
+                LEFT JOIN tbl_units ON tbl_units.unit_id=tbl_methods.unit_id
+                WHERE method_id = ANY($1::int[])
+                `, [allMethodIds]);
+            methodsById = new Map(methodRows.rows.map(method => [String(method.method_id), method]));
+        }
+
+        if(dimensionIds.length > 0) {
+            const dimensionRows = await pgClient.query(
+                'SELECT * FROM tbl_dimensions WHERE dimension_id = ANY($1::int[])', [dimensionIds]);
+            const dimensionsById = new Map(dimensionRows.rows.map(dimension => [String(dimension.dimension_id), dimension]));
+            site.lookup_tables.dimensions = dimensionIds
+                .map(dimensionId => dimensionsById.get(String(dimensionId)))
+                .filter(dimension => dimension);
+            //Note: dimensions do not contribute their unit here. Only dimensions
+            //reached through tbl_sample_dimensions do, and those are noted where
+            //those rows are read. Coordinate dimensions contribute no unit.
+        }
+
+        unitContributingMethodIds.forEach(methodId => {
+            const method = methodsById.get(String(methodId));
+            if(method) noteUnitId(method.joined_unit_id);
+        });
+
+        //Dataset methods carry a nested unit that is not itself part of the unit
+        //lookup, so those unit rows are fetched alongside but kept out of it.
+        const datasetMethodUnitIds = [];
+        methodSources.filter(source => source.shape == "dataset").forEach(source => {
+            const method = methodsById.get(String(source.methodId));
+            if(method && parseInt(method.unit_id) && !unitIds.includes(method.unit_id)
+                && !datasetMethodUnitIds.includes(method.unit_id)) {
+                datasetMethodUnitIds.push(method.unit_id);
+            }
+        });
+
+        let unitsById = new Map();
+        const unitIdsToFetch = unitIds.concat(datasetMethodUnitIds);
+        if(unitIdsToFetch.length > 0) {
+            const unitRows = await pgClient.query(
+                'SELECT * FROM tbl_units WHERE unit_id = ANY($1::int[])', [unitIdsToFetch]);
+            unitsById = new Map(unitRows.rows.map(unit => [String(unit.unit_id), unit]));
+            site.lookup_tables.units = unitIds
+                .map(unitId => unitsById.get(String(unitId)))
+                .filter(unit => unit);
+        }
+
+        const projectMethod = (method) => ({
+            method_id: method.method_id,
+            biblio_id: method.biblio_id,
+            method_name: method.method_name,
+            description: method.description,
+            method_abbrev_or_alt_name: method.method_abbrev_or_alt_name,
+            method_group_id: method.method_group_id,
+            record_type_id: method.record_type_id,
+            unit_id: method.joined_unit_id,
+        });
+
+        site.lookup_tables.methods = methodSources.map(source => {
+            const method = methodsById.get(String(source.methodId));
+            if(!method) {
+                return null;
+            }
+            if(source.shape == "projected") {
+                return projectMethod(method);
+            }
+            const { joined_unit_id, ...fullMethod } = method;
+            if(source.shape == "dataset" && parseInt(fullMethod.unit_id)) {
+                fullMethod.unit = unitsById.get(String(fullMethod.unit_id));
+            }
+            return fullMethod;
+        }).filter(method => method);
 
         return site;
     }
