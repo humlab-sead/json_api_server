@@ -1,0 +1,1 @@
+Use the postgres MCP server if available, or `psql -h localhost -p 5432 -U sead_ro -w sead_staging` for executing SQL against the database.
