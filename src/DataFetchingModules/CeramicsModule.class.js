@@ -31,11 +31,33 @@ class CeramicsModule {
         }
 
         try {
-            let sql = `
-            SELECT * FROM tbl_ceramics
-            INNER JOIN tbl_ceramics_lookup ON tbl_ceramics_lookup.ceramics_lookup_id=tbl_ceramics.ceramics_lookup_id
-            WHERE analysis_entity_id=$1
-            `;
+            //Fetched once for the whole site rather than once per analysis
+            //entity, then grouped and consumed by the loops below unchanged.
+            const analysisEntityIds = [];
+            site.sample_groups.forEach(sampleGroup => {
+                sampleGroup.physical_samples.forEach(physicalSample => {
+                    physicalSample.analysis_entities.forEach(analysisEntity => {
+                        analysisEntityIds.push(analysisEntity.analysis_entity_id);
+                    });
+                });
+            });
+
+            const ceramicValuesByAnalysisEntity = new Map();
+            if(analysisEntityIds.length > 0) {
+                const ceramicValues = await pgClient.query(`
+                    SELECT * FROM tbl_ceramics
+                    INNER JOIN tbl_ceramics_lookup ON tbl_ceramics_lookup.ceramics_lookup_id=tbl_ceramics.ceramics_lookup_id
+                    WHERE analysis_entity_id = ANY($1::bigint[])
+                    ORDER BY analysis_entity_id, tbl_ceramics.ceramics_id
+                    `, [analysisEntityIds]);
+                ceramicValues.rows.forEach(row => {
+                    const key = String(row.analysis_entity_id);
+                    if(!ceramicValuesByAnalysisEntity.has(key)) {
+                        ceramicValuesByAnalysisEntity.set(key, []);
+                    }
+                    ceramicValuesByAnalysisEntity.get(key).push(row);
+                });
+            }
 
             let dataGroupId = 1;
             let dataGroups = [];
@@ -59,7 +81,6 @@ class CeramicsModule {
                     let methodGroupIds = new Set();
                     for(let key in physicalSample.analysis_entities) {
                         let analysisEntity = physicalSample.analysis_entities[key];
-                        let ceramicValues = await pgClient.query(sql, [analysisEntity.analysis_entity_id]);
 
                         for(let dsk in site.datasets) {
                             if(site.datasets[dsk].dataset_id == analysisEntity.dataset_id) {
@@ -71,7 +92,7 @@ class CeramicsModule {
                             }
                         }
 
-                        analysisEntity.ceramic_values = ceramicValues.rows;
+                        analysisEntity.ceramic_values = ceramicValuesByAnalysisEntity.get(String(analysisEntity.analysis_entity_id)) || [];
                         dataGroup.analysis_entity_id = analysisEntity.analysis_entity_id;
 
                         analysisEntity.ceramic_values.forEach(ceramicValue => {
