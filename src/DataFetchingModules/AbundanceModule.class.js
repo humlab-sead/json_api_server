@@ -131,6 +131,32 @@ class AbundanceModule {
         }
     }
 
+    /**
+     * Collects every analysis entity of the site, in the order they appear under
+     * the sample groups.
+     */
+    getSiteAnalysisEntities(site) {
+        const analysisEntities = [];
+        site.sample_groups.forEach(sampleGroup => {
+            sampleGroup.physical_samples.forEach(physicalSample => {
+                physicalSample.analysis_entities.forEach(analysisEntity => {
+                    analysisEntities.push(analysisEntity);
+                });
+            });
+        });
+        return analysisEntities;
+    }
+
+    /**
+     * Fetches all abundance data for a site.
+     *
+     * This used to run one query per analysis entity, then a further ~4 queries
+     * per abundance row and ~13 more per row to resolve its taxon, with no
+     * deduplication: a site with 5573 abundances issued tens of thousands of
+     * queries. It now issues a fixed number of set-based queries — the abundance
+     * rows and their satellites for the whole site, then the distinct taxa — and
+     * assembles the same structure in JS.
+     */
     async fetchSiteData(site, verbose = false) {
         if(!this.siteHasModuleMethods(site)) {
             //console.log("No abundance methods for site "+site.site_id);
@@ -145,211 +171,319 @@ class AbundanceModule {
         if(!pgClient) {
             return false;
         }
-        
+
         try {
-            let queriesExecuted = 0;
-            let queryPromises = [];
-
-            site.sample_groups.forEach(sampleGroup => {
-                sampleGroup.physical_samples.forEach(physicalSample => {
-                    physicalSample.analysis_entities.forEach(analysisEntity => {
-                        let promise = pgClient.query('SELECT * FROM tbl_abundances WHERE analysis_entity_id=$1', [analysisEntity.analysis_entity_id]).then(async data => {
-                            queriesExecuted++;
-                            analysisEntity.abundances = data.rows;
-
-                            for(let key in analysisEntity.abundances) {
-                                let abundance = analysisEntity.abundances[key];
-
-                            //Fetch abundance identification levels
-                            let sql = `
-                            SELECT
-                            tbl_abundance_ident_levels.abundance_id,
-                            tbl_abundance_ident_levels.identification_level_id,
-                            tbl_identification_levels.identification_level_abbrev,
-                            tbl_identification_levels.identification_level_name,
-                            tbl_identification_levels.notes
-                            FROM tbl_abundance_ident_levels
-                            LEFT JOIN tbl_identification_levels ON tbl_abundance_ident_levels.identification_level_id = tbl_identification_levels.identification_level_id
-                            WHERE abundance_id=$1
-                            `;
-                            await pgClient.query(sql, [abundance.abundance_id]).then(identLevels => {
-                                queriesExecuted++;
-                                abundance.identification_levels = identLevels.rows;
-                            });
-
-                            let abundanceElement = this.getAbundanceElementFromLocalLookup(site, abundance.abundance_element_id);
-                            if(abundanceElement == null) {
-                                //Fetch abundance elements
-                                /*
-                                sql = `
-                                SELECT
-                                tbl_abundance_elements.element_name,
-                                tbl_abundance_elements.element_description,
-                                tbl_record_types.record_type_name,
-                                tbl_record_types.record_type_description,
-                                FROM tbl_abundance_elements 
-                                LEFT JOIN tbl_record_types ON tbl_abundance_elements.record_type_id = tbl_record_types.record_type_id
-                                WHERE abundance_element_id=$1
-                                `;
-                                */
-                                await pgClient.query('SELECT * FROM tbl_abundance_elements WHERE abundance_element_id=$1', [abundance.abundance_element_id]).then(abundanceElements => {
-                                    queriesExecuted++;
-                                    if(abundanceElements.rows.length > 0) {
-                                        this.addAbundanceElementToLocalLookup(site, abundanceElements.rows[0]);
-                                    }
-                                });
-                            }
-
-                            sql = "SELECT * FROM tbl_abundance_modifications WHERE abundance_id=$1";
-                            let abundanceModifications = await pgClient.query(sql, [abundance.abundance_id]);
-                            queriesExecuted++;
-                            abundance.modifications = abundanceModifications.rows;
-
-                            for(let key in abundance.modifications) {
-                                let am = abundance.modifications[key];
-                                let abundanceModification = this.getAbundanceModificationTypeFromLocalLookup(site, am.modification_type_id);
-                                if(abundanceModification == null) {
-                                    sql = "SELECT * FROM tbl_modification_types WHERE modification_type_id=$1";
-                                    let abundanceModificationResult = await pgClient.query(sql, [am.modification_type_id]);
-                                    queriesExecuted++;
-                                    if(abundanceModificationResult.rows.length > 0) {
-                                        this.addAbundanceModificationTypeToLocalLookup(site, abundanceModificationResult.rows[0]);
-                                    }
-                                }
-                            }
-
-                            //Fetch taxon data if we don't already have it
-                            let taxon = this.getTaxonFromLocalLookup(site, abundance.taxon_id)
-                            if(taxon == null) {
-                                let taxon_id = abundance.taxon_id;
-                                await pgClient.query('SELECT taxon_id,author_id,genus_id,species FROM tbl_taxa_tree_master WHERE taxon_id=$1', [taxon_id]).then(async taxonData => {
-                                    queriesExecuted++;
-                                    let taxon = taxonData.rows[0];
-
-                                    let family_id = null;
-                                    if(taxon.genus_id) {
-                                        sql = `SELECT family_id, genus_name FROM tbl_taxa_tree_genera WHERE genus_id=$1`;
-                                        await pgClient.query(sql, [taxon.genus_id]).then(genus => {
-                                            queriesExecuted++;
-                                            family_id = genus.rows[0].family_id;
-                                            taxon.genus = {
-                                                genus_id: taxon.genus_id,
-                                                genus_name: genus.rows[0].genus_name
-                                            };
-                                        });
-                                    }
-                                    
-                                    let order_id = null;
-                                    if(family_id) {
-                                        sql = `SELECT family_name, order_id FROM tbl_taxa_tree_families WHERE family_id=$1`;
-                                        await pgClient.query(sql, [family_id]).then(fam => {
-                                            queriesExecuted++;
-                                            order_id = fam.rows[0].order_id;
-                                            taxon.family = {
-                                                family_id: family_id,
-                                                family_name: fam.rows[0].family_name
-                                            };
-                                        });
-                                    }
-                                    
-                                    if(order_id) {
-                                        sql = `SELECT order_name, record_type_id FROM tbl_taxa_tree_orders WHERE order_id=$1`;
-                                        await pgClient.query(sql, [order_id]).then(order => {
-                                            queriesExecuted++;
-                                            taxon.order = {
-                                                order_id: order_id,
-                                                order_name: order.rows[0].order_name,
-                                                record_type_id: order.rows[0].record_type_id
-                                            };
-                                        });
-                                    }
-                                    
-                                    if(taxon.author_id) {
-                                        await pgClient.query('SELECT * FROM tbl_taxa_tree_authors WHERE author_id=$1', [taxon.author_id]).then(taxa_author => {
-                                            queriesExecuted++;
-                                            taxon.author = taxa_author.rows[0];
-                                            delete taxon.author_id;
-                                        });
-                                    }
-                                    
-                                    sql = `
-                                    SELECT *
-                                    FROM tbl_taxa_common_names
-                                    LEFT JOIN tbl_languages ON tbl_taxa_common_names.language_id = tbl_languages.language_id
-                                    WHERE taxon_id=$1
-                                    `;
-                                    await pgClient.query(sql, [taxon_id]).then(commonNames => {
-                                        queriesExecuted++;
-                                        taxon.common_names = commonNames.rows;
-                                    });
-
-                                    await pgClient.query('SELECT measured_attribute_id,attribute_measure,attribute_type,attribute_units,data FROM tbl_taxa_measured_attributes WHERE taxon_id=$1', [abundance.taxon_id]).then(measuredAttr => {
-                                        queriesExecuted++;
-                                        taxon.measured_attributes = measuredAttr.rows;
-                                    });
-
-                                    await pgClient.query('SELECT * FROM tbl_taxonomy_notes WHERE taxon_id=$1', [taxon_id]).then(taxNotes => {
-                                        queriesExecuted++;
-                                        taxon.taxonomy_notes = taxNotes.rows;
-                                    });
-
-                                    await pgClient.query('SELECT * FROM tbl_text_biology WHERE taxon_id=$1', [taxon_id]).then(textBio => {
-                                        queriesExecuted++;
-                                        taxon.text_biology = textBio.rows;
-                                    });
-                                    
-                                    await pgClient.query('SELECT * FROM tbl_text_distribution WHERE taxon_id=$1', [taxon_id]).then(textDist => {
-                                        queriesExecuted++;
-                                        taxon.text_distribution = textDist.rows;
-                                    });
-
-                                    /* disabling ecocodes fetching for now, it's just a lot of unused data atm
-                                    sql = `
-                                    SELECT * FROM tbl_ecocodes
-                                    LEFT JOIN tbl_ecocode_definitions ON tbl_ecocodes.ecocode_definition_id = tbl_ecocode_definitions.ecocode_definition_id
-                                    WHERE tbl_ecocodes.taxon_id=$1
-                                    `;
-                                    await pgClient.query(sql, [taxon_id]).then(ecoCodes => {
-                                        taxon.ecocodes = ecoCodes.rows;
-                                    });
-                                    */
-
-                                    sql = `
-                                    SELECT * FROM tbl_taxa_seasonality
-                                    LEFT JOIN tbl_seasons ON tbl_taxa_seasonality.season_id = tbl_seasons.season_id
-                                    LEFT JOIN tbl_activity_types ON tbl_taxa_seasonality.activity_type_id = tbl_activity_types.activity_type_id
-                                    WHERE tbl_taxa_seasonality.taxon_id=$1
-                                    `;
-                                    await pgClient.query(sql, [taxon_id]).then(seasonality => {
-                                        queriesExecuted++;
-                                        taxon.seasonality = seasonality.rows;
-                                    });
-                                
-                                    this.addTaxonToLocalLookup(site, taxon);
-                                });
-
-                            }
-
-
-                            }
-
-                        });
-                        queryPromises.push(promise);
-                    });
-                });
+            const analysisEntities = this.getSiteAnalysisEntities(site);
+            //Every analysis entity of the site gets an abundances array, whether
+            //or not it has any rows, as the per-entity query it replaces did.
+            analysisEntities.forEach(analysisEntity => {
+                analysisEntity.abundances = [];
             });
 
+            if(analysisEntities.length == 0) {
+                return site;
+            }
 
-            await Promise.all(queryPromises);
-            //console.log("Abundance queries executed: "+queriesExecuted);
+            const analysisEntityIds = analysisEntities.map(analysisEntity => analysisEntity.analysis_entity_id);
+            const analysisEntitiesById = new Map(
+                analysisEntities.map(analysisEntity => [String(analysisEntity.analysis_entity_id), analysisEntity]));
+
+            const abundanceResult = await pgClient.query(
+                'SELECT * FROM tbl_abundances WHERE analysis_entity_id = ANY($1::bigint[]) ORDER BY analysis_entity_id, abundance_id',
+                [analysisEntityIds]);
+            const abundances = abundanceResult.rows;
+
+            abundances.forEach(abundance => {
+                abundance.identification_levels = [];
+                abundance.modifications = [];
+                const analysisEntity = analysisEntitiesById.get(String(abundance.analysis_entity_id));
+                if(analysisEntity) {
+                    analysisEntity.abundances.push(abundance);
+                }
+            });
+
+            if(abundances.length == 0) {
+                return site;
+            }
+
+            const abundanceIds = abundances.map(abundance => abundance.abundance_id);
+            const abundancesById = new Map(abundances.map(abundance => [String(abundance.abundance_id), abundance]));
+
+            const identLevels = await pgClient.query(`
+                SELECT
+                tbl_abundance_ident_levels.abundance_id,
+                tbl_abundance_ident_levels.identification_level_id,
+                tbl_identification_levels.identification_level_abbrev,
+                tbl_identification_levels.identification_level_name,
+                tbl_identification_levels.notes
+                FROM tbl_abundance_ident_levels
+                LEFT JOIN tbl_identification_levels ON tbl_abundance_ident_levels.identification_level_id = tbl_identification_levels.identification_level_id
+                WHERE abundance_id = ANY($1::bigint[])
+                ORDER BY abundance_id, tbl_abundance_ident_levels.identification_level_id
+                `, [abundanceIds]);
+            identLevels.rows.forEach(identLevel => {
+                const abundance = abundancesById.get(String(identLevel.abundance_id));
+                if(abundance) {
+                    abundance.identification_levels.push(identLevel);
+                }
+            });
+
+            const modifications = await pgClient.query(
+                'SELECT * FROM tbl_abundance_modifications WHERE abundance_id = ANY($1::bigint[]) ORDER BY abundance_id, modification_type_id',
+                [abundanceIds]);
+            modifications.rows.forEach(modification => {
+                const abundance = abundancesById.get(String(modification.abundance_id));
+                if(abundance) {
+                    abundance.modifications.push(modification);
+                }
+            });
+
+            const abundanceElementIds = [];
+            abundances.forEach(abundance => {
+                if(abundance.abundance_element_id != null && !abundanceElementIds.includes(abundance.abundance_element_id)) {
+                    abundanceElementIds.push(abundance.abundance_element_id);
+                }
+            });
+            if(abundanceElementIds.length > 0) {
+                const abundanceElements = await pgClient.query(
+                    'SELECT * FROM tbl_abundance_elements WHERE abundance_element_id = ANY($1::int[])',
+                    [abundanceElementIds]);
+                const elementsById = new Map(
+                    abundanceElements.rows.map(element => [String(element.abundance_element_id), element]));
+                abundanceElementIds.forEach(elementId => {
+                    const element = elementsById.get(String(elementId));
+                    if(element) {
+                        this.addAbundanceElementToLocalLookup(site, element);
+                    }
+                });
+            }
+
+            const modificationTypeIds = [];
+            modifications.rows.forEach(modification => {
+                if(modification.modification_type_id != null && !modificationTypeIds.includes(modification.modification_type_id)) {
+                    modificationTypeIds.push(modification.modification_type_id);
+                }
+            });
+            if(modificationTypeIds.length > 0) {
+                const modificationTypes = await pgClient.query(
+                    'SELECT * FROM tbl_modification_types WHERE modification_type_id = ANY($1::int[])',
+                    [modificationTypeIds]);
+                const typesById = new Map(
+                    modificationTypes.rows.map(type => [String(type.modification_type_id), type]));
+                modificationTypeIds.forEach(typeId => {
+                    const type = typesById.get(String(typeId));
+                    if(type) {
+                        this.addAbundanceModificationTypeToLocalLookup(site, type);
+                    }
+                });
+            }
+
+            const taxonIds = [];
+            abundances.forEach(abundance => {
+                if(abundance.taxon_id != null
+                    && !taxonIds.includes(abundance.taxon_id)
+                    && this.getTaxonFromLocalLookup(site, abundance.taxon_id) == null) {
+                    taxonIds.push(abundance.taxon_id);
+                }
+            });
+            await this.fetchTaxaForLookup(pgClient, site, taxonIds);
         }
         finally {
             await this.app.releaseDbConnection(pgClient);
         }
-        
+
         return site;
     }
-    
+
+    /**
+     * Resolves a set of taxa and adds them to the site's taxa lookup.
+     *
+     * Each taxon used to cost ~13 queries and was resolved once per abundance
+     * row referencing it. The whole set is now resolved in a fixed number of
+     * queries, one per related table, and assembled in JS. The resulting taxon
+     * objects are shaped exactly as before, including the quirk that author_id
+     * is removed only when the taxon actually has an author.
+     */
+    async fetchTaxaForLookup(pgClient, site, taxonIds) {
+        if(taxonIds.length == 0) {
+            return;
+        }
+
+        const masterResult = await pgClient.query(
+            'SELECT taxon_id,author_id,genus_id,species FROM tbl_taxa_tree_master WHERE taxon_id = ANY($1::int[])',
+            [taxonIds]);
+        const taxaById = new Map(masterResult.rows.map(taxon => [String(taxon.taxon_id), taxon]));
+
+        const genusIds = [];
+        masterResult.rows.forEach(taxon => {
+            if(taxon.genus_id != null && !genusIds.includes(taxon.genus_id)) {
+                genusIds.push(taxon.genus_id);
+            }
+        });
+
+        let generaById = new Map();
+        if(genusIds.length > 0) {
+            const genera = await pgClient.query(
+                'SELECT genus_id, family_id, genus_name FROM tbl_taxa_tree_genera WHERE genus_id = ANY($1::int[])',
+                [genusIds]);
+            generaById = new Map(genera.rows.map(genus => [String(genus.genus_id), genus]));
+        }
+
+        const familyIds = [];
+        generaById.forEach(genus => {
+            if(genus.family_id != null && !familyIds.includes(genus.family_id)) {
+                familyIds.push(genus.family_id);
+            }
+        });
+
+        let familiesById = new Map();
+        if(familyIds.length > 0) {
+            const families = await pgClient.query(
+                'SELECT family_id, family_name, order_id FROM tbl_taxa_tree_families WHERE family_id = ANY($1::int[])',
+                [familyIds]);
+            familiesById = new Map(families.rows.map(family => [String(family.family_id), family]));
+        }
+
+        const orderIds = [];
+        familiesById.forEach(family => {
+            if(family.order_id != null && !orderIds.includes(family.order_id)) {
+                orderIds.push(family.order_id);
+            }
+        });
+
+        let ordersById = new Map();
+        if(orderIds.length > 0) {
+            const orders = await pgClient.query(
+                'SELECT order_id, order_name, record_type_id FROM tbl_taxa_tree_orders WHERE order_id = ANY($1::int[])',
+                [orderIds]);
+            ordersById = new Map(orders.rows.map(order => [String(order.order_id), order]));
+        }
+
+        const authorIds = [];
+        masterResult.rows.forEach(taxon => {
+            if(taxon.author_id != null && !authorIds.includes(taxon.author_id)) {
+                authorIds.push(taxon.author_id);
+            }
+        });
+
+        let authorsById = new Map();
+        if(authorIds.length > 0) {
+            const authors = await pgClient.query(
+                'SELECT * FROM tbl_taxa_tree_authors WHERE author_id = ANY($1::int[])', [authorIds]);
+            authorsById = new Map(authors.rows.map(author => [String(author.author_id), author]));
+        }
+
+        const foundTaxonIds = masterResult.rows.map(taxon => taxon.taxon_id);
+
+        /** Runs one query for the whole taxon set and groups the rows by taxon_id. */
+        const groupedByTaxon = async (sql) => {
+            const grouped = new Map();
+            if(foundTaxonIds.length == 0) {
+                return grouped;
+            }
+            const result = await pgClient.query(sql, [foundTaxonIds]);
+            result.rows.forEach(row => {
+                const key = String(row.taxon_id);
+                if(!grouped.has(key)) {
+                    grouped.set(key, []);
+                }
+                grouped.get(key).push(row);
+            });
+            return grouped;
+        };
+
+        const commonNamesByTaxon = await groupedByTaxon(`
+            SELECT *
+            FROM tbl_taxa_common_names
+            LEFT JOIN tbl_languages ON tbl_taxa_common_names.language_id = tbl_languages.language_id
+            WHERE taxon_id = ANY($1::int[])
+            ORDER BY taxon_id, taxon_common_name_id
+            `);
+        //taxon_id is selected only to group the rows and is stripped again, since
+        //the per-taxon query this replaces did not select it.
+        const measuredAttributesByTaxon = await groupedByTaxon(`
+            SELECT taxon_id,measured_attribute_id,attribute_measure,attribute_type,attribute_units,data
+            FROM tbl_taxa_measured_attributes
+            WHERE taxon_id = ANY($1::int[])
+            ORDER BY taxon_id, measured_attribute_id
+            `);
+        measuredAttributesByTaxon.forEach(rows => {
+            rows.forEach(row => delete row.taxon_id);
+        });
+        const taxonomyNotesByTaxon = await groupedByTaxon(`
+            SELECT * FROM tbl_taxonomy_notes WHERE taxon_id = ANY($1::int[])
+            ORDER BY taxon_id, taxonomy_notes_id
+            `);
+        const textBiologyByTaxon = await groupedByTaxon(`
+            SELECT * FROM tbl_text_biology WHERE taxon_id = ANY($1::int[])
+            ORDER BY taxon_id, biology_id
+            `);
+        const textDistributionByTaxon = await groupedByTaxon(`
+            SELECT * FROM tbl_text_distribution WHERE taxon_id = ANY($1::int[])
+            ORDER BY taxon_id, distribution_id
+            `);
+        const seasonalityByTaxon = await groupedByTaxon(`
+            SELECT * FROM tbl_taxa_seasonality
+            LEFT JOIN tbl_seasons ON tbl_taxa_seasonality.season_id = tbl_seasons.season_id
+            LEFT JOIN tbl_activity_types ON tbl_taxa_seasonality.activity_type_id = tbl_activity_types.activity_type_id
+            WHERE tbl_taxa_seasonality.taxon_id = ANY($1::int[])
+            ORDER BY tbl_taxa_seasonality.taxon_id, tbl_taxa_seasonality.seasonality_id
+            `);
+
+        taxonIds.forEach(taxonId => {
+            const taxon = taxaById.get(String(taxonId));
+            if(!taxon) {
+                //The per-row implementation dereferenced this unconditionally and
+                //would have thrown; there are no such rows, but skipping is safe.
+                return;
+            }
+
+            const genus = taxon.genus_id ? generaById.get(String(taxon.genus_id)) : null;
+            let familyId = null;
+            if(genus) {
+                familyId = genus.family_id;
+                taxon.genus = {
+                    genus_id: taxon.genus_id,
+                    genus_name: genus.genus_name,
+                };
+            }
+
+            let orderId = null;
+            const family = familyId ? familiesById.get(String(familyId)) : null;
+            if(family) {
+                orderId = family.order_id;
+                taxon.family = {
+                    family_id: familyId,
+                    family_name: family.family_name,
+                };
+            }
+
+            const order = orderId ? ordersById.get(String(orderId)) : null;
+            if(order) {
+                taxon.order = {
+                    order_id: orderId,
+                    order_name: order.order_name,
+                    record_type_id: order.record_type_id,
+                };
+            }
+
+            if(taxon.author_id) {
+                taxon.author = authorsById.get(String(taxon.author_id));
+                delete taxon.author_id;
+            }
+
+            const key = String(taxonId);
+            taxon.common_names = commonNamesByTaxon.get(key) || [];
+            taxon.measured_attributes = measuredAttributesByTaxon.get(key) || [];
+            taxon.taxonomy_notes = taxonomyNotesByTaxon.get(key) || [];
+            taxon.text_biology = textBiologyByTaxon.get(key) || [];
+            taxon.text_distribution = textDistributionByTaxon.get(key) || [];
+            taxon.seasonality = seasonalityByTaxon.get(key) || [];
+
+            this.addTaxonToLocalLookup(site, taxon);
+        });
+    }
+
     postProcessSiteData(site) {
     
         let dataGroups = [];
