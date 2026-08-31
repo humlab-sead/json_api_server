@@ -39,20 +39,33 @@ class MeasuredValuesModule {
         }
 
         try {
-            let queryPromises = [];
+            //One query for the whole site rather than one per analysis entity.
+            const analysisEntities = [];
             site.sample_groups.forEach(sampleGroup => {
                 sampleGroup.physical_samples.forEach(physicalSample => {
                     physicalSample.analysis_entities.forEach(analysisEntity => {
-                        ;
-                        let promise = pgClient.query('SELECT * FROM tbl_measured_values WHERE analysis_entity_id=$1', [analysisEntity.analysis_entity_id]).then(measuredValues => {
-                            analysisEntity.measured_values = measuredValues.rows;
-                        });
-                        queryPromises.push(promise);
+                        //Every analysis entity gets the array, empty or not, as
+                        //the per-entity query it replaces did.
+                        analysisEntity.measured_values = [];
+                        analysisEntities.push(analysisEntity);
                     });
                 })
             });
 
-            await Promise.all(queryPromises);
+            if(analysisEntities.length > 0) {
+                const analysisEntitiesById = new Map(
+                    analysisEntities.map(analysisEntity => [String(analysisEntity.analysis_entity_id), analysisEntity]));
+                const measuredValues = await pgClient.query(
+                    'SELECT * FROM tbl_measured_values WHERE analysis_entity_id = ANY($1::bigint[]) ORDER BY analysis_entity_id, measured_value_id',
+                    [analysisEntities.map(analysisEntity => analysisEntity.analysis_entity_id)]);
+
+                measuredValues.rows.forEach(measuredValue => {
+                    const analysisEntity = analysisEntitiesById.get(String(measuredValue.analysis_entity_id));
+                    if(analysisEntity) {
+                        analysisEntity.measured_values.push(measuredValue);
+                    }
+                });
+            }
         }
         finally {
             await this.app.releaseDbConnection(pgClient);
