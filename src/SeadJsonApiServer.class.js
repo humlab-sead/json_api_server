@@ -1370,6 +1370,29 @@ class SeadJsonApiServer {
         console.timeEnd("Preload of sites complete");
     }
 
+    /**
+     * Superseded by getSiteConsolidated(). Kept only so the previous behaviour
+     * stays reachable for one release, via /site/:siteId/:noCache/postgres.
+     *
+     * WARNING: this implementation does NOT produce the same payload as the
+     * other two. It aggregates the whole site into jsonb inside SQL, which
+     * converts values before the pg driver ever sees them, so its output cannot
+     * be used as a reference when comparing fetch paths:
+     *
+     *   - timestamptz becomes "2013-05-13T09:29:56.070308+00:00" rather than
+     *     the driver's Date, which serialises as "2013-05-13T09:29:56.070Z"
+     *   - numeric becomes a JSON number (20) rather than the driver's string
+     *     ("20.0000000000"); bigint likewise, e.g. analysis_entity_id
+     *   - several columns leak into the payload that the other paths project
+     *     away, and lookup_tables.units is over-collected
+     *
+     * This is not fixable by registering pg type parsers: once the row is
+     * aggregated the driver receives a single column of type jsonb, so there
+     * are no per-column type OIDs left for a parser to key on. Returning real
+     * columns and letting the driver parse them, as getSiteConsolidated() does,
+     * is the only way to keep the types — which is why that method exists
+     * rather than this one having been repaired.
+     */
     async getSitePostgres(siteId, verbose = true, fetchMethodSpecificData = true, noCache = false) {
         if(verbose) console.log("Request for site", siteId, "(Postgres consolidated)");
 
