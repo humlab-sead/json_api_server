@@ -15,8 +15,8 @@
  *   --out <dir>        output directory (required)
  *   --base <url>       server base URL (default http://localhost:8485)
  *   --sites <list>     comma-separated site ids (default: the standard test set)
- *   --method <name>    fetch implementation: "true" (original per-row),
- *                      "postgres" (single CTE), or omitted for the default
+ *   --method true      fetch via the original per-row getSite() instead of
+ *                      the default consolidated implementation
  *   --timeout <ms>     per-site timeout (default 600000)
  */
 
@@ -77,8 +77,8 @@ export async function readQueryStats(base) {
 
 /**
  * Builds the site URL. The third path segment selects the fetch implementation:
- * "true" is the original per-row getSite(), "postgres" is the single-CTE
- * getSitePostgres(), and anything else (including "false") is the default.
+ * "true" is the original per-row getSite(); anything else (including "false") is
+ * the default consolidated getSitePostgres().
  */
 export function siteUrl(base, siteId, fetchMethod) {
     // /site/:siteId/:noCache?/:alternativeFetchMethod?

@@ -30,9 +30,8 @@ node scripts/compare-site-baseline.mjs baseline/before baseline/after
 
 | value | implementation |
 |---|---|
-| omitted / `false` | `getSiteConsolidated()` — the default |
-| `true` | `getSite()` — the original per-row implementation |
-| `postgres` | `getSitePostgres()` — the single-CTE implementation |
+| omitted / `false` | `getSitePostgres()` — the consolidated default |
+| `true` | `getSite()` — the original per-row implementation it supersedes |
 
 Other options: `--base <url>` (default `http://localhost:8485`), `--sites 1,2,79`,
 `--timeout <ms>`. For `compare`: `--ordered` to make array order significant,
