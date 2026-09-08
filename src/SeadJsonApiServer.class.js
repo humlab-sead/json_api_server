@@ -27,6 +27,7 @@ import MCR from "./EndpointModules/MCR.class.js";
 import Search from "./EndpointModules/Search.class.js";
 import Images from "./EndpointModules/Images.class.js";
 import IsoarchLocations from "./EndpointModules/IsoarchLocations.class.js";
+import SeadDataFormat from "./EndpointModules/SeadDataFormat.class.js";
 import AuthenticationHandler from './AuthenticationHandler.class.js';
 import basicAuth from 'basic-auth';
 
@@ -80,7 +81,9 @@ class SeadJsonApiServer {
         }
         this.expressApp = express();
         this.expressApp.use(cors());
-        this.expressApp.use(bodyParser.json());
+        //Default body limit is 100kb; SDF import bundles (POST /sdf/import) and
+        //bulk site/datagroup requests are far larger.
+        this.expressApp.use(bodyParser.json({ limit: process.env.JSON_BODY_LIMIT || "128mb" }));
 
         const artificialLatency = parseInt(process.env.ARTIFICIAL_LATENCY_MS) || 0;
         const nodeEnv = (process.env.NODE_ENV || "undefined").toLowerCase();
@@ -122,6 +125,7 @@ class SeadJsonApiServer {
             this.search = new Search(this);
             this.images = new Images(this);
             this.isoarchLocations = new IsoarchLocations(this);
+            this.seadDataFormat = new SeadDataFormat(this);
 
             this.run();
         });
@@ -3962,7 +3966,7 @@ class SeadJsonApiServer {
     }
 
     async query(sql, params = []) {
-        let pgClient = await pgPool.connect();
+        let pgClient = await this.pgPool.connect();
         let resultData = await pgClient.query(sql, params);
         pgClient.release();
         return resultData;
