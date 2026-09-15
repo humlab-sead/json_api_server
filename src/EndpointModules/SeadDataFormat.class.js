@@ -45,7 +45,13 @@ class SeadDataFormat {
                 exporter_build: `${this.app.appName}-${this.app.appVersion}`,
                 profiles: ["readable", "complete"],
                 import: "validate-and-diff only — writes nothing to the database (D8)",
-                phases_implemented: [1, 3],
+                //0: the export audits its own completeness (manifest.coverage.analysis_entities)
+                //1: server-side flattening; 3: the reader, validating only.
+                //2 is partial: the typed analysis subtables are joined and the
+                //owned-table gap is closed, but .xlsx rendering is client-side
+                //and the _Raw appendix (D6) is not built.
+                phases_implemented: [0, 1, 3],
+                phases_partial: [2],
             });
         });
 

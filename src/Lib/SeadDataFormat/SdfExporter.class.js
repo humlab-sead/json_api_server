@@ -2,6 +2,7 @@ import crypto from "crypto";
 import {
     SDF_VERSION, ROUNDTRIP, COL_GROUP, SheetBuilder, clean, isBlank, checksum,
 } from "./SdfCommon.js";
+import SdfSource, { OBSERVATION_SHEETS, DENDRO_METHOD_ID } from "./SdfSource.class.js";
 
 /**
  * Builds a SEAD Data Format bundle for one or more sites.
@@ -19,24 +20,29 @@ import {
  * rather than hidden.
  */
 
-//The ten non-empty owned tables the JSON API never reads (design, "Coverage
-//against the 68 owned tables"). Those handled directly below are marked.
+//The non-empty owned tables the JSON API never reads (design, "Coverage
+//against the 68 owned tables"). All of these are now queried directly by
+//SdfSource; tbl_analysis_dating_ranges and tbl_analysis_identifiers were not on
+//the original list but are populated (7,775 and 41 rows) and are covered too.
 const KNOWN_API_GAPS = [
     { table: "tbl_dataset_submissions", handled: true, sheet: "Dataset Submissions" },
     { table: "tbl_sample_notes", handled: true, sheet: "Notes" },
     { table: "tbl_sample_group_notes", handled: true, sheet: "Notes" },
     { table: "tbl_sample_group_dimensions", handled: true, sheet: "Sample Groups" },
     { table: "tbl_dataset_masters", handled: true, sheet: "Datasets" },
-    { table: "tbl_analysis_integer_values", handled: false, sheet: "Analysis Values" },
-    { table: "tbl_analysis_boolean_values", handled: false, sheet: "Analysis Values" },
-    { table: "tbl_analysis_categorical_values", handled: false, sheet: "Analysis Values" },
-    { table: "tbl_analysis_numerical_values", handled: false, sheet: "Analysis Values" },
-    { table: "tbl_analysis_notes", handled: false, sheet: "Analysis Values" },
+    { table: "tbl_analysis_integer_values", handled: true, sheet: "Analysis Values" },
+    { table: "tbl_analysis_boolean_values", handled: true, sheet: "Analysis Values" },
+    { table: "tbl_analysis_categorical_values", handled: true, sheet: "Analysis Values" },
+    { table: "tbl_analysis_numerical_values", handled: true, sheet: "Analysis Values" },
+    { table: "tbl_analysis_notes", handled: true, sheet: "Analysis Values" },
+    { table: "tbl_analysis_dating_ranges", handled: true, sheet: "Dendrochronology" },
+    { table: "tbl_analysis_identifiers", handled: true, sheet: "Analysis Values" },
 ];
 
 export default class SdfExporter {
     constructor(app) {
         this.app = app;
+        this.source = new SdfSource(app);
     }
 
     /**
@@ -59,27 +65,20 @@ export default class SdfExporter {
             throw err;
         }
 
-        //postProcessSiteData re-parents analysis entities onto datasets and then
-        //deletes ps.analysis_entities (design F3). Rebuild the sample -> AE edge
-        //once, up front, so every observation sheet can join on it.
-        const aeBySample = new Map();
-        for (const site of sites) {
-            for (const ds of site.datasets || []) {
-                for (const ae of ds.analysis_entities || []) {
-                    const key = String(ae.physical_sample_id);
-                    if (!aeBySample.has(key)) aeBySample.set(key, []);
-                    aeBySample.get(key).push({ ...ae, dataset_id: ds.dataset_id });
-                }
-            }
-        }
-
         const ctx = {
             sites,
             profile,
-            aeBySample,
             vocab: new Map(), //list -> Map(code -> {code,label,description})
             extra: {},        //DB-direct rows keyed by table
         };
+
+        //The structural model: analysis entities, the datasets that own them and
+        //every observation hanging off them, read straight from the database.
+        //Every Tier B sheet is built from this and none of them reads
+        //site.data_groups - see SdfSource for why that structure is unusable as
+        //an export source, and deprecated. The sample -> analysis entity edge
+        //postProcessSiteData deletes (design F3) is simply present here.
+        ctx.source = await this.source.load(sites.map(s => parseInt(s.site_id)));
 
         await this._loadApiGapTables(ctx);
 
@@ -145,44 +144,28 @@ export default class SdfExporter {
         return clean(site.site_name) || `site ${site.site_id}`;
     }
 
-    /*
-     * analysis_entity_id -> { siteName, sampleName }, for sheets built from direct queries rather
-     * than from data_groups. postProcessSiteData re-parents analysis entities onto datasets and
-     * deletes ps.analysis_entities (design F3), so the sample name is reached through the
-     * physical_sample_id the AE row still carries. Built once and memoised per export.
+    /**
+     * analysis_entity_id -> { siteName, sampleName, physicalSampleId, datasetId }
+     * for the sheets that are not built through _entityRow (Dating, Prep
+     * Methods, Identification Levels).
+     *
+     * This reads the structural model loaded by SdfSource, so it no longer has
+     * to work around postProcessSiteData having deleted the sample -> analysis
+     * entity edge (design F3) - the edge is simply present.
      */
     _analysisEntityContext(ctx) {
         if (ctx._aeContext) return ctx._aeContext;
-
-        const sampleName = new Map();
-        const sampleSite = new Map();
-        for (const site of ctx.sites) {
-            const sName = this._siteName(site);
-            for (const sg of site.sample_groups || []) {
-                for (const ps of sg.physical_samples || []) {
-                    const key = String(ps.physical_sample_id);
-                    sampleName.set(key, isBlank(ps.sample_name) ? null : String(ps.sample_name));
-                    sampleSite.set(key, sName);
-                }
-            }
-        }
-
         const map = new Map();
-        for (const site of ctx.sites) {
-            const sName = this._siteName(site);
-            for (const ds of site.datasets || []) {
-                for (const ae of ds.analysis_entities || []) {
-                    const psKey = String(ae.physical_sample_id);
-                    map.set(String(ae.analysis_entity_id), {
-                        siteName: sampleSite.get(psKey) || sName,
-                        sampleName: sampleName.get(psKey) || null,
-                        physicalSampleId: isBlank(ae.physical_sample_id) ? null : parseInt(ae.physical_sample_id),
-                        datasetId: isBlank(ds.dataset_id) ? null : parseInt(ds.dataset_id),
-                    });
-                }
-            }
+        for (const [key, e] of ctx.source.entityById) {
+            map.set(key, {
+                siteName: this._siteNameById(ctx, e.site_id),
+                sampleName: clean(e.sample_name),
+                physicalSampleId: isBlank(e.physical_sample_id) ? null : parseInt(e.physical_sample_id),
+                datasetId: isBlank(e.dataset_id) ? null : parseInt(e.dataset_id),
+                datasetName: clean(e.dataset_name),
+                methodName: clean(e.method_name),
+            });
         }
-
         ctx._aeContext = map;
         return map;
     }
@@ -243,15 +226,11 @@ export default class SdfExporter {
         //levels all hang off analysis entities, and the JSON API either aggregates them past the
         //point of recovery (dating) or does not carry them at all (the other two), so SDF queries
         //them directly.
-        const aeIds = [];
-        for (const site of ctx.sites) {
-            for (const ds of site.datasets || []) {
-                for (const ae of ds.analysis_entities || []) {
-                    const id = parseInt(ae.analysis_entity_id);
-                    if (Number.isInteger(id)) aeIds.push(id);
-                }
-            }
-        }
+        //From the structural model, not the site document: the site document's
+        //dataset list is whatever the API's allowlisted modules assembled
+        //(design F2), so deriving the scope from it would carry that gap into
+        //the dating, prep-method and identification-level sheets too.
+        const aeIds = ctx.source.aeIds;
         ctx.extra.ae_ids = aeIds;
 
         //--- dating, one query per source table so every column keeps a real binding -------------
@@ -274,18 +253,9 @@ export default class SdfExporter {
                LEFT JOIN tbl_dating_uncertainty u ON u.dating_uncertainty_id = rd.dating_uncertainty_id
               WHERE rd.analysis_entity_id = ANY($1)`, [aeIds]) : [];
 
-        ctx.extra.dendro_dates = aeIds.length ? await q(
-            `SELECT dd.dendro_date_id, dd.analysis_entity_id, dd.age_older, dd.age_younger,
-                    dd.age_range, dd.age_type_id, dd.season_id, dd.dating_uncertainty_id,
-                    at.age_type, s.season_name, u.uncertainty, dl.name AS dendro_lookup_name,
-                    n.note, dd.date_updated
-               FROM tbl_dendro_dates dd
-               LEFT JOIN tbl_age_types at ON at.age_type_id = dd.age_type_id
-               LEFT JOIN tbl_seasons s ON s.season_id = dd.season_id
-               LEFT JOIN tbl_dating_uncertainty u ON u.dating_uncertainty_id = dd.dating_uncertainty_id
-               LEFT JOIN tbl_dendro_lookup dl ON dl.dendro_lookup_id = dd.dendro_lookup_id
-               LEFT JOIN tbl_dendro_date_notes n ON n.dendro_date_id = dd.dendro_date_id
-              WHERE dd.analysis_entity_id = ANY($1)`, [aeIds]) : [];
+        //tbl_dendro_dates and tbl_analysis_dating_ranges are not fetched: both
+        //are fully subsumed by the method 10 value classes that build the
+        //Dendrochronology sheet (D11). See the notes in _buildDating.
 
         ctx.extra.entity_ages = aeIds.length ? await q(
             `SELECT a.analysis_entity_age_id, a.analysis_entity_id, a.age, a.age_older,
@@ -294,18 +264,6 @@ export default class SdfExporter {
                FROM tbl_analysis_entity_ages a
                LEFT JOIN tbl_chronologies c ON c.chronology_id = a.chronology_id
               WHERE a.analysis_entity_id = ANY($1)`, [aeIds]) : [];
-
-        ctx.extra.dating_ranges = aeIds.length ? await q(
-            `SELECT r.analysis_dating_range_id, av.analysis_entity_id, r.analysis_value_id,
-                    r.low_value, r.high_value, r.low_is_uncertain, r.high_is_uncertain,
-                    r.low_qualifier, r.high_qualifier, r.age_type_id, r.season_id,
-                    r.dating_uncertainty_id, at.age_type, s.season_name, u.uncertainty
-               FROM tbl_analysis_dating_ranges r
-               JOIN tbl_analysis_values av ON av.analysis_value_id = r.analysis_value_id
-               LEFT JOIN tbl_age_types at ON at.age_type_id = r.age_type_id
-               LEFT JOIN tbl_seasons s ON s.season_id = r.season_id
-               LEFT JOIN tbl_dating_uncertainty u ON u.dating_uncertainty_id = r.dating_uncertainty_id
-              WHERE av.analysis_entity_id = ANY($1)`, [aeIds]) : [];
 
         //--- previously uncovered owned tables ---------------------------------------------------
         ctx.extra.prep_methods = aeIds.length ? await q(
@@ -833,171 +791,332 @@ export default class SdfExporter {
 
     // ---------------------------------------------------------------- Tier B
 
+    /**
+     * The shared identity + context block for every Tier B sheet.
+     *
+     * Identity is the real thing: the analysis entity, the dataset that owns it
+     * and the physical sample it came from, all straight out of
+     * tbl_analysis_entities. The previous version reached these through
+     * site.data_groups, where two of three value-class modules carried no
+     * analysis_entity_id at all and every row exported with a null primary key.
+     */
     _observationSheet(name, grain, note) {
         const b = new SheetBuilder(name, "B", grain, { note });
-        b.idCol("_analysis_entity_id", { source: "public.tbl_analysis_entities.analysis_entity_id", type: "integer" });
-        b.idCol("_dataset_id", { source: "public.tbl_analysis_entities.dataset_id", type: "integer" });
-        b.idCol("_physical_sample_id", { source: "public.tbl_analysis_entities.physical_sample_id", type: "integer" });
+        b.idCol("_analysis_entity_id", { source: "public.tbl_analysis_entities.analysis_entity_id", table: "tbl_analysis_entities", type: "integer" });
+        b.idCol("_dataset_id", { source: "public.tbl_analysis_entities.dataset_id", table: "tbl_analysis_entities", type: "integer" });
+        b.idCol("_physical_sample_id", { source: "public.tbl_analysis_entities.physical_sample_id", table: "tbl_analysis_entities", type: "integer" });
         b.actionCol();
         b.col("Site", { source: "context:tbl_sites.site_name", roundtrip: ROUNDTRIP.DERIVED, group: COL_GROUP.CONTEXT, locked: true });
         b.col("Sample", { source: "context:tbl_physical_samples.sample_name", roundtrip: ROUNDTRIP.DERIVED, group: COL_GROUP.CONTEXT, locked: true });
+        b.col("Dataset", { source: "context:tbl_datasets.dataset_name", roundtrip: ROUNDTRIP.DERIVED, group: COL_GROUP.CONTEXT, locked: true });
         b.col("Method", { source: "context:tbl_methods.method_name", roundtrip: ROUNDTRIP.DERIVED, group: COL_GROUP.CONTEXT, locked: true });
         return b;
     }
 
-    _dataGroupsByType(ctx, predicate) {
-        const out = [];
-        for (const site of ctx.sites) {
-            for (const dg of site.data_groups || []) {
-                if (predicate(dg)) out.push({ site, dg });
-            }
+    _siteNameById(ctx, siteId) {
+        if (!ctx._siteNames) {
+            ctx._siteNames = new Map(ctx.sites.map(s => [String(s.site_id), this._siteName(s)]));
         }
-        return out;
+        return ctx._siteNames.get(String(siteId)) || null;
+    }
+
+    /**
+     * Identity and context for one analysis entity, from the structural model.
+     * Every Tier B row starts here, so no sheet has to invent an identity.
+     */
+    _entityRow(ctx, aeId) {
+        const e = ctx.source.entityById.get(String(aeId));
+        if (!e) {
+            //Should not happen: every observation is fetched by analysis entity
+            //id from the same scope. Kept explicit rather than silently null.
+            return {
+                _analysis_entity_id: isBlank(aeId) ? null : parseInt(aeId),
+                _dataset_id: null,
+                _physical_sample_id: null,
+                Action: "", Site: null, Sample: null, Dataset: null, Method: null,
+            };
+        }
+        return {
+            _analysis_entity_id: parseInt(e.analysis_entity_id),
+            _dataset_id: isBlank(e.dataset_id) ? null : parseInt(e.dataset_id),
+            _physical_sample_id: isBlank(e.physical_sample_id) ? null : parseInt(e.physical_sample_id),
+            Action: "",
+            Site: this._siteNameById(ctx, e.site_id),
+            Sample: clean(e.sample_name),
+            Dataset: clean(e.dataset_name),
+            Method: clean(e.method_name),
+        };
     }
 
     _buildAbundances(ctx) {
-        const b = this._observationSheet("Abundances", "one row per sample x taxon", "Long format — the attribute axis (taxa) is open-ended, so it is never pivoted (design: 'When to pivot').");
-        b.col("Taxon", { source: "public.tbl_abundances.taxon_id -> Taxa sheet", type: "text" });
-        b.col("Element", { source: "public.tbl_abundances.abundance_element_id", type: "enum", vocab: "abundance_element" });
-        b.col("Abundance", { source: "public.tbl_abundances.abundance", type: "number" });
-        b.col("Modifications", { source: "public.tbl_abundance_modifications", type: "text" });
+        const b = this._observationSheet("Abundances", "one row per sample x taxon",
+            "Long format - the attribute axis (taxa) is open-ended, so it is never pivoted (design: 'When to pivot').");
+        b.idCol("_abundance_id", { source: "public.tbl_abundances.abundance_id", table: "tbl_abundances", type: "integer" });
+        b.idCol("_taxon_id", { source: "public.tbl_abundances.taxon_id", table: "tbl_abundances", type: "integer" });
+        b.col("Taxon", { source: "public.tbl_abundances.taxon_id -> Taxa sheet", table: "tbl_abundances", type: "text" });
+        b.col("Element", { source: "public.tbl_abundances.abundance_element_id", table: "tbl_abundances", type: "enum", vocab: "abundance_element" });
+        b.col("Abundance", { source: "public.tbl_abundances.abundance", table: "tbl_abundances", type: "number" });
+        b.col("Modifications", { source: "public.tbl_abundance_modifications", table: "tbl_abundance_modifications", roundtrip: ROUNDTRIP.REFERENCE, locked: true, type: "text" });
+        b.col("Last updated", { source: "public.tbl_abundances.date_updated", roundtrip: ROUNDTRIP.REFERENCE, group: COL_GROUP.UPDATED, locked: true, type: "date" });
 
-        const elementName = new Map();
-        for (const site of ctx.sites) {
-            for (const e of (site.lookup_tables && site.lookup_tables.abundance_elements) || []) {
-                elementName.set(String(e.abundance_element_id), e.element_name);
-            }
-        }
-        for (const { site, dg } of this._dataGroupsByType(ctx, d => d.type === "abundance")) {
-            const sName = this._siteName(site);
-            for (const v of dg.values || []) {
-                const d = v.data || v.value || {};
-                b.addRow({
-                    _analysis_entity_id: isBlank(v.analysis_entity_id) ? null : parseInt(v.analysis_entity_id),
-                    _dataset_id: isBlank(v.dataset_id) ? null : parseInt(v.dataset_id),
-                    _physical_sample_id: isBlank(v.physical_sample_id) ? null : parseInt(v.physical_sample_id),
-                    Action: "",
-                    Site: sName,
-                    Sample: clean(v.sample_name),
-                    Method: clean(dg.method_name),
-                    Taxon: this._taxonLabel(site, d.taxon_id),
-                    Element: isBlank(d.abundance_element_id) ? null
-                        : this._voc(ctx, "abundance_element", d.abundance_element_id,
-                            elementName.get(String(d.abundance_element_id)) || d.abundance_element_id),
-                    Abundance: isBlank(d.abundance) ? null : Number(d.abundance),
-                    Modifications: (d.modifications || []).map(m => m.modification_type_name || m).join("; ") || null,
-                });
-            }
+        for (const a of ctx.source.abundances) {
+            const taxon = ctx.source.taxa.get(String(a.taxon_id));
+            b.addRow({
+                ...this._entityRow(ctx, a.analysis_entity_id),
+                _abundance_id: parseInt(a.abundance_id),
+                _taxon_id: isBlank(a.taxon_id) ? null : parseInt(a.taxon_id),
+                Taxon: taxon ? taxon.label : (isBlank(a.taxon_id) ? null : String(a.taxon_id)),
+                Element: isBlank(a.abundance_element_id) ? null
+                    : this._voc(ctx, "abundance_element", a.abundance_element_id,
+                        clean(a.element_name) || a.abundance_element_id),
+                Abundance: isBlank(a.abundance) ? null : Number(a.abundance),
+                Modifications: (a.modifications || []).filter(Boolean).join("; ") || null,
+                "Last updated": a.date_updated || null,
+            });
         }
         return b;
     }
 
     _buildMeasurements(ctx) {
-        const b = this._observationSheet("Measurements", "one row per measured value", "tbl_measured_values and its dimension satellites.");
-        b.col("Value", { source: "public.tbl_measured_values.measured_value", type: "number" });
+        const b = this._observationSheet("Measurements", "one row per measured value",
+            "tbl_measured_values, keyed on the analysis entity that owns each value.");
+        b.idCol("_measured_value_id", { source: "public.tbl_measured_values.measured_value_id", table: "tbl_measured_values", type: "integer" });
+        b.col("Value", { source: "public.tbl_measured_values.measured_value", table: "tbl_measured_values", type: "number" });
+        b.col("Last updated", { source: "public.tbl_measured_values.date_updated", roundtrip: ROUNDTRIP.REFERENCE, group: COL_GROUP.UPDATED, locked: true, type: "date" });
 
-        for (const { site, dg } of this._dataGroupsByType(ctx, d => d.type === "measured_values")) {
-            const sName = this._siteName(site);
-            for (const v of dg.values || []) {
-                b.addRow({
-                    _analysis_entity_id: isBlank(v.analysis_entity_id) ? null : parseInt(v.analysis_entity_id),
-                    _dataset_id: isBlank(v.dataset_id) ? null : parseInt(v.dataset_id),
-                    _physical_sample_id: isBlank(v.physical_sample_id) ? null : parseInt(v.physical_sample_id),
-                    Action: "",
-                    Site: sName,
-                    Sample: clean(v.sample_name),
-                    Method: clean(dg.method_name),
-                    Value: isBlank(v.value) ? (isBlank(v.data) ? null : Number(v.data)) : Number(v.value),
-                });
-            }
+        for (const m of ctx.source.measured) {
+            b.addRow({
+                ...this._entityRow(ctx, m.analysis_entity_id),
+                _measured_value_id: parseInt(m.measured_value_id),
+                Value: isBlank(m.measured_value) ? null : Number(m.measured_value),
+                "Last updated": m.date_updated || null,
+            });
         }
         return b;
-    }
-
-    /** Pivot value-class observations for one method into a wide sheet. */
-    _buildValueClassPivot(ctx, name, grain, note, methodPredicate) {
-        const b = this._observationSheet(name, grain, note);
-        //group values by analysis entity / data group, pivot on class name
-        const groups = this._dataGroupsByType(ctx, methodPredicate);
-        for (const { site, dg } of groups) {
-            const sName = this._siteName(site);
-            const byEntity = new Map();
-            for (const v of dg.values || []) {
-                const ek = String(v.analysis_entity_id ?? v.analysis_entitity_id ?? `${dg.data_group_id}:${dg.physical_sample_id}`);
-                if (!byEntity.has(ek)) {
-                    byEntity.set(ek, {
-                        _analysis_entity_id: isBlank(v.analysis_entity_id) ? null : parseInt(v.analysis_entity_id),
-                        _dataset_id: isBlank(v.dataset_id ?? dg.dataset_id) ? null : parseInt(v.dataset_id ?? dg.dataset_id),
-                        _physical_sample_id: isBlank(v.physical_sample_id ?? dg.physical_sample_id) ? null : parseInt(v.physical_sample_id ?? dg.physical_sample_id),
-                        Action: "",
-                        Site: sName,
-                        Sample: clean(v.sample_name ?? dg.sample_name),
-                        Method: clean(dg.method_name) || `method ${dg.method_ids && dg.method_ids[0]}`,
-                    });
-                }
-                const row = byEntity.get(ek);
-                const className = clean(v.key) || (v.valueClassId != null ? `class ${v.valueClassId}` : null);
-                if (className) {
-                    const colKey = `Class: ${className}`;
-                    b.col(colKey, {
-                        title: colKey,
-                        source: `pivot:tbl_analysis_values:${className}`,
-                        group: COL_GROUP.PIVOT,
-                        type: "text",
-                        pivotType: className,
-                    });
-                    //value is the text rendering; carry it as-is (reference-grade
-                    //per design Q2 — cannot be reliably regenerated).
-                    row[colKey] = clean(v.value);
-                }
-            }
-            for (const row of byEntity.values()) b.addRow(row);
-        }
-        return b;
-    }
-
-    _buildDendrochronology(ctx) {
-        return this._buildValueClassPivot(
-            ctx, "Dendrochronology", "one row per analysis entity",
-            "tbl_analysis_values pivoted against tbl_value_classes where method_id = 10 (D11: not tbl_dendro). Text renderings are reference-grade.",
-            d => (d.method_ids || []).includes(10) || d.type === "dendrochronology",
-        );
-    }
-
-    _buildCeramics(ctx) {
-        return this._buildValueClassPivot(
-            ctx, "Ceramics", "one row per analysis entity",
-            "tbl_ceramics pivoted against tbl_ceramics_lookup.",
-            d => d.type === "ceramics",
-        );
-    }
-
-    _buildAnalysisValues(ctx) {
-        //Everything value-class-shaped that is not method 10 (dendro gets its own
-        //sheet above) and not the dedicated ceramics sheet.
-        return this._buildValueClassPivot(
-            ctx, "Analysis Values", "one row per analysis entity",
-            "tbl_analysis_values + typed subtables, pivoted per method. Typed subtables are not yet joined here — see manifest.coverage (design F1).",
-            d => d.type === "adna" || d.type === "isotope"
-                || (Array.isArray(d.values) && d.values.some(v => v && (v.valueClassId != null || typeof v.key === "string"))
-                    && !(d.method_ids || []).includes(10)
-                    && d.type !== "abundance" && d.type !== "measured_values" && d.type !== "dating" && d.type !== "ceramics"),
-        );
     }
 
     /*
-     * Dating: five source tables collapsed under a "Dating type" discriminator that names the
-     * table a row came from, so every column keeps a real binding.
+     * Ceramics has no value-class twin, unlike dendro.
+     *
+     * Measured against sead_staging: value classes exist for exactly two methods, 10
+     * (Dendrochronology) and 175 (Ancient DNA), and none of the 11,076 analysis entities in
+     * tbl_ceramics carries a single tbl_analysis_values row. So tbl_ceramics is the only home this
+     * data has, and reading it is not a legacy shortcut - it is the whole source. If ceramics is
+     * migrated into the value-class system later, this sheet becomes a D11 case like dendro and
+     * should switch over; until then there is nothing to switch to.
+     */
+    _buildCeramics(ctx) {
+        const b = this._observationSheet("Ceramics", "one row per analysis entity",
+            "tbl_ceramics pivoted on tbl_ceramics_lookup. Values are stored as varchar in the database and are carried verbatim.");
+
+        //Columns first, in lookup id order, so the layout is stable between
+        //exports regardless of which rows happen to come back first.
+        const lookups = new Map();
+        for (const c of ctx.source.ceramics) {
+            const id = String(c.ceramics_lookup_id);
+            if (!lookups.has(id)) {
+                lookups.set(id, {
+                    id: parseInt(c.ceramics_lookup_id),
+                    name: clean(c.lookup_name) || `lookup ${c.ceramics_lookup_id}`,
+                    description: clean(c.lookup_description),
+                });
+            }
+        }
+        const colKeyFor = new Map();
+        for (const l of [...lookups.values()].sort((a, b2) => a.id - b2.id)) {
+            const colKey = l.name;
+            colKeyFor.set(String(l.id), colKey);
+            b.col(colKey, {
+                title: colKey,
+                source: `pivot:tbl_ceramics:ceramics_lookup_id=${l.id}`,
+                table: "tbl_ceramics",
+                group: COL_GROUP.PIVOT,
+                type: "text",
+                pivotType: l.name,
+            });
+        }
+
+        const rows = new Map();
+        for (const c of ctx.source.ceramics) {
+            const key = String(c.analysis_entity_id);
+            if (!rows.has(key)) rows.set(key, this._entityRow(ctx, c.analysis_entity_id));
+            const row = rows.get(key);
+            const colKey = colKeyFor.get(String(c.ceramics_lookup_id));
+            const value = clean(c.measurement_value);
+            row[colKey] = isBlank(row[colKey]) ? value : `${row[colKey]} | ${value}`;
+        }
+        for (const row of rows.values()) b.addRow(row);
+        return b;
+    }
+
+    _buildIsotopes(ctx) {
+        const b = this._observationSheet("Isotopes", "one row per isotope measurement",
+            "tbl_isotopes with its measurement, standard, specifier and unit lookups.");
+        b.idCol("_isotope_id", { source: "public.tbl_isotopes.isotope_id", table: "tbl_isotopes", type: "integer" });
+        b.col("Isotope", { source: "public.tbl_isotope_types.designation", table: "tbl_isotopes", roundtrip: ROUNDTRIP.REFERENCE, locked: true, type: "text" });
+        b.col("Value", { source: "public.tbl_isotopes.measurement_value", table: "tbl_isotopes", type: "number" });
+        b.col("Unit", { source: "public.tbl_units.unit_abbrev", roundtrip: ROUNDTRIP.REFERENCE, locked: true, type: "text" });
+        b.col("Specifier", { source: "public.tbl_isotope_value_specifiers.name", roundtrip: ROUNDTRIP.REFERENCE, locked: true, type: "text" });
+        b.col("Standard", { source: "public.tbl_isotope_standards.isotope_ration", roundtrip: ROUNDTRIP.REFERENCE, locked: true, type: "text" });
+        b.col("Last updated", { source: "public.tbl_isotopes.date_updated", roundtrip: ROUNDTRIP.REFERENCE, group: COL_GROUP.UPDATED, locked: true, type: "date" });
+
+        for (const i of ctx.source.isotopes) {
+            const n = Number(i.measurement_value);
+            b.addRow({
+                ...this._entityRow(ctx, i.analysis_entity_id),
+                _isotope_id: parseInt(i.isotope_id),
+                Isotope: clean(i.isotope_type_name),
+                //measurement_value is text in the database; keep it as text when
+                //it is not a clean number rather than exporting NaN.
+                Value: isBlank(i.measurement_value) ? null : (Number.isFinite(n) ? n : clean(i.measurement_value)),
+                Unit: clean(i.unit_abbrev) || clean(i.unit_name),
+                Specifier: clean(i.specifier_name),
+                Standard: clean(i.isotope_ration) || clean(i.international_scale),
+                "Last updated": i.date_updated || null,
+            });
+        }
+        return b;
+    }
+
+    /**
+     * Pivot value-class observations into a wide sheet: one row per analysis
+     * entity, one column per value class.
+     *
+     * Value classes are a closed set per method, so the attribute axis is
+     * bounded and pivoting is right (design, "When to pivot"). Each column is
+     * typed from its class, and carries the *typed* value from the subtable
+     * behind it rather than the text rendering wherever one exists - which is
+     * what makes these columns writable at all (design F1).
+     *
+     * A "(qualifier)" column is emitted beside a class only when some value in
+     * this export actually carries one, so the 1,760 integer and 43 boolean
+     * qualifiers stop being dropped without widening every other sheet.
+     */
+    _buildValueClassSheet(ctx, name, grain, note, predicate) {
+        const b = this._observationSheet(name, grain, note);
+        const values = ctx.source.analysisValues.filter(predicate);
+
+        //Column properties are decided from every value of a class in this
+        //export, not from whichever row arrives first: one typed row makes the
+        //class writable, one qualifier gives it a qualifier column.
+        const classes = new Map();
+        for (const v of values) {
+            const id = String(v.value_class_id);
+            if (!classes.has(id)) {
+                classes.set(id, {
+                    id: parseInt(v.value_class_id),
+                    name: clean(v.class_name) || `class ${v.value_class_id}`,
+                    description: clean(v.class_description),
+                    valueTypeId: v.value_type_id,
+                    unit: clean(v.value_type_unit_abbrev),
+                    typed: false,
+                    qualifier: false,
+                    kinds: new Set(),
+                });
+            }
+            const c = classes.get(id);
+            if (v.has_typed_row) c.typed = true;
+            if (v.resolved_qualifier) c.qualifier = true;
+            c.kinds.add(v.resolved_from);
+        }
+
+        const colKeyFor = new Map();
+        for (const c of [...classes.values()].sort((a, b2) => a.id - b2.id)) {
+            const colKey = `Class: ${c.name}${c.unit ? ` (${c.unit})` : ""}`;
+            colKeyFor.set(String(c.id), colKey);
+            const kind = c.kinds.size === 1 ? [...c.kinds][0] : "mixed";
+            b.col(colKey, {
+                title: colKey,
+                source: `pivot:tbl_analysis_values:value_class_id=${c.id}`,
+                table: "tbl_analysis_values",
+                group: COL_GROUP.PIVOT,
+                type: this._valueClassCellType(kind),
+                //A class with no typed row anywhere is carried by its text
+                //rendering alone, which cannot be regenerated (design Q2), so it
+                //stays reference-grade. One with a typed subtable round-trips.
+                roundtrip: c.typed ? ROUNDTRIP.EDITABLE : ROUNDTRIP.REFERENCE,
+                locked: !c.typed,
+                vocab: kind === "categorical" ? `value_type_${c.valueTypeId}` : null,
+                pivotType: c.name,
+            });
+            if (c.qualifier) {
+                const qKey = `${colKey} (qualifier)`;
+                b.col(qKey, {
+                    title: qKey,
+                    source: `pivot:tbl_analysis_values:value_class_id=${c.id}:qualifier`,
+                    table: "tbl_analysis_values",
+                    group: COL_GROUP.PIVOT,
+                    type: "text",
+                    pivotType: c.name,
+                });
+            }
+        }
+
+        const rows = new Map();
+        for (const v of values) {
+            const key = String(v.analysis_entity_id);
+            if (!rows.has(key)) rows.set(key, this._entityRow(ctx, v.analysis_entity_id));
+            const row = rows.get(key);
+            const colKey = colKeyFor.get(String(v.value_class_id));
+
+            //Measured across sead_staging a class is single-valued per analysis
+            //entity, but the format must not silently drop a second value if
+            //that ever stops being true.
+            row[colKey] = isBlank(row[colKey]) ? v.resolved_value
+                : `${row[colKey]} | ${v.resolved_value}`;
+
+            if (v.resolved_qualifier) row[`${colKey} (qualifier)`] = v.resolved_qualifier;
+
+            if (v.resolved_from === "categorical" && !isBlank(v.categorical_item_id)) {
+                this._voc(ctx, `value_type_${v.value_type_id}`, v.categorical_item_id,
+                    clean(v.categorical_item_name) || v.categorical_item_id,
+                    clean(v.categorical_item_description));
+            }
+        }
+        for (const row of rows.values()) b.addRow(row);
+        return b;
+    }
+
+    _valueClassCellType(kind) {
+        switch (kind) {
+            case "integer": return "integer";
+            case "numerical": return "number";
+            case "categorical": return "enum";
+            default: return "text";
+        }
+    }
+
+    _buildDendrochronology(ctx) {
+        return this._buildValueClassSheet(
+            ctx, "Dendrochronology", "one row per analysis entity",
+            `tbl_analysis_values for method ${DENDRO_METHOD_ID}'s value classes (D11: the value-class system is authoritative over tbl_dendro).`,
+            v => parseInt(v.class_method_id) === DENDRO_METHOD_ID);
+    }
+
+    _buildAnalysisValues(ctx) {
+        return this._buildValueClassSheet(
+            ctx, "Analysis Values", "one row per analysis entity",
+            "tbl_analysis_values joined to its typed subtables, pivoted per value class. Dendrochronology has its own sheet.",
+            v => parseInt(v.class_method_id) !== DENDRO_METHOD_ID);
+    }
+
+    /*
+     * Dating: the non-value-class dating tables, collapsed under a "Dating type" discriminator that
+     * names the table a row came from, so every column keeps a real binding.
      *
      * The previous version read data_groups of type "dating", which DatingModule has already
      * flattened into generic {key, value} pairs for display. That made the sheet readable but
      * unwritable - the columns bound to "discriminator" and "resolved dating value" rather than to
      * any column, so nothing could be resolved on the way back in. These tables are queried
      * directly instead. Columns not applicable to a given source table are left blank.
+     *
+     * Three sources, not five: tbl_dendro_dates and tbl_analysis_dating_ranges were dropped once
+     * the Dendrochronology sheet started carrying their value-class equivalents, which subsume
+     * them entirely (D11). Both were being exported twice.
      */
     _buildDating(ctx) {
         const b = new SheetBuilder("Dating", "B", "one row per date determination", {
-            note: "Five dating tables under a Dating type discriminator; each contributes a different column subset.",
+            note: "tbl_geochronology, tbl_relative_dates and tbl_analysis_entity_ages under a Dating type discriminator. Dendro dates live on the Dendrochronology sheet as value classes (D11).",
         });
         b.idCol("_dating_id", { source: "primary key of the table named by Dating type", type: "integer" });
         b.idCol("_analysis_entity_id", { source: "public.tbl_analysis_entities.analysis_entity_id", type: "integer" });
@@ -1011,18 +1130,14 @@ export default class SdfExporter {
         b.col("Error older", { source: "public.tbl_geochronology.error_older", type: "number" });
         b.col("Error younger", { source: "public.tbl_geochronology.error_younger", type: "number" });
         b.col("Delta 13C", { source: "public.tbl_geochronology.delta_13c", type: "number" });
-        b.col("Age older", { source: "public.tbl_dendro_dates.age_older / tbl_analysis_entity_ages.age_older", type: "number" });
-        b.col("Age younger", { source: "public.tbl_dendro_dates.age_younger / tbl_analysis_entity_ages.age_younger", type: "number" });
-        b.col("Range low", { source: "public.tbl_analysis_dating_ranges.low_value", type: "number" });
-        b.col("Range high", { source: "public.tbl_analysis_dating_ranges.high_value", type: "number" });
-        b.col("Range low qualifier", { source: "public.tbl_analysis_dating_ranges.low_qualifier", type: "text" });
-        b.col("Range high qualifier", { source: "public.tbl_analysis_dating_ranges.high_qualifier", type: "text" });
+        b.col("Age older", { source: "public.tbl_analysis_entity_ages.age_older", type: "number" });
+        b.col("Age younger", { source: "public.tbl_analysis_entity_ages.age_younger", type: "number" });
         b.col("Relative age", { source: "public.tbl_relative_ages.relative_age_name", type: "text" });
         b.col("Age type", { source: "public.tbl_age_types.age_type", type: "enum", vocab: "age_type" });
         b.col("Season", { source: "public.tbl_seasons.season_name", type: "enum", vocab: "season" });
         b.col("Chronology", { source: "public.tbl_chronologies.chronology_name", type: "text" });
         b.col("Dating uncertainty", { source: "public.tbl_dating_uncertainty.uncertainty", type: "enum", vocab: "dating_uncertainty" });
-        b.col("Notes", { source: "public.tbl_geochronology.notes / tbl_relative_dates.notes / tbl_dendro_date_notes.note", type: "text" });
+        b.col("Notes", { source: "public.tbl_geochronology.notes / tbl_relative_dates.notes", type: "text" });
         b.col("Last updated", { source: "date_updated of the table named by Dating type", roundtrip: ROUNDTRIP.REFERENCE, group: COL_GROUP.UPDATED, locked: true, type: "date" });
 
         const ctxFor = this._analysisEntityContext(ctx);
@@ -1067,19 +1182,21 @@ export default class SdfExporter {
             });
         }
 
-        for (const d of ctx.extra.dendro_dates || []) {
-            b.addRow({
-                ...base(d.analysis_entity_id, "dendro_date"),
-                _dating_id: parseInt(d.dendro_date_id),
-                "Age older": this._num(d.age_older),
-                "Age younger": this._num(d.age_younger),
-                "Age type": this._voc(ctx, "age_type", d.age_type_id, d.age_type),
-                Season: this._voc(ctx, "season", d.season_id, d.season_name),
-                "Dating uncertainty": this._voc(ctx, "dating_uncertainty", d.dating_uncertainty_id, d.uncertainty),
-                Notes: clean(d.note),
-                "Last updated": d.date_updated || null,
-            });
-        }
+        /*
+         * tbl_dendro_dates is deliberately NOT emitted here.
+         *
+         * D11: the value-class system is authoritative over the legacy dendro
+         * tables, and the measurement backs it - all 7,318 analysis entities in
+         * tbl_dendro_dates also carry value-class dating ranges, which cover 138
+         * more besides. Every one of those ranges belongs to method 10, so they
+         * are already pivoted onto the Dendrochronology sheet as
+         * "Estimated felling year", "Outermost tree-ring date" and the rest.
+         *
+         * Emitting them here as well put the same date on two sheets with two
+         * different primary keys, which is exactly the duplication D11 exists to
+         * prevent: an editor could change one and not the other, and the
+         * importer would have no way to say which was meant.
+         */
 
         for (const a of ctx.extra.entity_ages || []) {
             b.addRow({
@@ -1093,19 +1210,18 @@ export default class SdfExporter {
             });
         }
 
-        for (const r of ctx.extra.dating_ranges || []) {
-            b.addRow({
-                ...base(r.analysis_entity_id, "dating_range"),
-                _dating_id: parseInt(r.analysis_dating_range_id),
-                "Range low": this._num(r.low_value),
-                "Range high": this._num(r.high_value),
-                "Range low qualifier": clean(r.low_qualifier),
-                "Range high qualifier": clean(r.high_qualifier),
-                "Age type": this._voc(ctx, "age_type", r.age_type_id, r.age_type),
-                Season: this._voc(ctx, "season", r.season_id, r.season_name),
-                "Dating uncertainty": this._voc(ctx, "dating_uncertainty", r.dating_uncertainty_id, r.uncertainty),
-            });
-        }
+        /*
+         * tbl_analysis_dating_ranges is likewise not emitted here. Measured
+         * against sead_staging, every one of its 7,775 rows belongs to a
+         * method 10 value class, so the Dendrochronology sheet already carries
+         * all of them in their own class columns, with the range formatted and
+         * its qualifiers kept. A dating range is a value-class value; the
+         * Dating sheet is for the dating tables that are not.
+         *
+         * If a non-dendro method ever acquires dating ranges, they will show up
+         * as unshipped analysis entities in manifest.coverage.analysis_entities
+         * rather than being silently dropped.
+         */
 
         return b;
     }
@@ -1175,31 +1291,6 @@ export default class SdfExporter {
                 Notes: clean(il.notes),
                 "Last updated": il.date_updated || null,
             });
-        }
-        return b;
-    }
-
-    _buildIsotopes(ctx) {
-        const b = this._observationSheet("Isotopes", "one row per isotope measurement", "tbl_isotopes + isotope_measurements, standards, value specifiers. Empty database-wide today; emitted as a template.");
-        b.col("Isotope", { source: "public.tbl_isotopes (type)", type: "text" });
-        b.col("Value", { source: "public.tbl_isotope_measurements.value", type: "number" });
-        b.col("Standard", { source: "public.tbl_isotope_standards", type: "text" });
-        for (const { site, dg } of this._dataGroupsByType(ctx, d => d.type === "isotope")) {
-            const sName = this._siteName(site);
-            for (const v of dg.values || []) {
-                b.addRow({
-                    _analysis_entity_id: isBlank(v.analysis_entity_id) ? null : parseInt(v.analysis_entity_id),
-                    _dataset_id: isBlank(v.dataset_id ?? dg.dataset_id) ? null : parseInt(v.dataset_id ?? dg.dataset_id),
-                    _physical_sample_id: isBlank(v.physical_sample_id ?? dg.physical_sample_id) ? null : parseInt(v.physical_sample_id ?? dg.physical_sample_id),
-                    Action: "",
-                    Site: sName,
-                    Sample: clean(v.sample_name),
-                    Method: clean(dg.method_name),
-                    Isotope: clean(v.key),
-                    Value: isBlank(v.value) ? null : Number(v.value),
-                    Standard: null,
-                });
-            }
         }
         return b;
     }
@@ -1355,15 +1446,94 @@ export default class SdfExporter {
             coverage: {
                 covered_source_tables: [...coveredTables].sort(),
                 api_gap_tables: gaps,
+                analysis_entities: this._auditEntities(ctx, finalizedSheets),
                 notes: [
-                    "Export is driven by the site's actual data_groups, not a method allowlist (design F2). Methods with no data module still surface in Analysis Values / Dating where value-class shaped.",
-                    "Typed analysis subtables (integer/boolean/categorical/numerical/notes) are not yet joined; the text rendering is carried as reference (design F1, Q2).",
+                    "Tier B sheets are built from tbl_analysis_entities and the value tables directly, scoped by the site's own sample groups. No method allowlist is consulted and site.data_groups is not read (design F2, F3).",
+                    "Typed analysis subtables are joined; each value carries its typed value where one exists, and the text rendering otherwise. Which one was used is recorded per value class by the column's roundtrip flag (design F1, Q2).",
+                    "Boolean value classes keep their Swedish text rendering ('Ja'/'Nej') rather than the typed boolean, by decision; the typed value exists in tbl_analysis_boolean_values.",
                     "_Raw appendix for remaining uncovered owned tables (D6) is not implemented in this profile.",
                 ],
             },
         };
         body.checksum = checksum({ sheets: finalizedSheets, site_ids: body.site_ids }, crypto);
         return body;
+    }
+
+    /**
+     * The completeness self-audit the design asks for in Phase 0.
+     *
+     * Every analysis entity the site owns must reach at least one observation
+     * sheet. One that reaches none means the export is quietly short - a method
+     * whose data lives in a table SDF does not read yet. Reporting it by method
+     * is what turns F2 from an invisible defect into a visible one.
+     *
+     * This is a report, not a gate: it is recorded in the manifest so an
+     * importer or a curator can see it, rather than failing an export that is
+     * still useful for everything it did cover.
+     */
+    _auditEntities(ctx, finalizedSheets) {
+        const src = ctx.source;
+
+        //Audit what actually shipped, by reading the _analysis_entity_id column
+        //out of every finalized sheet, rather than what the routing predicted.
+        //Sheets built outside SdfSource - Dating, Prep Methods, Identification
+        //Levels - then count automatically, and so will any sheet added later.
+        const shipped = new Set();
+        const perSheet = {};
+        for (const sheet of finalizedSheets) {
+            const idx = sheet.columns.findIndex(c => c.key === "_analysis_entity_id");
+            if (idx < 0) continue;
+            const here = new Set();
+            for (const row of sheet.rows) {
+                const v = row[idx];
+                if (isBlank(v)) continue;
+                here.add(String(v));
+                shipped.add(String(v));
+            }
+            if (here.size) perSheet[sheet.name] = here.size;
+        }
+
+        //group the misses by method so the report names a cause, not just a count
+        const byMethod = new Map();
+        const missed = [];
+        for (const e of src.entities) {
+            if (shipped.has(String(e.analysis_entity_id))) continue;
+            missed.push(e);
+            const key = `${e.method_id}`;
+            if (!byMethod.has(key)) {
+                byMethod.set(key, {
+                    method_id: isBlank(e.method_id) ? null : parseInt(e.method_id),
+                    method_name: clean(e.method_name),
+                    data_type_name: clean(e.data_type_name),
+                    analysis_entities: 0,
+                    dataset_ids: new Set(),
+                });
+            }
+            const m = byMethod.get(key);
+            m.analysis_entities++;
+            if (!isBlank(e.dataset_id)) m.dataset_ids.add(parseInt(e.dataset_id));
+        }
+
+        return {
+            total: src.entities.length,
+            shipped: shipped.size,
+            missing: missed.length,
+            complete: missed.length === 0,
+            entities_per_sheet: perSheet,
+            //An analysis entity that reaches no sheet holds no observation SDF
+            //knows how to read. Usually that means the entity is genuinely empty
+            //(the orphan datasets the design records), but it is also how a
+            //method whose table SDF does not cover would announce itself.
+            missing_by_method: [...byMethod.values()]
+                .map(m => ({
+                    method_id: m.method_id,
+                    method_name: m.method_name,
+                    data_type_name: m.data_type_name,
+                    analysis_entities: m.analysis_entities,
+                    dataset_count: m.dataset_ids.size,
+                }))
+                .sort((a, b) => b.analysis_entities - a.analysis_entities),
+        };
     }
 
     // ---------------------------------------------------------------- resolvers
