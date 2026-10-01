@@ -1324,14 +1324,21 @@ export default class SdfValidator {
             const baseline = ctx.baseline.get(`${r.table}:${r.pk.value}`);
             const baseKeys = r.binding.baseKeys.length ? r.binding.baseKeys : [...r.binding.data.keys()];
 
+            const hashW = rowHash(baseKeys.map(k => r.values.get(k)));
             if (!live) {
                 if (r.action === "delete") { cs.unchanged++; continue; } //rule 5: already applied
+                //rule 6: an untouched row deleted upstream needs no decision; an edited one does
+                if (baseline && hashW === baseline.hash) {
+                    report.warning(4, "deleted_since_export",
+                        `${table.sheet} ${r.pk.value} was deleted from the database after this workbook was exported. It is unchanged here, so nothing is done.`, where);
+                    cs.unchanged++;
+                    continue;
+                }
                 cs.conflicts.push({ table: r.table, sheet: r.sheet, row: r.row, id: r.pk.value, reason: "deleted_since_export",
-                    message: `${table.sheet} ${r.pk.value} was deleted from the database after this workbook was exported.` });
+                    message: `${table.sheet} ${r.pk.value} was edited in this workbook, but deleted from the database after export.` });
                 continue;
             }
 
-            const hashW = rowHash(baseKeys.map(k => r.values.get(k)));
             const hashL = rowHash(baseKeys.map(k => live[k]));
             const B = baseline ? baseline.hash : null;
             const diffs = [...r.binding.data.keys()]
