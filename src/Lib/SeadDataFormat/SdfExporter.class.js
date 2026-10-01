@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import SdfSchema from "./SdfSchema.class.js";
 import { fetchRows, arrayType } from "./SdfRows.js";
-import { SDF_VERSION, SdfError, DEFAULT_MAX_CELLS, quoteIdent, rowHash, canonicalCsv, sha256Hex } from "./SdfCommon.js";
+import { SDF_VERSION, SdfError, DEFAULT_MAX_CELLS, quoteIdent, rowHash, machineChecksum } from "./SdfCommon.js";
 
 /**
  * Builds the tabular structure of an SDF workbook (spec §2, the Exporter role).
@@ -52,7 +52,8 @@ export default class SdfExporter {
             const sheets = this._buildSheets(schema, owned, referenced, labels);
             this._requireSize(sheets, siteIds);
             const machine = this._buildMachineSheets(sheets);
-            const meta = await this._buildMeta(client, sites, opts.exportedBy || null, machine.checksum);
+            const meta = await this._buildMeta(client, sites, opts.exportedBy || null);
+            meta.push(["checksum", machineChecksum([["key", "value"], ...meta], machine.columns, machine.baseline)]);
 
             await client.query("commit");
 
@@ -420,7 +421,7 @@ export default class SdfExporter {
     }
 
     /**
-     * §9: _sdf_columns and _sdf_baseline, and the checksum over both.
+     * §9: _sdf_columns and _sdf_baseline.
      */
     _buildMachineSheets(sheets) {
         const columns = [["sheet", "table", "key", "kind", "source", "pg_type", "nullable", "fk_table", "label_expr", "sheet_role"]];
@@ -436,8 +437,7 @@ export default class SdfExporter {
                 baseline.push([sheet.table, b.id, b.hash, b.shared]);
             }
         }
-        const checksum = sha256Hex(canonicalCsv(columns) + canonicalCsv(baseline));
-        return { columns, baseline, checksum };
+        return { columns, baseline };
     }
 
     /**
@@ -445,7 +445,7 @@ export default class SdfExporter {
      * the cluster identity, the server version, the latest release tag and the
      * last deployed change of every Sqitch project.
      */
-    async _buildMeta(client, sites, exportedBy, checksum) {
+    async _buildMeta(client, sites, exportedBy) {
         const facts = (await client.query(`
             select to_char(now() at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as exported_at,
                    current_database() as database_name,
@@ -498,7 +498,6 @@ export default class SdfExporter {
         for (const p of projects) {
             meta.push([`sqitch:${p.project}`, [p.change, p.change_id, p.tag].filter(Boolean).join(" · ") || null]);
         }
-        meta.push(["checksum", checksum]);
         return meta;
     }
 

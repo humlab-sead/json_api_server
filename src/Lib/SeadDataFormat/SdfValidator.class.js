@@ -1,7 +1,7 @@
 import SdfSchema from "./SdfSchema.class.js";
 import { fetchRows, arrayType, carrierExpression, isNormalisedText } from "./SdfRows.js";
 import { loadWorkbook, readCell, plainValue, plainRows, CELL } from "./SdfWorkbookReader.js";
-import { SdfError, quoteIdent, rowHash, canonicalValue, canonicalCsv, sha256Hex, ESCAPE_LIKE, plainDecimal } from "./SdfCommon.js";
+import { SdfError, quoteIdent, rowHash, canonicalValue, machineChecksum, ESCAPE_LIKE, plainDecimal } from "./SdfCommon.js";
 
 /**
  * Import stages 1-4 (spec §10): structural check, cell coercion, referential
@@ -160,8 +160,8 @@ export default class SdfValidator {
         }
 
         //_sdf_meta
-        const metaRows = plainRows(wb.getWorksheet("_sdf_meta")).slice(1);
-        const meta = new Map(metaRows.map(r => [r[0], r[1] ?? null]));
+        const metaSheet = plainRows(wb.getWorksheet("_sdf_meta"));
+        const meta = new Map(metaSheet.slice(1).map(r => [r[0], r[1] ?? null]));
         ctx.meta = meta;
         report.export = {
             export_id: meta.get("export_id"),
@@ -176,16 +176,15 @@ export default class SdfValidator {
         //checksum over the machine sheets exactly as read (§9)
         const columnRows = plainRows(wb.getWorksheet("_sdf_columns"));
         const baselineRows = plainRows(wb.getWorksheet("_sdf_baseline"));
-        const checksum = sha256Hex(canonicalCsv(columnRows) + canonicalCsv(baselineRows));
-        if (checksum !== meta.get("checksum")) {
+        if (machineChecksum(metaSheet, columnRows, baselineRows) !== meta.get("checksum")) {
             report.error(1, "checksum_mismatch",
-                "The hidden sheets _sdf_columns or _sdf_baseline have been changed. They must not be edited; " +
+                "The hidden sheets _sdf_meta, _sdf_columns or _sdf_baseline have been changed. They must not be edited; " +
                 "start again from the file as downloaded, or from a fresh export.", { sheet: "_sdf_meta" });
             return;
         }
 
         //format version (§9)
-        const version = /^SDF\/(\d+)\.(\d+)$/.exec(meta.get("sdf_version") || "");
+        const version = /^SDF\/(\d+)\.(\d+)(?:\.(\d+))?$/.exec(meta.get("sdf_version") || ""); //MAJOR.MINOR[.PATCH]
         if (!version) {
             report.error(1, "unsupported_version", `Unrecognised format version "${meta.get("sdf_version")}".`, { sheet: "_sdf_meta" });
             return;

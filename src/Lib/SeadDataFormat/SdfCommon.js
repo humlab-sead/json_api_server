@@ -90,6 +90,19 @@ export function sha256Hex(text) {
 }
 
 /**
+ * The machine-sheet checksum (§9): SHA-256 over the canonical CSV of _sdf_meta
+ * (header included, the checksum row itself left out), then _sdf_columns, then
+ * _sdf_baseline. It catches accidental edits to the sheets the identity,
+ * double-submission and three-way checks rely on. It is not a signature:
+ * anyone can recompute it, and the change request's guards are what protect
+ * the database.
+ */
+export function machineChecksum(metaRows, columnRows, baselineRows) {
+    const meta = metaRows.filter(r => r[0] !== "checksum");
+    return sha256Hex(canonicalCsv(meta) + canonicalCsv(columnRows) + canonicalCsv(baselineRows));
+}
+
+/**
  * Encodes text for a spreadsheet cell so that it survives exactly (§8).
  *
  * XML cannot carry most control characters, U+FFFE, U+FFFF or unpaired

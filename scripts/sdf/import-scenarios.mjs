@@ -10,7 +10,7 @@
  * Exits non-zero if any scenario fails.
  */
 import ExcelJS from "exceljs";
-import { canonicalCsv, sha256Hex, rowHash } from "../../src/Lib/SeadDataFormat/SdfCommon.js";
+import { machineChecksum, rowHash } from "../../src/Lib/SeadDataFormat/SdfCommon.js";
 import { plainRows, readCell } from "../../src/Lib/SeadDataFormat/SdfWorkbookReader.js";
 
 const args = Object.fromEntries(process.argv.slice(2).reduce((acc, a, i, all) =>
@@ -63,8 +63,8 @@ function tamperBaseline(wb, table, id, hash) {
         const row = ws.getRow(r);
         if (row.getCell(1).value === table && row.getCell(2).value === id) row.getCell(3).value = hash;
     }
-    const checksum = sha256Hex(canonicalCsv(plainRows(wb.getWorksheet("_sdf_columns"))) + canonicalCsv(plainRows(ws)));
     const meta = wb.getWorksheet("_sdf_meta");
+    const checksum = machineChecksum(plainRows(meta), plainRows(wb.getWorksheet("_sdf_columns")), plainRows(ws));
     for (let r = 2; r <= meta.rowCount; r++) if (meta.getRow(r).getCell(1).value === "checksum") meta.getRow(r).getCell(2).value = checksum;
 }
 
@@ -317,6 +317,12 @@ console.log("Scenario F: structural refusals");
     wb2.getWorksheet("_sdf_baseline").getRow(2).getCell(3).value = "ffffffffffffffff";
     r = await validate(wb2);
     check("edited machine sheet: checksum_mismatch", codes(r).includes("checksum_mismatch"), codes(r));
+
+    const wb3 = await exportWorkbook(SITE);
+    const metaWs = wb3.getWorksheet("_sdf_meta");
+    for (let i = 2; i <= metaWs.rowCount; i++) if (metaWs.getRow(i).getCell(1).value === "site_ids") metaWs.getRow(i).getCell(2).value = "1,2";
+    r = await validate(wb3);
+    check("edited _sdf_meta: checksum_mismatch", codes(r).includes("checksum_mismatch"), codes(r));
 
     const res = await fetch(`${base}/sdf/validate`, { method: "POST", headers: { "Content-Type": "text/csv" }, body: "site_id,site_name\n1,x\n" });
     r = await res.json();
