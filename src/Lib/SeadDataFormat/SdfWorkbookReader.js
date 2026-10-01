@@ -99,8 +99,13 @@ export function readCell(cell) {
             const text = v.richText.map(r => r.text).join("");
             return text === "" ? { kind: CELL.BLANK, value: null, address } : { kind: CELL.STRING, value: text, address };
         }
-        case ExcelJS.ValueType.Hyperlink:
-            return { kind: CELL.STRING, value: typeof v.text === "string" ? v.text : String(v.text), address };
+        case ExcelJS.ValueType.Hyperlink: {
+            //the text of a link can itself be rich text
+            const text = typeof v.text === "string" ? v.text
+                : v.text && Array.isArray(v.text.richText) ? v.text.richText.map(r => r.text).join("")
+                : String(v.text ?? "");
+            return text === "" ? { kind: CELL.BLANK, value: null, address } : { kind: CELL.STRING, value: text, address };
+        }
         case ExcelJS.ValueType.Date:
             return { kind: CELL.DATE, value: v, address };
         case ExcelJS.ValueType.Boolean:

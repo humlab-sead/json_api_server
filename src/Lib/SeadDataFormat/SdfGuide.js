@@ -88,6 +88,7 @@ export function buildGuide(bundle, config) {
             "6. Do not use formulas in data columns. Paste values instead.",
             "7. Save as .xlsx. CSV files cannot be imported.",
             "8. Keep this file until your changes appear in SEAD. You may need it again.",
+            "Your own notes can go on a sheet whose name starts with scratch, such as scratch_notes. Such sheets are ignored.",
         ].join("\n"),
     });
 

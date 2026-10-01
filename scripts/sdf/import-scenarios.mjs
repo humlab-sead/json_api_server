@@ -322,5 +322,35 @@ console.log("Scenario F: structural refusals");
     check("CSV upload: csv_not_accepted", codes(r).includes("csv_not_accepted"), r);
 }
 
+console.log(`Scenario G: spreadsheet structures, on site ${SITE}`);
+{
+    let wb = await exportWorkbook(SITE);
+    let ps = wb.getWorksheet("physical_samples");
+    const nameCol = ps.getColumn(col(ps, "sample_name")).letter;
+    ps.mergeCells(`${nameCol}2:${nameCol}3`);
+    let r = await validate(wb);
+    check("merged cells in a data column: merged_cell", codes(r).includes("merged_cell"), codes(r));
+
+    wb = await exportWorkbook(SITE);
+    wb.getWorksheet("sample_notes").name = "my notes";
+    r = await validate(wb);
+    check("a renamed exported sheet: sheet_renamed", codes(r).includes("sheet_renamed"), codes(r));
+
+    wb = await exportWorkbook(SITE);
+    ps = wb.getWorksheet("physical_samples");
+    wb.addWorksheet("Sheet1");
+    const scratch = wb.addWorksheet("scratch notes");
+    scratch.addRow(["anything", "at", "all"]);
+    ps.getRow(2).getCell(ps.columnCount + 2).value = "stray value";
+    ps.getRow(3).getCell(col(ps, "sample_name")).value = { text: { richText: [{ text: "Linked " }, { text: "name", font: { bold: true } }] }, hyperlink: "https://example.org" };
+    r = await validate(wb);
+    const warnings = (r.warnings || []).map(w => w.code);
+    check("valid", r.ok === true, r.errors);
+    check("an empty sheet is ignored with a note", warnings.includes("empty_sheet_ignored"), warnings);
+    check("a scratch sheet is ignored silently", !(r.warnings || []).some(w => w.sheet === "scratch notes"), r.warnings);
+    check("a value with no header is reported", warnings.includes("values_without_header"), warnings);
+    check("a hyperlink with rich text reads as its text", r.change_set?.updates?.some(u => u.fields.some(f => f.after === "Linked name")), r.change_set?.updates);
+}
+
 console.log(failures ? `${failures} check(s) failed.` : "All checks passed.");
 process.exit(failures ? 1 : 0);

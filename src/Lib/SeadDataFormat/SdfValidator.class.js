@@ -21,6 +21,8 @@ import { SdfError, quoteIdent, rowHash, canonicalValue, canonicalCsv, sha256Hex,
 const SUPPORTED_MAJOR = 2;
 const SUPPORTED_MINOR = 0;
 const MACHINE_SHEETS = ["_sdf_meta", "_sdf_columns", "_sdf_baseline"];
+//§4: sheets a curator keeps for their own notes, ignored on import
+const SCRATCH_SHEET = /^scratch/i;
 const TOKEN = /^NEW-[A-Za-z0-9_-]{1,32}$/;
 const TOKEN_LIKE = /^NEW-/i;
 const STRICT_INTEGER = /^[+-]?\d+$/;
@@ -257,6 +259,11 @@ export default class SdfValidator {
                 report.warning(1, "reserved_sheet_ignored", `Sheet "${name}" starts with "_", which is reserved; it was ignored.`, { sheet: name });
                 continue;
             }
+            if (SCRATCH_SHEET.test(name)) continue;
+            if (ws.actualRowCount === 0) {
+                report.warning(1, "empty_sheet_ignored", `Sheet "${name}" is empty; it was ignored.`, { sheet: name });
+                continue;
+            }
             const exported = ctx.exported.get(name);
             if (exported) {
                 const table = schema.tables.get(exported.table);
@@ -342,6 +349,7 @@ export default class SdfValidator {
             ws, sheet, table, mode, role, exported,
             action: null, data: new Map(), label: new Map(), system: new Map(), proposed: new Map(),
             baseKeys: exported ? exported.dataKeys.filter(k => schema.column(table, k)) : [],
+            headerIndexes: new Set(headers.map(h => h.index)),
         };
         for (const { key, index } of headers) {
             if (key === "_action") { binding.action = index; continue; }
@@ -410,6 +418,17 @@ export default class SdfValidator {
         const headers = this._headers(ctx, ws);
         if (headers === null) return;
 
+        //an exported sheet given a new name: its headers are all there
+        const present = new Set(ctx.wb.worksheets.map(w => w.name));
+        const keys = new Set(headers.map(h => h.key));
+        for (const [name, entry] of ctx.exported) {
+            if (present.has(name) || !entry.dataKeys.length || !entry.dataKeys.every(k => keys.has(k))) continue;
+            report.error(1, "sheet_renamed",
+                `Sheet "${sheet}" looks like the exported sheet "${name}" with a new name. Sheet names are how rows are matched to tables; rename it back to "${name}".`,
+                { sheet });
+            return;
+        }
+
         const ownedKeys = schema.ownedKeyColumns();
         const attachments = headers.filter(h => ownedKeys.has(h.key));
         const pk = headers.find(h => /_id$/.test(h.key) && !ownedKeys.has(h.key) && h.key !== "_action");
@@ -418,7 +437,8 @@ export default class SdfValidator {
         if (!attachments.length) problems.push(`a column linking each row to this site's data (one of ${[...ownedKeys.keys()].slice(0, 6).join(", ")}, …)`);
         if (problems.length) {
             report.error(1, "proposed_table_unattached",
-                `Sheet "${sheet}" is not a SEAD table, so it is read as a proposed new table. A proposed table needs ${problems.join(" and ")}.`,
+                `Sheet "${sheet}" is not a SEAD table, so it is read as a proposed new table. A proposed table needs ${problems.join(" and ")}. ` +
+                "If it holds your own notes, give it a name starting with scratch, and it will be ignored.",
                 { sheet });
             return;
         }
@@ -464,11 +484,24 @@ export default class SdfValidator {
         for (const b of ctx.bindings) {
             const { ws, sheet, table } = b;
             const keyColumns = this._keyColumns(schema, table);
+            const headerless = new Set();
+            const readColumns = [...b.data.values(), ...b.label.values(), ...b.proposed.values(), ...(b.action !== null ? [b.action] : [])];
 
             ws.eachRow({ includeEmpty: false }, (row, rowNumber) => {
                 if (rowNumber === 1) return;
                 const cellAt = index => readCell(row.getCell(index));
                 const where = cell => ({ sheet, cell: cell.address });
+
+                //§8: a merged cell reads as blank everywhere but its first cell
+                for (const index of readColumns) {
+                    const c = row.getCell(index);
+                    if (c.isMerged) {
+                        report.error(2, "merged_cell", `${c.address} is part of merged cells, which hide values. Unmerge them.`, { sheet, cell: c.address });
+                    }
+                }
+                row.eachCell({ includeEmpty: false }, (c, index) => {
+                    if (!b.headerIndexes.has(index) && readCell(c).kind !== CELL.BLANK) headerless.add(c.address.replace(/\d+$/, ""));
+                });
 
                 const record = {
                     binding: b, table: table.name, sheet, row: rowNumber,
@@ -532,6 +565,11 @@ export default class SdfValidator {
                     : (typeof pk === "string" && TOKEN.test(pk) ? { kind: "token", value: pk } : { kind: "id", value: pk });
                 ctx.records.push(record);
             });
+            for (const letter of headerless) {
+                report.warning(2, "values_without_header",
+                    `Column ${letter} has values but no name in row 1, so they were ignored. Give it a column name to propose it as a new column.`,
+                    { sheet, cell: `${letter}1` });
+            }
         }
 
         //rows of proposed tables: their values are carried as proposal content
