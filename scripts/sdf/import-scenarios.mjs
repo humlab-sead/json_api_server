@@ -100,6 +100,10 @@ console.log(`Scenario A: a valid set of edits on site ${SITE}`);
     ps.getRow(2).getCell(col(ps, "sample_name")).value = "0123 edited";
     //text that starts with NEW- is plain text outside ID columns (H5)
     ps.getRow(6).getCell(col(ps, "sample_name")).value = "NEW-found layer";
+    //a UUID retyped in upper case is the same value, not an edit (H8)
+    const sitesWs = wb.getWorksheet("sites");
+    const uuidCell = sitesWs.getRow(2).getCell(col(sitesWs, "site_uuid"));
+    uuidCell.value = String(uuidCell.value).toUpperCase();
 
     //change a sample's type by label: clear the id, pick another type's label
     const typeNow = ps.getRow(5).getCell(col(ps, "sample_type_id")).value;
@@ -167,6 +171,8 @@ console.log(`Scenario B: cell-level errors on site ${SITE}`);
     const wb = await exportWorkbook(SITE);
     const sites = wb.getWorksheet("sites");
     sites.getRow(2).getCell(col(sites, "latitude_dd")).value = "57,1";
+    sites.getRow(2).getCell(col(sites, "site_uuid")).value = "not-a-uuid";
+    sites.getRow(2).getCell(col(sites, "longitude_dd")).value = 0.3333333333333333;
     const ps = wb.getWorksheet("physical_samples");
     //what Excel does to 20-30 typed into a General cell: a date, with a date format
     ps.getRow(2).getCell(col(ps, "sample_name")).value = new Date(Date.UTC(2026, 2, 20));
@@ -176,7 +182,7 @@ console.log(`Scenario B: cell-level errors on site ${SITE}`);
     ps.getRow(5).getCell(col(ps, "sample_type_id")).value = "NEW-a b";
     const r = await validate(wb);
     check("rejected at stage 2", r.ok === false && r.stage_reached === 2, { stage: r.stage_reached, codes: codes(r) });
-    for (const code of ["decimal_comma", "date_in_text_column", "formula", "bad_action", "bad_token"]) {
+    for (const code of ["decimal_comma", "date_in_text_column", "formula", "bad_action", "bad_token", "bad_format", "too_many_decimals"]) {
         check(`reports ${code}`, codes(r).includes(code), codes(r));
     }
     check("errors are anchored to cells", r.errors.every(e => e.sheet && e.cell), r.errors);

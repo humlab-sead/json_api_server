@@ -16,22 +16,34 @@ import {
  * booleans, everything else as text.
  */
 export function selectList(schema, table) {
-    return schema.exportedColumns(table).map(col => {
-        const q = `t.${quoteIdent(col.name)}`;
-        const as = quoteIdent(col.name);
-        switch (col.typname) {
-            case "int2": case "int4": case "bool":
-                return `${q} as ${as}`;
-            case "date":
-                return `to_char(${q}, 'YYYY-MM-DD') as ${as}`;
-            case "timestamptz":
-                return `to_char(${q} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as ${as}`;
-            case "timestamp":
-                return `to_char(${q}, 'YYYY-MM-DD"T"HH24:MI:SS.US') as ${as}`;
-            default:
-                return `${q}::text as ${as}`;
-        }
-    }).join(", ");
+    return schema.exportedColumns(table)
+        .map(col => `${carrierExpression(col, `t.${quoteIdent(col.name)}`)} as ${quoteIdent(col.name)}`)
+        .join(", ");
+}
+
+/**
+ * The SQL expression giving a value of this column in its carrier form. The
+ * validator puts typed-in text through the same expression (§8), so what a
+ * curator types and what the database holds are compared in one form.
+ */
+export function carrierExpression(col, q) {
+    switch (col.typname) {
+        case "int2": case "int4": case "bool":
+            return q;
+        case "date":
+            return `to_char(${q}, 'YYYY-MM-DD')`;
+        case "timestamptz":
+            return `to_char(${q} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
+        case "timestamp":
+            return `to_char(${q}, 'YYYY-MM-DD"T"HH24:MI:SS.US')`;
+        default:
+            return `${q}::text`;
+    }
+}
+
+/** Text-carried types whose text PostgreSQL normalises: dates, UUIDs, ranges, … */
+export function isNormalisedText(col) {
+    return col.valueKind === "text" && !["text", "varchar", "bpchar"].includes(col.typname);
 }
 
 export async function fetchRows(client, schema, table, where, params) {

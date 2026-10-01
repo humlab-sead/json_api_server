@@ -1,5 +1,5 @@
 import SdfSchema from "./SdfSchema.class.js";
-import { fetchRows, arrayType } from "./SdfRows.js";
+import { fetchRows, arrayType, carrierExpression, isNormalisedText } from "./SdfRows.js";
 import { loadWorkbook, readCell, plainValue, plainRows, CELL } from "./SdfWorkbookReader.js";
 import { SdfError, quoteIdent, rowHash, canonicalValue, canonicalCsv, sha256Hex, ESCAPE_LIKE, plainDecimal } from "./SdfCommon.js";
 
@@ -27,9 +27,6 @@ const STRICT_INTEGER = /^[+-]?\d+$/;
 const STRICT_DECIMAL = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
 const COMMA_DECIMAL = /^[+-]?\d+,\d+$/;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
-const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?)?(Z|[+-]\d{2}(:?\d{2})?)?$/;
-const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-const RANGE = /^(empty|[[(][^,]*,[^,]*[\])])$/;
 const MAX_REPORTED_PER_CODE = 200;
 const INTEGER_RANGE = {
     int2: [-32768, 32767],
@@ -112,6 +109,8 @@ export default class SdfValidator {
         const client = await this.app.pgPool.connect();
         try {
             await client.query("begin isolation level repeatable read read only");
+            //typed timestamps without an offset are read as UTC, the zone they are exported in
+            await client.query("set local timezone = 'UTC'");
             const schema = await SdfSchema.load(client);
             const ctx = { client, schema, report, wb };
             let extra;
@@ -456,9 +455,10 @@ export default class SdfValidator {
 
     //======================================================= stage 2: cells
 
-    _coerce(ctx) {
+    async _coerce(ctx) {
         const { report, schema } = ctx;
         ctx.records = [];
+        const normalise = new Map(); //"table.column" -> { column, items: [{ record, key, address }] }
         for (const b of ctx.bindings) {
             const { ws, sheet, table } = b;
             const keyColumns = this._keyColumns(schema, table);
@@ -481,6 +481,11 @@ export default class SdfValidator {
                     const column = schema.column(table, key);
                     const value = this._coerceCell(report, cell, column, keyColumns.has(key), where(cell));
                     record.values.set(key, value);
+                    if (typeof value === "string" && isNormalisedText(column)) {
+                        const k = `${table.name}.${key}`;
+                        if (!normalise.has(k)) normalise.set(k, { column, items: [] });
+                        normalise.get(k).items.push({ record, key, address: cell.address });
+                    }
                 }
                 let anyOther = false;
                 for (const [key, index] of b.label) {
@@ -556,7 +561,59 @@ export default class SdfValidator {
             });
         }
 
+        await this._normalise(ctx, normalise);
         this._checkSupportedOperations(ctx);
+    }
+
+    /**
+     * §8: dates, timestamps, UUIDs and ranges are checked and put in canonical
+     * form by PostgreSQL itself, one query per column, through the same
+     * expression the export uses. "2019-05-01" in a timestamp column, an
+     * upper-case UUID or "[1.5, 2)" then compare equal to what the database
+     * holds, and "2026-02-30" is refused here rather than at deploy.
+     */
+    async _normalise(ctx, normalise) {
+        const { report, client } = ctx;
+        if (!normalise.size) return;
+        //pg_input_is_valid arrived in PostgreSQL 16; before it, each value is cast in a savepoint
+        const batched = (await client.query("select to_regproc('pg_input_is_valid') is not null as ok")).rows[0].ok;
+        for (const { column, items } of normalise.values()) {
+            const texts = [...new Set(items.map(i => i.record.values.get(i.key)))];
+            const canonical = `${carrierExpression(column, `v::${column.pgType}`)}`;
+            let rows;
+            if (batched) {
+                rows = (await client.query(
+                    `select v, pg_input_is_valid(v, $2) as ok,
+                            case when pg_input_is_valid(v, $2) then ${canonical} end as canonical
+                     from unnest($1::text[]) v`, [texts, column.pgType])).rows;
+            }
+            else {
+                rows = [];
+                for (const v of texts) {
+                    await client.query("savepoint sdf_normalise");
+                    try {
+                        const r = await client.query(`select ${canonical} as canonical from (select $1::text as v) x`, [v]);
+                        rows.push({ v, ok: true, canonical: r.rows[0].canonical });
+                        await client.query("release savepoint sdf_normalise");
+                    }
+                    catch (err) {
+                        await client.query("rollback to savepoint sdf_normalise");
+                        rows.push({ v, ok: false });
+                    }
+                }
+            }
+            const byText = new Map(rows.map(r => [r.v, r]));
+            for (const { record, key, address } of items) {
+                const text = record.values.get(key);
+                const row = byText.get(text);
+                if (row && row.ok) {
+                    record.values.set(key, row.canonical);
+                    continue;
+                }
+                report.error(2, "bad_format", `${address}: "${text}" is not a valid ${column.pgType}.`, { sheet: record.sheet, cell: address });
+                record.values.set(key, undefined);
+            }
+        }
     }
 
     /**
@@ -687,15 +744,7 @@ export default class SdfValidator {
                     return undefined;
                 }
 
-                const valid =
-                    column.typname === "date" ? ISO_DATE.test(text) :
-                    column.typname === "timestamptz" || column.typname === "timestamp" ? ISO_TIMESTAMP.test(text) :
-                    column.typname === "uuid" ? UUID.test(text) :
-                    /range$/.test(column.typname) ? RANGE.test(text) : true;
-                if (!valid) {
-                    report.error(2, "bad_format", `${addr}: "${text}" is not a valid ${column.pgType}.`, where);
-                    return undefined;
-                }
+                //dates, timestamps, UUIDs and ranges are checked by PostgreSQL (_normalise)
                 if (text.includes("\u0000")) {
                     report.error(2, "nul_character", `${addr}: the value contains a NUL character (_x0000_), which the database cannot store.`, where);
                     return undefined;
