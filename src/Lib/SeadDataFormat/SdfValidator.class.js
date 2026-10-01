@@ -456,10 +456,7 @@ export default class SdfValidator {
         ctx.records = [];
         for (const b of ctx.bindings) {
             const { ws, sheet, table } = b;
-            const keyColumns = new Set([table.pk, ...table.fks.filter(fk => {
-                const target = schema.tables.get(fk.parent);
-                return target && target.pk === fk.parentColumn;
-            }).map(fk => fk.column)]);
+            const keyColumns = this._keyColumns(schema, table);
 
             ws.eachRow({ includeEmpty: false }, (row, rowNumber) => {
                 if (rowNumber === 1) return;
@@ -590,6 +587,17 @@ export default class SdfValidator {
     }
 
     /**
+     * §7: the columns a NEW- token may stand in: the primary key, and foreign
+     * keys that reference a primary key. Everywhere else "NEW-…" is plain text.
+     */
+    _keyColumns(schema, table) {
+        return new Set([table.pk, ...table.fks.filter(fk => {
+            const target = schema.tables.get(fk.parent);
+            return target && target.pk === fk.parentColumn;
+        }).map(fk => fk.column)]);
+    }
+
+    /**
      * §8 strict coercion of one cell to its column's carrier value. Returns the
      * value, or undefined after reporting an error.
      */
@@ -604,11 +612,7 @@ export default class SdfValidator {
             report.error(2, "error_value", `${addr} holds an error value (${cell.value}).`, where);
             return undefined;
         }
-        if (cell.kind === CELL.STRING && TOKEN_LIKE.test(cell.value)) {
-            if (!isKey) {
-                report.error(2, "token_outside_key", `${addr}: NEW- names can only be used in ID columns, not in ${column.name}.`, where);
-                return undefined;
-            }
+        if (isKey && cell.kind === CELL.STRING && TOKEN_LIKE.test(cell.value)) {
             if (!TOKEN.test(cell.value)) {
                 report.error(2, "bad_token", `${addr}: "${cell.value}" is not a valid NEW- name. Use NEW- followed by 1-32 letters, digits, - or _.`, where);
                 return undefined;
@@ -1011,12 +1015,13 @@ export default class SdfValidator {
         }
         for (const [tableName, recs] of byTable) {
             const table = schema.table(tableName);
+            const keyColumns = this._keyColumns(schema, table);
             for (const u of table.uniques) {
                 const tuples = new Map(); //key -> record
                 const candidates = [];
                 for (const r of recs) {
                     const vals = u.columns.map(c => (r.values.has(c) ? r.values.get(c) : (r.pk.kind === "id" ? ctx.live.get(tableName).get(r.pk.value)?.[c] : null)));
-                    if (vals.some(v => v === null || v === undefined || (typeof v === "string" && TOKEN.test(v)))) continue;
+                    if (vals.some((v, i) => v === null || v === undefined || (keyColumns.has(u.columns[i]) && typeof v === "string" && TOKEN.test(v)))) continue;
                     if (r.pk.kind === "id") {
                         const live = ctx.live.get(tableName).get(r.pk.value);
                         if (live && u.columns.every((c, i) => live[c] === vals[i])) continue; //unchanged

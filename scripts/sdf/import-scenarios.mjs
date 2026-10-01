@@ -98,6 +98,8 @@ console.log(`Scenario A: a valid set of edits on site ${SITE}`);
 
     //update a sample name, keeping a leading zero
     ps.getRow(2).getCell(col(ps, "sample_name")).value = "0123 edited";
+    //text that starts with NEW- is plain text outside ID columns (H5)
+    ps.getRow(6).getCell(col(ps, "sample_name")).value = "NEW-found layer";
 
     //change a sample's type by label: clear the id, pick another type's label
     const typeNow = ps.getRow(5).getCell(col(ps, "sample_type_id")).value;
@@ -126,8 +128,9 @@ console.log(`Scenario A: a valid set of edits on site ${SITE}`);
     const r = await validate(wb);
     const cs = r.change_set || {};
     check("validates", r.ok === true, r.errors);
-    check("two updates: the sample name, and the type chosen by label", cs.updates?.length === 2 &&
+    check("three updates: two sample names, and the type chosen by label", cs.updates?.length === 3 &&
         cs.updates.some(u => u.fields.some(f => f.column === "sample_name" && f.after === "0123 edited")) &&
+        cs.updates.some(u => u.fields.some(f => f.column === "sample_name" && f.after === "NEW-found layer")) &&
         cs.updates.some(u => u.fields.some(f => f.column === "sample_type_id" && f.after === otherId)), cs.updates);
     check("no inserts or deletes", cs.inserts?.length === 0 && cs.deletes?.length === 0, { inserts: cs.inserts, deletes: cs.deletes });
     check("reference proposal for the new type", cs.proposals?.some(p => p.kind === "reference" && p.op === "insert" && p.table === "tbl_sample_types"), cs.proposals);
@@ -170,10 +173,10 @@ console.log(`Scenario B: cell-level errors on site ${SITE}`);
     ps.getRow(2).getCell(col(ps, "sample_name")).numFmt = "d-mmm";
     ps.getRow(3).getCell(col(ps, "sample_name")).value = { formula: "A1&\"x\"", result: "x" };
     ps.getRow(4).getCell(col(ps, "_action")).value = "remove";
-    ps.getRow(5).getCell(col(ps, "sample_name")).value = "NEW-oops";
+    ps.getRow(5).getCell(col(ps, "sample_type_id")).value = "NEW-a b";
     const r = await validate(wb);
     check("rejected at stage 2", r.ok === false && r.stage_reached === 2, { stage: r.stage_reached, codes: codes(r) });
-    for (const code of ["decimal_comma", "date_in_text_column", "formula", "bad_action", "token_outside_key"]) {
+    for (const code of ["decimal_comma", "date_in_text_column", "formula", "bad_action", "bad_token"]) {
         check(`reports ${code}`, codes(r).includes(code), codes(r));
     }
     check("errors are anchored to cells", r.errors.every(e => e.sheet && e.cell), r.errors);

@@ -165,8 +165,10 @@ export default class SdfChangeRequest {
         const cs = ctx.changeSet;
         const resolve = (tableName, column, value) => {
             if (typeof value !== "string" || !TOKEN.test(value)) return value;
-            const fk = schema.table(tableName).fks.find(f => f.column === column);
-            const map = fk && ids.get(fk.parent);
+            //tokens stand only in foreign keys to a primary key (§7); elsewhere NEW-… is text
+            const fk = schema.table(tableName).fks.find(f => f.column === column && schema.table(f.parent).pk === f.parentColumn);
+            if (!fk) return value;
+            const map = ids.get(fk.parent);
             if (!map || !map.has(value)) {
                 throw new SdfError("unresolved_token", `${tableName}.${column} = ${value} has no row in this change request.`, {}, 500);
             }
