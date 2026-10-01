@@ -1625,18 +1625,12 @@ export default class SdfValidator {
 
     /** For shared updates: which other sites the change also affects. */
     async _sharedSites(ctx) {
-        const { client } = ctx;
-        const cs = ctx.changeSet;
-        for (const s of cs.shared) {
-            const datasetId = s.table === "tbl_datasets" ? s.id
-                : (cs.updates.find(u => u.table === s.table && u.id === s.id)?.before || {}).dataset_id;
-            if (!datasetId) { s.other_site_ids = null; continue; }
-            const res = await client.query(`
-                select distinct sg.site_id from public.tbl_analysis_entities ae
-                join public.tbl_physical_samples ps using (physical_sample_id)
-                join public.tbl_sample_groups sg using (sample_group_id)
-                where ae.dataset_id = $1 and not (sg.site_id = any($2::int4[])) order by 1`, [datasetId, ctx.bundleSiteIds]);
-            s.other_site_ids = res.rows.map(r => r.site_id);
+        const { client, schema } = ctx;
+        for (const s of ctx.changeSet.shared) {
+            const sql = schema.sitesOfRowsSql(s.table, "$1");
+            const res = await client.query(
+                `select distinct x as site_id from (${sql}) s(x) where not (x = any($2::int4[])) order by 1`, [s.id, ctx.bundleSiteIds]);
+            s.other_site_ids = res.rows.map(r => Number(r.site_id));
         }
     }
 }

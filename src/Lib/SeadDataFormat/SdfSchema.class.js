@@ -247,6 +247,12 @@ export default class SdfSchema {
         for (const entry of this.owned.values()) {
             if (entry.reach !== "closure") continue;
             entry.edges = entry.table.fks.filter(fk => fk.parent !== fk.table && this.owned.has(fk.parent));
+            //Two edges could tie one row to two sites, which shared-row detection
+            //(only through datasets and features) would not see. No table has that today.
+            if (entry.edges.length > 1) {
+                throw new SdfError("unsupported_schema",
+                    `${entry.table.name} reaches a site through ${entry.edges.map(fk => fk.column).join(" and ")}; SDF supports one ownership edge per table (§3).`);
+            }
         }
 
         //explicit additions, and the tables that hang off them (dataset contacts,
@@ -441,6 +447,23 @@ export default class SdfSchema {
             if (other.reach === "reverse" && other.via.table === tableName) keys.push(other.via);
         }
         return keys;
+    }
+
+    /**
+     * SQL giving the ids of the sites that the rows of `tableName` whose primary
+     * key is in `ids` (a SQL expression) belong to, along the ownership rules.
+     */
+    sitesOfRowsSql(tableName, ids) {
+        const entry = this.owned.get(tableName);
+        const table = entry.table;
+        if (entry.reach === "root") return `select ${quoteIdent(table.pk)} from public.${quoteIdent(table.name)} where ${quoteIdent(table.pk)} in (${ids})`;
+        if (entry.reach === "reverse") {
+            const child = this._table(entry.via.table);
+            return this.sitesOfRowsSql(child.name,
+                `select ${quoteIdent(child.pk)} from public.${quoteIdent(child.name)} where ${quoteIdent(entry.via.column)} in (${ids})`);
+        }
+        return entry.edges.map(fk => this.sitesOfRowsSql(fk.parent,
+            `select ${quoteIdent(fk.column)} from public.${quoteIdent(table.name)} where ${quoteIdent(table.pk)} in (${ids})`)).join(" union ");
     }
 
     /** The reverse-reached tables (datasets, features) and the key that reaches each. */
