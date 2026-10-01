@@ -14,6 +14,10 @@ export const SDF_VERSION = "SDF/2.0";
 //Excel's hard limit on characters in a single cell (§8, OQ-21).
 export const EXCEL_MAX_CELL_CHARS = 32767;
 
+//Cells in one export (rows times columns over all sheets). The workbook is built in
+//memory, at roughly 1 GB per million cells; the largest single site is about 213,000.
+export const DEFAULT_MAX_CELLS = 1000000;
+
 //An IEEE double holds any decimal of up to 15 significant digits exactly (§8).
 export const MAX_EXACT_SIGNIFICANT_DIGITS = 15;
 

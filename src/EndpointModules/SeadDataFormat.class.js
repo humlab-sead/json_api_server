@@ -24,11 +24,18 @@ import { SDF_VERSION } from "../Lib/SeadDataFormat/SdfCommon.js";
  *
  * Nothing here writes to any database. An import ends in a Sqitch change
  * request for sead_change_control (spec §10); SDF never applies changes itself.
+ *
+ * The import endpoints are for SEAD's data managers: the router puts them behind
+ * basic auth. SDF jobs hold whole workbooks in memory on the server that also
+ * serves the public browser, so at most SDF_MAX_JOBS run at once, a few more
+ * wait, and the rest are turned away with 503.
  */
 
 const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-const DEFAULT_MAX_SITES = 100;
+const DEFAULT_MAX_SITES = 25;
 const DEFAULT_MAX_UPLOAD_MB = 64;
+const DEFAULT_MAX_JOBS = 2;
+const MAX_WAITING_JOBS = 8;
 
 class SeadDataFormat {
     constructor(app) {
@@ -39,7 +46,31 @@ class SeadDataFormat {
         this.maxUploadBytes = (parseInt(process.env.SDF_MAX_UPLOAD_MB) || DEFAULT_MAX_UPLOAD_MB) * 1024 * 1024;
         this.renderer = new SdfRenderer(guideConfig());
         this.maxSites = parseInt(process.env.SDF_MAX_SITES) || DEFAULT_MAX_SITES;
+        this.maxJobs = parseInt(process.env.SDF_MAX_JOBS) || DEFAULT_MAX_JOBS;
+        this.running = 0;
+        this.waiting = [];
         this.setupEndpoints();
+    }
+
+    /** Runs an SDF job once a slot is free; refuses when too many are waiting. */
+    async _job(res, fn) {
+        if (this.running >= this.maxJobs) {
+            if (this.waiting.length >= MAX_WAITING_JOBS) {
+                res.setHeader("Retry-After", "30");
+                res.status(503).json({ error: "The server is busy with other SDF exports or imports. Try again in a minute.", code: "busy" });
+                return undefined;
+            }
+            await new Promise(resolve => this.waiting.push(resolve));
+        }
+        this.running++;
+        try {
+            return await fn();
+        }
+        finally {
+            this.running--;
+            const next = this.waiting.shift();
+            if (next) next();
+        }
     }
 
     sanitizeSiteIds(raw) {
@@ -77,7 +108,7 @@ class SeadDataFormat {
             if (!Number.isInteger(siteId) || siteId <= 0) {
                 return res.status(400).json({ error: "siteId must be a positive integer." });
             }
-            await this._runExport(req, res, [siteId]);
+            await this._job(res, () => this._runExport(req, res, [siteId]));
         });
 
         app.post("/sdf/export", async (req, res) => {
@@ -85,14 +116,16 @@ class SeadDataFormat {
             if (!valid) {
                 return res.status(400).json({ error: `Bad input - ${error}` });
             }
-            await this._runExport(req, res, ids);
+            await this._job(res, () => this._runExport(req, res, ids));
         });
 
         app.post("/sdf/validate", async (req, res) => {
             try {
                 const buffer = await this._readUpload(req);
-                const { report } = await this.validator.validate(buffer);
-                res.status(report.ok ? 200 : 422).json(report);
+                await this._job(res, async () => {
+                    const { report } = await this.validator.validate(buffer);
+                    res.status(report.ok ? 200 : 422).json(report);
+                });
             }
             catch (err) {
                 this._sendError(res, err, "validating the workbook");
@@ -102,7 +135,9 @@ class SeadDataFormat {
         app.post("/sdf/change-request", async (req, res) => {
             try {
                 const buffer = await this._readUpload(req);
-                const { report, bundle, name } = await this.changeRequest.generate(buffer, { author: this._exportedBy(req) });
+                const result = await this._job(res, () => this.changeRequest.generate(buffer, { author: this._exportedBy(req) }));
+                if (!result) return; //turned away as busy
+                const { report, bundle, name } = result;
                 if (!report.ok) {
                     return res.status(422).json(report);
                 }

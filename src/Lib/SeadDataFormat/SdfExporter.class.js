@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import SdfSchema from "./SdfSchema.class.js";
 import { fetchRows, arrayType } from "./SdfRows.js";
-import { SDF_VERSION, SdfError, quoteIdent, rowHash, canonicalCsv, sha256Hex } from "./SdfCommon.js";
+import { SDF_VERSION, SdfError, DEFAULT_MAX_CELLS, quoteIdent, rowHash, canonicalCsv, sha256Hex } from "./SdfCommon.js";
 
 /**
  * Builds the tabular structure of an SDF workbook (spec §2, the Exporter role).
@@ -20,11 +20,6 @@ import { SDF_VERSION, SdfError, quoteIdent, rowHash, canonicalCsv, sha256Hex } f
  * nothing here knows what any table means; a self-audit then recounts every
  * table by an independent route and refuses to export on any mismatch.
  */
-//The workbook is built in memory, at roughly 1 GB per million cells, so a
-//request is refused above this size rather than exhausting the server. The
-//largest single site is about 213,000 cells.
-const DEFAULT_MAX_CELLS = 2500000;
-
 export default class SdfExporter {
 
     constructor(app) {

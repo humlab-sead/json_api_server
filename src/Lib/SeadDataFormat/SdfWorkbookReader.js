@@ -1,6 +1,13 @@
 import ExcelJS from "exceljs";
 import JSZip from "jszip";
-import { SdfError } from "./SdfCommon.js";
+import { SdfError, DEFAULT_MAX_CELLS } from "./SdfCommon.js";
+
+//An .xlsx is a zip, so a few MB can unpack to gigabytes. What an upload may unpack
+//to, and how many cells it may hold, is checked before anything is parsed. An
+//exported workbook holds its data cells (bounded by SDF_MAX_CELLS at export) plus
+//labels, lists and machine sheets, hence the margin.
+const MAX_UNPACKED_BYTES = (parseInt(process.env.SDF_MAX_UNPACKED_MB) || 256) * 1024 * 1024;
+const MAX_CELLS = Math.round((parseInt(process.env.SDF_MAX_CELLS) || DEFAULT_MAX_CELLS) * 1.5);
 
 /**
  * Loading an uploaded workbook for import (spec §10 stage 1), and reading its
@@ -30,6 +37,10 @@ export const CELL = {
  * Escapes are decoded case-insensitively (§8): LibreOffice writes `_x000b_`
  * where Excel writes `_x000B_`, and ExcelJS only decodes the latter, so the hex
  * of every escape is upper-cased first, in one left-to-right pass.
+ *
+ * Every entry is inflated as a stream against a byte budget, and the cells are
+ * counted, before ExcelJS parses anything, so a crafted file is refused without
+ * exhausting memory.
  */
 export async function loadWorkbook(buffer) {
     const looksLikeZip = buffer.length > 4 && buffer[0] === 0x50 && buffer[1] === 0x4b;
@@ -54,10 +65,25 @@ export async function loadWorkbook(buffer) {
         throw new SdfError("not_xlsx", "This is not an .xlsx workbook (it may be another kind of zip file).", {}, 422);
     }
 
-    for (const path of Object.keys(zip.files)) {
+    const texts = new Map();
+    let budget = MAX_UNPACKED_BYTES;
+    let cells = 0;
+    for (const [path, file] of Object.entries(zip.files)) {
+        if (file.dir) continue;
+        const data = await inflate(file, budget);
+        budget -= data.length;
         const isSheet = /^xl\/worksheets\/[^/]+\.xml$/.test(path);
-        if (!isSheet && path !== "xl/sharedStrings.xml") continue;
-        const xml = await zip.file(path).async("string");
+        if (isSheet || path === "xl/sharedStrings.xml") texts.set(path, data.toString("utf8"));
+        if (isSheet) cells += (texts.get(path).match(/<c[\s>]/g) || []).length;
+    }
+    if (cells > MAX_CELLS) {
+        throw new SdfError("workbook_too_large",
+            `The workbook has ${cells.toLocaleString("en")} cells, more than the ${MAX_CELLS.toLocaleString("en")} an import accepts. Split the work into exports of fewer sites.`,
+            { cells, maxCells: MAX_CELLS }, 413);
+    }
+
+    for (const [path, xml] of texts) {
+        const isSheet = path !== "xl/sharedStrings.xml";
         let patched = xml.replace(/_x([0-9A-Fa-f]{4})_/g, (m, hex) => `_x${hex.toUpperCase()}_`);
         if (isSheet) {
             patched = patched
@@ -76,6 +102,32 @@ export async function loadWorkbook(buffer) {
         throw new SdfError("not_xlsx", `The workbook could not be read: ${err.message}`, {}, 422);
     }
     return wb;
+}
+
+/**
+ * One zip entry, inflated as a stream and abandoned as soon as it passes the
+ * byte budget.
+ */
+function inflate(file, budget) {
+    return new Promise((resolve, reject) => {
+        const chunks = [];
+        let size = 0;
+        const stream = file.internalStream("nodebuffer");
+        stream
+            .on("data", chunk => {
+                size += chunk.length;
+                if (size > budget) {
+                    stream.pause();
+                    reject(new SdfError("workbook_too_large",
+                        `The workbook unpacks to more than the ${MAX_UNPACKED_BYTES / 1024 / 1024} MB an import accepts.`, {}, 413));
+                    return;
+                }
+                chunks.push(chunk);
+            })
+            .on("error", err => reject(new SdfError("not_xlsx", `The workbook could not be unpacked: ${err.message}`, {}, 422)))
+            .on("end", () => resolve(Buffer.concat(chunks)))
+            .resume();
+    });
 }
 
 /**
