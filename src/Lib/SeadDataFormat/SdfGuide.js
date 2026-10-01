@@ -13,6 +13,8 @@
  *   SDF_VALIDATE_URL  where an edited workbook is uploaded for checking
  */
 
+import { siteNamesOf } from "./SdfCommon.js";
+
 const DEFAULT_CONTACT = "support@humlab.umu.se";
 
 export function guideConfig(env = process.env) {
@@ -35,7 +37,7 @@ export function guideConfig(env = process.env) {
 export function buildGuide(bundle, config) {
     const meta = new Map(bundle.meta);
     const siteIds = (meta.get("site_ids") || "").split(",");
-    const siteNames = (meta.get("site_names") || "").split("\n");
+    const siteNames = siteNamesOf(meta.get("site_names"));
     const sites = siteIds.map((id, i) => `${id} — ${siteNames[i] ?? ""}`).join("\n");
     const contact = config.contact;
     const blocks = [];
@@ -78,12 +80,16 @@ export function buildGuide(bundle, config) {
         text: "The IDs in this file are only valid in the database it came from (above). It stays valid when SEAD is updated. If someone else changes the same data meanwhile, that is detected and shown to you, never silently overwritten.",
     });
     blocks.push({
+        type: "row", strong: true, label: "Which program to use",
+        text: "Microsoft Excel or LibreOffice Calc. Google Sheets and Apple Numbers are not supported: they can change values when they save a file.",
+    });
+    blocks.push({
         type: "row", strong: true, label: "The eight rules",
         text: [
             "1. Do not rename sheets or change the column names in row 1. They are how your changes are matched to the database.",
             "2. Do not delete columns. Hide the ones you do not need.",
             "3. Do not add or delete rows on site data. For now, only changes to rows that already exist can be imported. Removing a row from the sheet does nothing at all.",
-            "4. Grey columns, those ending in :label and date_updated, are for reading. Changes to them are ignored.",
+            "4. Grey columns, those ending in :label and date_updated, are for reading. To point a row at another entry, change its ID, or clear the ID and pick a label from the list. A label changed next to an ID left as it was is reported, not ignored.",
             "5. Enter numbers as numbers. A number Excel has stored as text, such as 1,5 pasted from elsewhere, is rejected rather than guessed at.",
             "6. Do not use formulas in data columns. Paste values instead.",
             "7. Save as .xlsx. CSV files cannot be imported.",

@@ -79,7 +79,7 @@ test("rule 2 with a proposed column: no stale write, the row waits on the propos
 test("rule 3 with a proposed column: the edit applies, the proposed value waits", async () => {
     const { cs } = await diff({ exported: row("a"), workbook: row("b"), live: row("a"), proposed: { texture: "clay" } });
     assert.equal(cs.updates.length, 1);
-    assert.deepEqual(cs.updates[0].deferred, { texture: "clay" });
+    assert.deepEqual({ ...cs.updates[0].deferred }, { texture: "clay" });
 });
 
 test("rule 6: an untouched row deleted upstream needs no decision (M1)", async () => {

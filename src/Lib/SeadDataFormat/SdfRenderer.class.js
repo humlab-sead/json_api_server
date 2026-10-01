@@ -219,7 +219,7 @@ export default class SdfRenderer {
     }
 
     _renderLists(wb, lists) {
-        const ws = wb.addWorksheet(LISTS_SHEET, { state: "hidden" });
+        const ws = wb.addWorksheet(LISTS_SHEET, { state: "veryHidden" });
         lists.forEach((list, i) => {
             const col = ws.getColumn(i + 1);
             col.numFmt = "@";
@@ -233,7 +233,9 @@ export default class SdfRenderer {
     //---------------------------------------------------------- machine sheets
 
     _renderMachineSheet(wb, name, rows, textColumns) {
-        const ws = wb.addWorksheet(name, { state: "hidden" });
+        //veryHidden: not offered by Excel's Unhide, nor removed as "hidden worksheets"
+        //by its Document Inspector
+        const ws = wb.addWorksheet(name, { state: "veryHidden" });
         textColumns.forEach((isText, i) => {
             if (isText) ws.getColumn(i + 1).numFmt = "@";
         });

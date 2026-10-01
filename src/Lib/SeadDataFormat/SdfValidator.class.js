@@ -434,7 +434,10 @@ export default class SdfValidator {
 
         const ownedKeys = schema.ownedKeyColumns();
         const attachments = headers.filter(h => ownedKeys.has(h.key));
-        const pk = headers.find(h => /_id$/.test(h.key) && !ownedKeys.has(h.key) && h.key !== "_action");
+        //its own key: the first column when that is an ID, else the first ID that is not a link
+        const first = headers.find(h => h.key !== "_action");
+        const pk = first && /_id$/.test(first.key) && !ownedKeys.has(first.key) ? first
+            : headers.find(h => /_id$/.test(h.key) && !ownedKeys.has(h.key) && h.key !== "_action");
         const problems = [];
         if (!pk) problems.push("an ID column of its own whose name ends in _id");
         if (!attachments.length) problems.push(`a column linking each row to this site's data (one of ${[...ownedKeys.keys()].slice(0, 6).join(", ")}, …)`);
@@ -582,7 +585,7 @@ export default class SdfValidator {
             p.rows = [];
             p.ws.eachRow({ includeEmpty: false }, (row, rowNumber) => {
                 if (rowNumber === 1) return;
-                const values = {};
+                const values = Object.create(null); //keyed by the curator's own headers
                 let any = false;
                 for (const h of p.headers) {
                     const cell = readCell(row.getCell(h.index));
@@ -1521,7 +1524,7 @@ export default class SdfValidator {
     }
 
     _proposedOf(r) {
-        const out = {};
+        const out = Object.create(null); //keyed by the curator's own headers
         for (const [k, v] of r.proposed) out[k] = v.value;
         return out;
     }

@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import JSZip from "jszip";
 import SdfValidator from "./SdfValidator.class.js";
-import { SDF_VERSION, SdfError, quoteIdent } from "./SdfCommon.js";
+import { SDF_VERSION, SdfError, quoteIdent, siteNamesOf } from "./SdfCommon.js";
 
 /**
  * Import stage 5 (spec §10): renders a validated change set as a Sqitch change
@@ -481,7 +481,8 @@ export default class SdfChangeRequest {
             ctx.changeSet.conflicts.length ? `              ${count(ctx.changeSet.conflicts.length, "conflicting row")} left out; see report.json.` : null,
             ctx.changeSet.blocked.length ? `              ${count(ctx.changeSet.blocked.length, "row")} waiting on proposals left out; see report.json.` : null,
             ...this._triggerNotes(ctx, plan),
-        ].filter(l => l !== null).map(l => `  ${l}`.replace(/\*\//g, "* /"));
+        //neither delimiter may appear inside the comment: PostgreSQL nests block comments
+        ].filter(l => l !== null).map(l => `  ${l}`.replace(/\*\//g, "* /").replace(/\/\*/g, "/ *"));
         return ["/" + "*".repeat(112), ...lines, "*".repeat(113) + "/"].join("\n");
     }
 
@@ -499,7 +500,7 @@ export default class SdfChangeRequest {
         const byTable = list => Object.entries(list.reduce((m, x) => ((m[x.table] = (m[x.table] || 0) + 1), m), {}))
             .map(([t, n]) => `- \`${t}\`: ${n}`).join("\n") || "- none";
         return [
-            `SDF import for site(s) ${meta.get("site_ids")} (${String(meta.get("site_names") || "").split("\n").join(", ")}).`,
+            `SDF import for site(s) ${meta.get("site_ids")} (${siteNamesOf(meta.get("site_names")).join(", ")}).`,
             "",
             `Generated from export \`${exportId}\`, exported ${meta.get("exported_at")} by ${meta.get("exported_by") || "anonymous"} from \`${meta.get("database_name")}\`.`,
             "",
@@ -526,7 +527,7 @@ export default class SdfChangeRequest {
                     `A curator added a column \`${p.column}\` to the \`${p.sheet}\` sheet of an SDF workbook.`, "",
                     `- Inferred type: ${p.inferred_type}`,
                     `- Rows with a value: ${p.rows_with_values}`,
-                    `- Sample values: ${p.sample_values.map(v => `\`${v}\``).join(", ")}`, "",
+                    `- Sample values: ${p.sample_values.map(v => fmt(v)).join(", ")}`, "",
                     "Suggested starting point (not a decision: types, constraints and naming need design):", "",
                     "```sql", `alter table public.${p.table} add column ${p.column} ${sqlType(p.inferred_type)};`, "```",
                 ];
@@ -540,7 +541,7 @@ export default class SdfChangeRequest {
                     `- Attaches to: ${p.attaches_to.map(a => `\`${a.table}\` via \`${a.column}\``).join(", ")}`,
                     `- Rows: ${p.row_count}`, "",
                     "| Column | Inferred type | Samples |", "|---|---|---|",
-                    ...p.columns.map(c => `| \`${c.name}\` | ${c.inferred_type} | ${c.sample_values.map(v => `\`${v}\``).join(", ")} |`),
+                    ...p.columns.map(c => `| ${code(c.name)} | ${c.inferred_type} | ${c.sample_values.map(v => fmt(v)).join(", ")} |`),
                     "", "Suggested starting point (not a decision):", "", "```sql",
                     `create table public.${p.proposed_table} (`,
                     ...p.columns.map((c, i) => `    ${c.name} ${c.name === p.primary_key ? "serial primary key" :
@@ -599,7 +600,14 @@ function count(n, noun) {
 }
 
 function fmt(v) {
-    return v === null || v === undefined ? "*(empty)*" : `\`${String(v).replace(/\|/g, "\\|").replace(/\n/g, " ")}\``;
+    return v === null || v === undefined ? "*(empty)*" : code(String(v).replace(/\|/g, "\\|").replace(/\n/g, " "));
+}
+
+/** A Markdown code span that holds any text, backticks included. */
+function code(text) {
+    const longest = Math.max(0, ...(String(text).match(/`+/g) || []).map(m => m.length));
+    const fence = "`".repeat(longest + 1);
+    return longest ? `${fence} ${text} ${fence}` : `${fence}${text}${fence}`;
 }
 
 function slug(text) {

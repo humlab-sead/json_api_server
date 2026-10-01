@@ -85,6 +85,22 @@ function csvField(value) {
     return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
+/**
+ * The site names in _sdf_meta (§9): a JSON array, so a name holding a line
+ * break stays one name. A plain value is read as one name per line.
+ */
+export function siteNamesOf(value) {
+    if (!value) return [];
+    try {
+        const names = JSON.parse(value);
+        if (Array.isArray(names)) return names.map(String);
+    }
+    catch {
+        //not JSON: one name per line
+    }
+    return String(value).split("\n");
+}
+
 export function sha256Hex(text) {
     return crypto.createHash("sha256").update(text, "utf8").digest("hex");
 }

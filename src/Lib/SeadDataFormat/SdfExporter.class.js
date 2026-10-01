@@ -489,7 +489,7 @@ export default class SdfExporter {
             ["exported_at", facts.exported_at],
             ["exported_by", exportedBy],
             ["site_ids", sites.map(s => s.site_id).join(",")],
-            ["site_names", sites.map(s => s.site_name).join("\n")],
+            ["site_names", JSON.stringify(sites.map(s => s.site_name))],
             ["database_name", facts.database_name],
             ["database_system_identifier", systemIdentifier],
             ["database_server_version", facts.server_version],
