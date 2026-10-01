@@ -1497,6 +1497,7 @@ export default class SdfValidator {
         this._propagateBlocking(ctx);
         await this._sharedSites(ctx);
         await this._warnLegacyDendro(ctx);
+        this._warnSuspiciousEdits(ctx);
 
         report.change_set = cs;
         report.summary = {
@@ -1585,6 +1586,50 @@ export default class SdfValidator {
             if (!dependsOnBlocked(cs.updates[i])) continue;
             cs.blocked.push({ ...cs.updates[i], reason: "depends_on_proposal" });
             cs.updates.splice(i, 1);
+        }
+    }
+
+    /**
+     * Edits that are probably accidents, reported so a person looks before they
+     * become a change request:
+     * - a column whose changed values are the same values as before, moved
+     *   between rows: what sorting one column on its own, or pasting one row
+     *   off, does to a sheet;
+     * - a change in whitespace only, or in Unicode normalisation only (NFD
+     *   against NFC), which no one can see in a cell.
+     */
+    _warnSuspiciousEdits(ctx) {
+        const { report } = ctx;
+        const byColumn = new Map(); //"sheet|column" -> [{ update, field }]
+        for (const u of ctx.changeSet.updates) {
+            for (const f of u.fields) {
+                const key = `${u.sheet}|${f.column}`;
+                if (!byColumn.has(key)) byColumn.set(key, []);
+                byColumn.get(key).push({ u, f });
+                if (typeof f.before !== "string" || typeof f.after !== "string") continue;
+                const where = { sheet: u.sheet, cell: ctx.records.find(r => r.sheet === u.sheet && r.row === u.row)?.cells.get(f.column) };
+                if (f.before.normalize("NFC") === f.after.normalize("NFC")) {
+                    report.warning(4, "invisible_edit", `${where.cell}: the new value differs from the old only in how its characters are encoded (Unicode normalisation), which cannot be seen.`, where);
+                }
+                else if (f.before.replace(/\s+/g, " ").trim() === f.after.replace(/\s+/g, " ").trim()) {
+                    report.warning(4, "invisible_edit", `${where.cell}: the new value differs from the old only in spaces or line breaks.`, where);
+                }
+            }
+        }
+        const tally = values => {
+            const m = new Map();
+            for (const v of values) { const k = JSON.stringify(canonicalValue(v)); m.set(k, (m.get(k) || 0) + 1); }
+            return m;
+        };
+        for (const [key, edits] of byColumn) {
+            if (edits.length < 2) continue;
+            const before = tally(edits.map(e => e.f.before));
+            const after = tally(edits.map(e => e.f.after));
+            if (before.size !== after.size || [...before].some(([k, n]) => after.get(k) !== n)) continue;
+            const [sheet, column] = key.split("|");
+            report.warning(4, "column_shuffled",
+                `${edits.length} values in column ${column} were moved between rows rather than changed (rows ${edits.slice(0, 5).map(e => e.u.row).join(", ")}${edits.length > 5 ? ", …" : ""}). ` +
+                "If one column was sorted on its own, or rows were pasted one off, undo that.", { sheet });
         }
     }
 

@@ -118,3 +118,19 @@ test("after a column is removed, a differing row is a conflict that says why; an
     ({ cs } = await diff({ ...gone, workbook: row("a"), live: row("a") }));
     assert.equal(cs.updates.length + cs.conflicts.length, 0);
 });
+
+test("a column sorted on its own is flagged (M17)", async () => {
+    const report = { errors: [], warnings: [], error() {}, warning(stage, code) { this.warnings.push(code); } };
+    const update = (row, before, after) => ({ table: "t", sheet: "samples", row, id: row, fields: [{ column: "sample_name", before, after }] });
+    const ctx = { report, records: [], changeSet: { updates: [update(2, "a", "b"), update(3, "b", "c"), update(4, "c", "a")] } };
+    new SdfValidator({})._warnSuspiciousEdits(ctx);
+    assert.deepEqual(report.warnings, ["column_shuffled"]);
+});
+
+test("invisible edits are flagged (L11)", async () => {
+    const report = { errors: [], warnings: [], error() {}, warning(stage, code) { this.warnings.push(code); } };
+    const update = (row, before, after) => ({ table: "t", sheet: "samples", row, id: row, fields: [{ column: "sample_name", before, after }] });
+    const ctx = { report, records: [], changeSet: { updates: [update(2, "Caf\u00e9", "Cafe\u0301"), update(3, "a  b", "a b "), update(4, "x", "y")] } };
+    new SdfValidator({})._warnSuspiciousEdits(ctx);
+    assert.deepEqual(report.warnings, ["invisible_edit", "invisible_edit"]);
+});
