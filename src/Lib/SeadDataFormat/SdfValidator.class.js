@@ -163,7 +163,6 @@ export default class SdfValidator {
             database_name: meta.get("database_name"),
             database_release: meta.get("database_release"),
             sdf_version: meta.get("sdf_version"),
-            follows_change: meta.get("follows_change") || null,
         };
 
         //checksum over the machine sheets exactly as read (§9)
@@ -213,7 +212,7 @@ export default class SdfValidator {
             return;
         }
 
-        //Sqitch: already submitted, follow-up too early, what changed since export
+        //Sqitch: already submitted, and what changed since export
         await this._checkSqitch(ctx);
         if (report.hasErrors()) return;
 
@@ -290,17 +289,7 @@ export default class SdfValidator {
                     const c = res.rows[0];
                     report.error(1, "already_submitted",
                         `The changes in this workbook were already deployed as ${c.project}:${c.change}. ` +
-                        "Submitting it again would repeat them. Use the follow-up workbook that came with that change request, or start from a fresh export.",
-                        { sheet: "_sdf_meta" });
-                }
-            }
-            const follows = meta.get("follows_change");
-            if (follows) {
-                const res = await client.query("select 1 from sqitch.changes where change = $1", [follows]);
-                if (!res.rows.length) {
-                    report.error(1, "followup_too_early",
-                        `This follow-up workbook continues change request ${follows}, which is not deployed to this database yet. ` +
-                        "Upload it again once that change request, and any suggestions it depends on, have been released.",
+                        "Submitting it again would repeat them. Start from a fresh export.",
                         { sheet: "_sdf_meta" });
                 }
             }
@@ -1157,7 +1146,7 @@ export default class SdfValidator {
             }
             const update = { table: r.table, sheet: r.sheet, row: r.row, id: r.pk.value, fields, deferred, before: this._plain(live) };
             if (!fields.length) {
-                //only values in proposed columns: nothing to apply now, carried by the follow-up
+                //only values in proposed columns: nothing to apply now; reported with the proposal
                 cs.unchanged++;
                 if (Object.keys(deferred).length) cs.blocked.push({ ...update, reason: "proposed_columns_only" });
                 continue;

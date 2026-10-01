@@ -1,9 +1,7 @@
 import crypto from "crypto";
 import JSZip from "jszip";
 import SdfValidator from "./SdfValidator.class.js";
-import { addQuotePrefix } from "./SdfRenderer.class.js";
-import { plainRows } from "./SdfWorkbookReader.js";
-import { SDF_VERSION, SdfError, quoteIdent, rowHash, canonicalCsv, sha256Hex } from "./SdfCommon.js";
+import { SDF_VERSION, SdfError, quoteIdent } from "./SdfCommon.js";
 
 /**
  * Import stage 5 (spec §10): renders a validated change set as a Sqitch change
@@ -19,7 +17,10 @@ import { SDF_VERSION, SdfError, quoteIdent, rowHash, canonicalCsv, sha256Hex } f
  *   <name>/report.json         the full stage 1-4 report
  *   <name>/source.xlsx         the workbook as uploaded
  *   <name>/proposals/*.md      one draft issue per proposal
- *   <name>/followup.xlsx       only if entries were held back
+ *
+ * Entries that depend on a proposal are left out and listed in report.json.
+ * There is no follow-up workbook: once the proposals are released, the curator
+ * exports a fresh workbook and makes those edits there.
  *
  * Everything is computed inside the validator's read-only snapshot, so the
  * before-images the guards check and the ids chosen for new rows describe the
@@ -78,11 +79,6 @@ export default class SdfChangeRequest {
 
         const proposalFiles = this._proposalIssues(ctx, name, exportId);
         for (const [path, text] of proposalFiles) files[`${dir}/proposals/${path}`] = text;
-
-        const needsFollowup = cs.blocked.length > 0 || cs.proposals.length > 0;
-        if (needsFollowup && dataChanges) {
-            files[`${dir}/followup.xlsx`] = await this._followup(ctx, plan, ids, name);
-        }
 
         const note = `SDF import of site${siteIds.length === 1 ? "" : "s"} ${siteIds.join(", ")}: ` +
             `${plan.inserts.length} insert${plan.inserts.length === 1 ? "" : "s"}, ${plan.updates.length} update${plan.updates.length === 1 ? "" : "s"}, ` +
@@ -418,7 +414,7 @@ export default class SdfChangeRequest {
                 ? `              ${report.database_changes_since_export.length} change(s) were deployed between export and generation; see report.json.`
                 : "              No changes were deployed between export and generation.",
             ctx.changeSet.conflicts.length ? `              ${count(ctx.changeSet.conflicts.length, "conflicting row")} left out; see report.json.` : null,
-            ctx.changeSet.blocked.length ? `              ${count(ctx.changeSet.blocked.length, "row")} waiting on proposals left out; see followup.xlsx.` : null,
+            ctx.changeSet.blocked.length ? `              ${count(ctx.changeSet.blocked.length, "row")} waiting on proposals left out; see report.json.` : null,
         ].filter(l => l !== null).map(l => `  ${l}`.replace(/\*\//g, "* /"));
         return ["/" + "*".repeat(112), ...lines, "*".repeat(113) + "/"].join("\n");
     }
@@ -437,6 +433,7 @@ export default class SdfChangeRequest {
             "### Deletes", byTable(plan.deletes), "",
             ctx.changeSet.conflicts.length ? `${ctx.changeSet.conflicts.length} conflicting row(s) were left out.` : "",
             ctx.changeSet.proposals.length ? `${ctx.changeSet.proposals.length} proposal(s) are filed separately; see \`proposals/\`.` : "",
+            ctx.changeSet.blocked.length ? `${ctx.changeSet.blocked.length} row(s) depending on proposals were left out; see \`report.json\`.` : "",
             report.database_changes_since_export.length ? `${report.database_changes_since_export.length} change request(s) were deployed between export and generation.` : "",
         ].filter((l, i, a) => l !== "" || a[i - 1] !== "").join("\n");
     }
@@ -489,81 +486,10 @@ export default class SdfChangeRequest {
                 ];
             }
             const text = [`# ${title}`, "", `Labels: ${label}`, "", ...body, "",
-                `Source: SDF export \`${exportId}\`, change request \`${name}\`. Rows that depend on this proposal were left out of that change request and are carried in its followup.xlsx.`, ""].join("\n");
+                `Source: SDF export \`${exportId}\`, change request \`${name}\`. Changes that depend on this proposal were left out of that change request and are listed in its report.json; once this is released, the curator makes them again in a fresh export.`, ""].join("\n");
             out.push([`${num}-${slug(title)}.md`, text]);
         });
         return out;
-    }
-
-    //------------------------------------------------------------ follow-up
-
-    /**
-     * §10: the uploaded workbook with every token this change request assigns
-     * replaced by its id, labels that were resolved written in as ids, and a
-     * baseline describing the state after deploy. Uploaded once the change
-     * request and the proposals it waited on are released, it carries exactly
-     * the held-back part: everything already applied compares equal to live.
-     */
-    async _followup(ctx, plan, ids, name) {
-        const { schema, wb } = ctx;
-        const inserted = new Map(plan.inserts.map(i => [`${i.sheet}!${i.row}`, i]));
-        const updated = new Map(plan.updates.map(u => [`${u.sheet}!${u.row}`, u]));
-        const baselineAdds = [];
-        const baselineChanges = new Map();
-
-        for (const r of ctx.records) {
-            const table = schema.table(r.table);
-            const row = r.binding.ws.getRow(r.row);
-            //tokens of applied inserts become ids, wherever they appear
-            for (const [key, address] of r.cells) {
-                const v = r.values.get(key);
-                if (typeof v !== "string" || !TOKEN.test(v)) continue;
-                const target = key === table.pk ? table.name : (table.fks.find(f => f.column === key) || {}).parent;
-                const id = target && ids.get(target) && ids.get(target).get(v);
-                if (id) row.getCell(r.binding.data.get(key)).value = id;
-            }
-            //labels resolved for an applied row are written in as ids
-            if (r.resolvedByLabel && (inserted.has(`${r.sheet}!${r.row}`) || updated.has(`${r.sheet}!${r.row}`))) {
-                for (const key of r.resolvedByLabel) {
-                    const v = r.values.get(key);
-                    const target = (table.fks.find(f => f.column === key) || {}).parent;
-                    const id = typeof v === "number" ? v : ids.get(target)?.get(v);
-                    if (id) row.getCell(r.binding.data.get(key)).value = id;
-                }
-            }
-            const baseKeys = r.binding.baseKeys.length ? r.binding.baseKeys : [...r.binding.data.keys()];
-            const after = key => {
-                const v = r.values.get(key);
-                if (typeof v === "string" && TOKEN.test(v)) {
-                    const target = key === table.pk ? table.name : (table.fks.find(f => f.column === key) || {}).parent;
-                    return ids.get(target)?.get(v) ?? v;
-                }
-                return v;
-            };
-            const ins = inserted.get(`${r.sheet}!${r.row}`);
-            if (ins) baselineAdds.push([r.table, ins.id, rowHash(baseKeys.map(after)), "false"]);
-            if (updated.has(`${r.sheet}!${r.row}`)) baselineChanges.set(`${r.table}:${r.pk.value}`, rowHash(baseKeys.map(after)));
-        }
-
-        const baseline = wb.getWorksheet("_sdf_baseline");
-        for (let i = 2; i <= baseline.rowCount; i++) {
-            const row = baseline.getRow(i);
-            const key = `${row.getCell(1).value}:${row.getCell(2).value}`;
-            if (baselineChanges.has(key)) row.getCell(3).value = baselineChanges.get(key);
-        }
-        for (const add of baselineAdds) baseline.addRow(add);
-
-        const metaWs = wb.getWorksheet("_sdf_meta");
-        const setMeta = (key, value) => {
-            for (let i = 2; i <= metaWs.rowCount; i++) {
-                if (metaWs.getRow(i).getCell(1).value === key) { metaWs.getRow(i).getCell(2).value = value; return; }
-            }
-            metaWs.addRow([key, value]);
-        };
-        setMeta("export_id", crypto.randomUUID());
-        setMeta("follows_change", name);
-        setMeta("checksum", sha256Hex(canonicalCsv(plainRows(wb.getWorksheet("_sdf_columns"))) + canonicalCsv(plainRows(baseline))));
-        return await addQuotePrefix(Buffer.from(await wb.xlsx.writeBuffer()));
     }
 }
 
