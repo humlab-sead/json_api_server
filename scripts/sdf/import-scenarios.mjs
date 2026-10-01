@@ -100,6 +100,13 @@ console.log(`Scenario A: a valid set of edits on site ${SITE}`);
     ps.getRow(2).getCell(col(ps, "sample_name")).value = "0123 edited";
     //text that starts with NEW- is plain text outside ID columns (H5)
     ps.getRow(6).getCell(col(ps, "sample_name")).value = "NEW-found layer";
+    //a duplicated method name, picked from the dropdown in its unique form (M10)
+    const sg = wb.getWorksheet("sample_groups");
+    const lists = plainRows(wb.getWorksheet("_sdf_lists"));
+    const methodCol = lists[0].indexOf("methods");
+    const suffixed = lists.slice(1).map(r => r[methodCol]).find(v => v === "C14 Conventional [151]");
+    sg.getRow(2).getCell(col(sg, "method_id")).value = null;
+    sg.getRow(2).getCell(col(sg, "method_id:label")).value = suffixed;
     //a UUID retyped in upper case is the same value, not an edit (H8)
     const sitesWs = wb.getWorksheet("sites");
     const uuidCell = sitesWs.getRow(2).getCell(col(sitesWs, "site_uuid"));
@@ -132,7 +139,9 @@ console.log(`Scenario A: a valid set of edits on site ${SITE}`);
     const r = await validate(wb);
     const cs = r.change_set || {};
     check("validates", r.ok === true, r.errors);
-    check("three updates: two sample names, and the type chosen by label", cs.updates?.length === 3 &&
+    check("the dropdown offers duplicated labels in a unique form", suffixed === "C14 Conventional [151]", lists.slice(1).map(r => r[methodCol]).filter(v => /C14 Conv/.test(v || "")));
+    check("the suffixed label resolves to its method", cs.updates?.some(u => u.table === "tbl_sample_groups" && u.fields.some(f => f.column === "method_id" && f.after === 151)), cs.updates);
+    check("four updates: two sample names, a type and a method chosen by label", cs.updates?.length === 4 &&
         cs.updates.some(u => u.fields.some(f => f.column === "sample_name" && f.after === "0123 edited")) &&
         cs.updates.some(u => u.fields.some(f => f.column === "sample_name" && f.after === "NEW-found layer")) &&
         cs.updates.some(u => u.fields.some(f => f.column === "sample_type_id" && f.after === otherId)), cs.updates);
@@ -199,6 +208,11 @@ console.log(`Scenario C: referential errors on site ${SITE}`);
     ps.getRow(3).getCell(col(ps, "sample_type_id:label")).value = "No such sample type";
     //an id that does not exist
     ps.getRow(4).getCell(col(ps, "sample_type_id")).value = 99999999;
+    //a label changed while the id was left alone (H4)
+    const types = wb.getWorksheet("sample_types");
+    const typeNow = ps.getRow(5).getCell(col(ps, "sample_type_id")).value;
+    const tOther = firstRowWhere(types, row => row.getCell(col(types, "sample_type_id")).value !== typeNow);
+    ps.getRow(5).getCell(col(ps, "sample_type_id:label")).value = types.getRow(tOther).getCell(col(types, "type_name")).value;
     //a row copied in from another site's workbook
     const other = await exportWorkbook(SHARED_SITE);
     const otherPs = other.getWorksheet("physical_samples");
@@ -206,10 +220,10 @@ console.log(`Scenario C: referential errors on site ${SITE}`);
     ps.getRow(nr).getCell(col(ps, "physical_sample_id")).value = otherPs.getRow(2).getCell(col(otherPs, "physical_sample_id")).value;
     ps.getRow(nr).getCell(col(ps, "sample_group_id")).value = ps.getRow(2).getCell(col(ps, "sample_group_id")).value;
     ps.getRow(nr).getCell(col(ps, "sample_name")).value = "copied";
-    ps.getRow(nr).getCell(col(ps, "sample_type_id")).value = ps.getRow(5).getCell(col(ps, "sample_type_id")).value;
+    ps.getRow(nr).getCell(col(ps, "sample_type_id")).value = typeNow;
     const r = await validate(wb);
     check("rejected at stage 3", r.ok === false && r.stage_reached === 3, { stage: r.stage_reached, codes: codes(r) });
-    for (const code of ["unknown_token", "label_not_found", "fk_not_found", "row_not_in_bundle"]) check(`reports ${code}`, codes(r).includes(code), codes(r));
+    for (const code of ["unknown_token", "label_not_found", "fk_not_found", "row_not_in_bundle", "label_mismatch"]) check(`reports ${code}`, codes(r).includes(code), codes(r));
 }
 
 console.log(`Scenario D: three-way comparison on site ${SITE} (baseline altered to simulate a database change)`);

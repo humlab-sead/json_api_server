@@ -270,7 +270,8 @@ export default class SdfExporter {
     /**
      * §5: the display label of every row a foreign key in the workbook points
      * at, plus every row of each fully shipped reference table (those feed the
-     * dropdowns). One query per target table and column.
+     * dropdowns), with colliding labels suffixed by their key. One query per
+     * target table and column.
      * Returns Map("table.column" -> Map(String(key) -> label)).
      */
     async _loadLabels(client, schema, owned, referenced) {
@@ -306,6 +307,13 @@ export default class SdfExporter {
                  where t.${quoteIdent(column)} = any($1::${arrayType(schema, table, column)})`,
                 [[...values]]);
             for (const row of res.rows) map.set(row.k, row.label);
+            //§5: labels that collide are made unique by their key, "Pollen analysis [118]",
+            //so a dropdown never offers a choice that resolves to two rows
+            const seen = new Map();
+            for (const label of map.values()) seen.set(label, (seen.get(label) || 0) + 1);
+            for (const [k, label] of map) {
+                if (label !== null && seen.get(label) > 1) map.set(k, `${label} [${k}]`);
+            }
         }
         return labels;
     }

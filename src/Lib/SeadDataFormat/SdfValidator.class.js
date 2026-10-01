@@ -27,6 +27,8 @@ const STRICT_INTEGER = /^[+-]?\d+$/;
 const STRICT_DECIMAL = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
 const COMMA_DECIMAL = /^[+-]?\d+,\d+$/;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+//§5: a dropdown label made unique by its key, "Pollen analysis [118]"
+const SUFFIXED_LABEL = /^(.*) \[([^\]]+)\]$/s;
 const MAX_REPORTED_PER_CODE = 200;
 const INTEGER_RANGE = {
     int2: [-32768, 32767],
@@ -865,75 +867,111 @@ export default class SdfValidator {
     }
 
     /**
-     * §7 foreign-key resolution: an integer wins; a token must be defined in the
-     * target table's sheet; a blank key with a label is resolved by the label,
-     * and an unmatched or ambiguous label is an error.
+     * §7 foreign-key resolution. A filled key wins; a token must be defined on
+     * the target's sheet; a blank key with a label is resolved by the label, and
+     * an unmatched or ambiguous label is an error (§5). Labels resolve for keys
+     * that reference a column other than the primary key too (qualifier symbols).
+     *
+     * A label that disagrees with a filled key is an error when it names another
+     * row: the dropdowns sit on the label columns, so picking a value there and
+     * leaving the ID alone must not be silently ignored. A label that names no
+     * row at all is reported and the key is used.
+     *
+     * Labels pointing at site data match only rows of this workbook's sites
+     * (§3); a dropdown label made unique with " [id]" (§5) is accepted too.
      */
     async _resolveForeignKeys(ctx) {
         const { report, schema, client } = ctx;
-        const existence = new Map(); //"table.column" -> Set(values) to check
-        const labelLookups = new Map(); //target table -> Set(label)
+        const add = (m, key, v) => { if (!m.has(key)) m.set(key, new Set()); m.get(key).add(v); };
 
+        //1. the rows filled-in keys point at, with their labels
+        const pointed = new Map(); //"table.column" -> Set(values)
         for (const r of ctx.records) {
-            const table = schema.table(r.table);
-            for (const fk of table.fks) {
-                if (!r.values.has(fk.column)) continue;
+            for (const fk of schema.table(r.table).fks) {
                 const value = r.values.get(fk.column);
-                const target = schema.table(fk.parent);
-                const pkTarget = target.pk === fk.parentColumn;
-                if (value === null || value === undefined) {
-                    const label = r.labels.get(fk.column);
-                    if (label && pkTarget) {
-                        if (!labelLookups.has(fk.parent)) labelLookups.set(fk.parent, new Set());
-                        labelLookups.get(fk.parent).add(label.text);
-                    }
-                    continue;
-                }
-                if (typeof value === "string" && TOKEN.test(value) && pkTarget) continue; //checked below
-                const key = `${fk.parent}.${fk.parentColumn}`;
-                if (!existence.has(key)) existence.set(key, new Set());
-                existence.get(key).add(value);
+                if (value === null || value === undefined) continue;
+                if (typeof value === "string" && TOKEN.test(value) && schema.table(fk.parent).pk === fk.parentColumn) continue;
+                add(pointed, `${fk.parent}.${fk.parentColumn}`, value);
             }
         }
-
-        const existing = new Map();
-        for (const [key, values] of existence) {
+        const live = new Map(); //"table.column" -> Map(String(value) -> label)
+        for (const [key, values] of pointed) {
             const [tableName, column] = key.split(".");
             const table = schema.table(tableName);
             const res = await client.query(
-                `select t.${quoteIdent(column)}::text as v from public.${quoteIdent(tableName)} t
+                `select t.${quoteIdent(column)}::text as k, (${table.labelExpression})::text as label
+                 from public.${quoteIdent(tableName)} t
                  where t.${quoteIdent(column)} = any($1::${arrayType(schema, table, column)})`, [[...values]]);
-            existing.set(key, new Set(res.rows.map(r => r.v)));
+            live.set(key, new Map(res.rows.map(row => [row.k, row.label])));
         }
 
-        const labelMatches = new Map(); //target -> Map(label -> [ids])
-        for (const [tableName, labels] of labelLookups) {
+        //2. labels to look up: on blank keys, and where a label disagrees with its key
+        const sameLabel = (text, k, liveLabel) => {
+            if (text === liveLabel) return true;
+            const m = SUFFIXED_LABEL.exec(text);
+            return !!m && m[1] === liveLabel && m[2] === k;
+        };
+        const lookups = new Map(); //"table.column" -> Set(label text)
+        for (const r of ctx.records) {
+            for (const fk of schema.table(r.table).fks) {
+                const label = r.labels.get(fk.column);
+                if (!label || !r.values.has(fk.column)) continue;
+                const value = r.values.get(fk.column);
+                const key = `${fk.parent}.${fk.parentColumn}`;
+                if (value === undefined) continue;
+                if (value !== null) {
+                    const liveLabel = live.get(key)?.get(String(value));
+                    if (liveLabel === undefined || sameLabel(label.text, String(value), liveLabel)) continue;
+                }
+                else if (typeof value === "string" && TOKEN.test(value)) continue;
+                add(lookups, key, label.text);
+                const m = SUFFIXED_LABEL.exec(label.text);
+                if (m) add(lookups, key, m[1]);
+            }
+        }
+        const bundleIds = this._bundleIds(ctx);
+        const byLabel = new Map(); //"table.column" -> Map(label -> [{ k, id }])
+        for (const [key, texts] of lookups) {
+            const [tableName, column] = key.split(".");
             const table = schema.table(tableName);
+            const owned = schema.roleOf(tableName) === "owned";
             const res = await client.query(
-                `select (${table.labelExpression})::text as label, t.${quoteIdent(table.pk)} as id
-                 from public.${quoteIdent(tableName)} t where (${table.labelExpression})::text = any($1::text[])`, [[...labels]]);
+                `select t.${quoteIdent(column)}::text as k, t.${quoteIdent(table.pk)}::text as id, (${table.labelExpression})::text as label
+                 from public.${quoteIdent(tableName)} t
+                 where (${table.labelExpression})::text = any($1::text[])` +
+                (owned ? ` and t.${quoteIdent(table.pk)} = any($2::${arrayType(schema, table, table.pk)})` : ""),
+                owned ? [[...texts], [...(bundleIds.get(tableName) || [])]] : [[...texts]]);
             const map = new Map();
             for (const row of res.rows) {
                 if (!map.has(row.label)) map.set(row.label, []);
-                map.get(row.label).push(Number(row.id));
+                map.get(row.label).push({ k: row.k, id: row.id });
             }
-            labelMatches.set(tableName, map);
+            byLabel.set(key, map);
         }
+        const matches = (key, text) => {
+            const map = byLabel.get(key) || new Map();
+            const exact = map.get(text) || [];
+            if (exact.length) return exact;
+            const m = SUFFIXED_LABEL.exec(text);
+            return m ? (map.get(m[1]) || []).filter(x => x.k === m[2]) : [];
+        };
 
+        //3. resolve and report
         for (const r of ctx.records) {
             const table = schema.table(r.table);
             for (const fk of table.fks) {
                 if (!r.values.has(fk.column)) continue;
                 const value = r.values.get(fk.column);
                 const target = schema.table(fk.parent);
+                const key = `${fk.parent}.${fk.parentColumn}`;
                 const where = { sheet: r.sheet, cell: r.cells.get(fk.column) };
+                const label = r.labels.get(fk.column);
                 if (value === undefined) continue; //coercion already failed
                 if (value === null) {
-                    const label = r.labels.get(fk.column);
-                    if (!label || target.pk !== fk.parentColumn) continue;
-                    const live = (labelMatches.get(fk.parent) || new Map()).get(label.text) || [];
-                    const fresh = this._matchNewRowsByLabel(ctx, target, label.text);
-                    const count = live.length + fresh.length;
+                    if (!label) continue;
+                    const found = matches(key, label.text);
+                    const fresh = target.pk === fk.parentColumn ? this._matchNewRowsByLabel(ctx, target, label.text) : [];
+                    const count = found.length + fresh.length;
                     const labelWhere = { sheet: r.sheet, cell: label.address };
                     if (count === 0) {
                         report.error(3, "label_not_found", `${label.address}: no ${target.sheet} is labelled "${label.text}". Pick a value from the list, or fill in ${fk.column}.`, labelWhere);
@@ -941,10 +979,12 @@ export default class SdfValidator {
                     else if (count > 1) {
                         report.error(3, "label_ambiguous",
                             `${label.address}: "${label.text}" matches ${count} ${target.sheet} rows` +
-                            (live.length ? ` (IDs ${live.slice(0, 5).join(", ")}${live.length > 5 ? ", …" : ""})` : "") + `. Fill in ${fk.column} instead.`, labelWhere);
+                            (found.length ? ` (${fk.parentColumn} ${found.slice(0, 5).map(x => x.k).join(", ")}${found.length > 5 ? ", …" : ""})` : "") +
+                            `. Fill in ${fk.column} instead.`, labelWhere);
                     }
                     else {
-                        r.values.set(fk.column, live.length ? live[0] : fresh[0]);
+                        const column = schema.column(table, fk.column);
+                        r.values.set(fk.column, found.length ? (column.valueKind === "integer" ? Number(found[0].k) : found[0].k) : fresh[0]);
                         r.resolvedByLabel = r.resolvedByLabel || new Set();
                         r.resolvedByLabel.add(fk.column);
                     }
@@ -959,12 +999,39 @@ export default class SdfValidator {
                 }
                 //rows pointing at a row marked delete are reported once, per deleted
                 //row, by _checkDeletes
-                const ok = existing.get(`${fk.parent}.${fk.parentColumn}`);
-                if (!ok || !ok.has(String(value))) {
+                const liveLabel = live.get(key)?.get(String(value));
+                if (liveLabel === undefined) {
                     report.error(3, "fk_not_found", `${where.cell}: ${fk.column} = ${value}, but there is no such ${target.sheet} row.`, where);
+                    continue;
+                }
+                if (!label || sameLabel(label.text, String(value), liveLabel)) continue;
+                const named = matches(key, label.text);
+                const labelWhere = { sheet: r.sheet, cell: label.address };
+                if (named.length) {
+                    report.error(3, "label_mismatch",
+                        `${label.address}: the label says "${label.text}", but ${fk.column} ${value} is "${liveLabel}". ` +
+                        `To use the label, clear ${fk.column} (${where.cell}); otherwise put the label back.`, labelWhere);
+                }
+                else {
+                    report.warning(3, "label_ignored",
+                        `${label.address}: "${label.text}" is not a ${target.sheet} label; ${fk.column} ${value} ("${liveLabel}") was used.`, labelWhere);
                 }
             }
         }
+    }
+
+    /** Primary keys of every row this workbook's baseline holds, by table. */
+    _bundleIds(ctx) {
+        if (ctx.bundleIdsByTable) return ctx.bundleIdsByTable;
+        const out = new Map();
+        for (const key of ctx.baseline.keys()) {
+            const i = key.lastIndexOf(":");
+            const table = key.slice(0, i);
+            if (!out.has(table)) out.set(table, []);
+            out.get(table).push(Number(key.slice(i + 1)));
+        }
+        ctx.bundleIdsByTable = out;
+        return out;
     }
 
     /** New rows of a table whose label is a plain column, matched by that column. */
