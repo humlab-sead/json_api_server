@@ -32,7 +32,7 @@ async function diff({ exported, workbook, live, proposed = {}, baseKeys = KEYS, 
     };
     const ctx = {
         report,
-        schema: { table: () => TABLE },
+        schema: { table: () => TABLE, tables: new Map([[TABLE.name, TABLE]]) },
         records: [record],
         live: new Map([[TABLE.name, new Map(live ? [[live.sample_id, live]] : [])]]),
         baseline: new Map([[`${TABLE.name}:${exported.sample_id}`, { hash: rowHash(baseKeys.map(k => exported[k] ?? null)), shared: false }]]),
