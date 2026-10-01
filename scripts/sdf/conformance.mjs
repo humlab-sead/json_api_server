@@ -30,6 +30,9 @@ import { rowHash } from "../../src/Lib/SeadDataFormat/SdfCommon.js";
 
 const args = parseArgs(process.argv.slice(2));
 const base = args.base || `http://localhost:${process.env.API_PORT || 8484}`;
+//the import endpoints ask for the server's protected-endpoint password
+const env = process.env;
+const AUTH = { Authorization: `Basic ${Buffer.from(`${env.PROTECTED_ENDPOINTS_USER ?? env.JAS_PROTECTED_ENDPOINTS_USER ?? "sead"}:${env.PROTECTED_ENDPOINTS_PASS ?? env.JAS_PROTECTED_ENDPOINTS_PASS ?? ""}`).toString("base64")}` };
 
 async function siteList() {
     if (args.sites) return args.sites.split(",").map(Number);
@@ -101,7 +104,7 @@ async function checkSite(siteId) {
     if (!args.file && missingQuotePrefix) note(`${missingQuotePrefix} Text cell styles without quotePrefix`);
 
     if (args.import) {
-        const vr = await fetch(`${base}/sdf/validate`, { method: "POST", body: buffer });
+        const vr = await fetch(`${base}/sdf/validate`, { method: "POST", headers: AUTH, body: buffer });
         const report = await vr.json();
         result.import = report.summary || null;
         if (!report.ok) note(`import refused: ${JSON.stringify(report.errors.slice(0, 3))}`);

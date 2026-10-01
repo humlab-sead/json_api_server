@@ -7,6 +7,8 @@
  *
  * Usage, from the json_api_server directory (inside the container):
  *   node scripts/sdf/import-scenarios.mjs [--base http://localhost:8484] [--site 1] [--shared-site 321]
+ * The import endpoints' password is read from PROTECTED_ENDPOINTS_USER / _PASS (as in
+ * the container), or JAS_PROTECTED_ENDPOINTS_USER / _PASS (as in sead-deployment's .env).
  * Exits non-zero if any scenario fails.
  */
 import ExcelJS from "exceljs";
@@ -16,6 +18,10 @@ import { plainRows, readCell } from "../../src/Lib/SeadDataFormat/SdfWorkbookRea
 const args = Object.fromEntries(process.argv.slice(2).reduce((acc, a, i, all) =>
     (a.startsWith("--") ? [...acc, [a.slice(2), all[i + 1]]] : acc), []));
 const base = args.base || "http://localhost:8484";
+//the import endpoints ask for the server's protected-endpoint password: the
+//container's PROTECTED_ENDPOINTS_*, or sead-deployment's JAS_PROTECTED_ENDPOINTS_*
+const env = process.env;
+const AUTH = { Authorization: `Basic ${Buffer.from(`${env.PROTECTED_ENDPOINTS_USER ?? env.JAS_PROTECTED_ENDPOINTS_USER ?? "sead"}:${env.PROTECTED_ENDPOINTS_PASS ?? env.JAS_PROTECTED_ENDPOINTS_PASS ?? ""}`).toString("base64")}` };
 const SITE = Number(args.site || 1);
 const SHARED_SITE = Number(args["shared-site"] || 321);
 const DENDRO_SITE = Number(args["dendro-site"] || 4129);
@@ -38,7 +44,7 @@ async function validate(wb) {
     const buffer = Buffer.from(await wb.xlsx.writeBuffer());
     const res = await fetch(`${base}/sdf/validate`, {
         method: "POST",
-        headers: { "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
+        headers: { ...AUTH, "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
         body: buffer,
     });
     return await res.json();
@@ -324,7 +330,7 @@ console.log("Scenario F: structural refusals");
     r = await validate(wb3);
     check("edited _sdf_meta: checksum_mismatch", codes(r).includes("checksum_mismatch"), codes(r));
 
-    const res = await fetch(`${base}/sdf/validate`, { method: "POST", headers: { "Content-Type": "text/csv" }, body: "site_id,site_name\n1,x\n" });
+    const res = await fetch(`${base}/sdf/validate`, { method: "POST", headers: { ...AUTH, "Content-Type": "text/csv" }, body: "site_id,site_name\n1,x\n" });
     r = await res.json();
     check("CSV upload: csv_not_accepted", codes(r).includes("csv_not_accepted"), r);
 }

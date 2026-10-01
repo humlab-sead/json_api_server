@@ -25,8 +25,9 @@ import { SDF_VERSION } from "../Lib/SeadDataFormat/SdfCommon.js";
  * Nothing here writes to any database. An import ends in a Sqitch change
  * request for sead_change_control (spec §10); SDF never applies changes itself.
  *
- * The import endpoints are for SEAD's data managers: the router puts them behind
- * basic auth. SDF jobs hold whole workbooks in memory on the server that also
+ * The import endpoints are for SEAD's data managers, behind the server's basic
+ * auth for protected endpoints (PROTECTED_ENDPOINTS_USER / _PASS). SDF jobs hold
+ * whole workbooks in memory on the server that also
  * serves the public browser, so at most SDF_MAX_JOBS run at once, a few more
  * wait, and the rest are turned away with 503.
  */
@@ -119,7 +120,7 @@ class SeadDataFormat {
             await this._job(res, () => this._runExport(req, res, ids));
         });
 
-        app.post("/sdf/validate", async (req, res) => {
+        app.post("/sdf/validate", this.app.checkBasicAuth, async (req, res) => {
             try {
                 const buffer = await this._readUpload(req);
                 await this._job(res, async () => {
@@ -132,7 +133,7 @@ class SeadDataFormat {
             }
         });
 
-        app.post("/sdf/change-request", async (req, res) => {
+        app.post("/sdf/change-request", this.app.checkBasicAuth, async (req, res) => {
             try {
                 const buffer = await this._readUpload(req);
                 const result = await this._job(res, () => this.changeRequest.generate(buffer, { author: this._exportedBy(req) }));
