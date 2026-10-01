@@ -492,21 +492,22 @@ export default class SdfValidator {
                 const cellAt = index => readCell(row.getCell(index));
                 const where = cell => ({ sheet, cell: cell.address });
 
+                const record = {
+                    binding: b, table: table.name, sheet, row: rowNumber,
+                    action: null, values: new Map(), cells: new Map(), labels: new Map(), proposed: new Map(),
+                };
+                const issues = this._sinkFor(report, record);
+
                 //§8: a merged cell reads as blank everywhere but its first cell
                 for (const index of readColumns) {
                     const c = row.getCell(index);
                     if (c.isMerged) {
-                        report.error(2, "merged_cell", `${c.address} is part of merged cells, which hide values. Unmerge them.`, { sheet, cell: c.address });
+                        issues.error(2, "merged_cell", `${c.address} is part of merged cells, which hide values. Unmerge them.`, { sheet, cell: c.address });
                     }
                 }
                 row.eachCell({ includeEmpty: false }, (c, index) => {
                     if (!b.headerIndexes.has(index) && readCell(c).kind !== CELL.BLANK) headerless.add(c.address.replace(/\d+$/, ""));
                 });
-
-                const record = {
-                    binding: b, table: table.name, sheet, row: rowNumber,
-                    action: null, values: new Map(), cells: new Map(), labels: new Map(), proposed: new Map(),
-                };
 
                 let anyData = false;
                 for (const [key, index] of b.data) {
@@ -514,7 +515,7 @@ export default class SdfValidator {
                     record.cells.set(key, cell.address);
                     if (cell.kind !== CELL.BLANK) anyData = true;
                     const column = schema.column(table, key);
-                    const value = this._coerceCell(report, cell, column, keyColumns.has(key), where(cell));
+                    const value = this._coerceCell(issues, cell, column, keyColumns.has(key), where(cell));
                     record.values.set(key, value);
                     if (typeof value === "string" && isNormalisedText(column)) {
                         const k = `${table.name}.${key}`;
@@ -534,7 +535,7 @@ export default class SdfValidator {
                     if (cell.kind === CELL.BLANK) continue;
                     anyData = true;
                     if (cell.kind === CELL.FORMULA || cell.kind === CELL.ERROR) {
-                        report.error(2, "formula", `${cell.address} holds a formula or an error value; data cells must hold values.`, where(cell));
+                        issues.error(2, "formula", `${cell.address} holds a formula or an error value; data cells must hold values.`, where(cell));
                         continue;
                     }
                     record.proposed.set(key, { value: cell.value instanceof Date ? cell.value.toISOString().slice(0, 10) : cell.value, address: cell.address });
@@ -547,7 +548,7 @@ export default class SdfValidator {
                             record.action = "delete";
                         }
                         else {
-                            report.error(2, "bad_action", `_action must be empty or "delete", not ${JSON.stringify(cell.value)}.`, where(cell));
+                            issues.error(2, "bad_action", `_action must be empty or "delete", not ${JSON.stringify(cell.value)}.`, where(cell));
                         }
                     }
                 }
@@ -563,7 +564,7 @@ export default class SdfValidator {
                 record.pk = pk === null || pk === undefined
                     ? { kind: "blank" }
                     : (typeof pk === "string" && TOKEN.test(pk) ? { kind: "token", value: pk } : { kind: "id", value: pk });
-                ctx.records.push(record);
+                if (!record.invalid) ctx.records.push(record);
             });
             for (const letter of headerless) {
                 report.warning(2, "values_without_header",
@@ -602,7 +603,29 @@ export default class SdfValidator {
         }
 
         await this._normalise(ctx, normalise);
+        ctx.records = ctx.records.filter(r => !r.invalid);
         this._checkSupportedOperations(ctx);
+    }
+
+    /**
+     * Where a row's problems go. On site data they are errors. On a shared list
+     * or a read-only legacy sheet, where an edit is only ever a suggestion or is
+     * ignored, they are warnings and the row is left out, so a slip there does
+     * not block the rest of the import.
+     */
+    _sinkFor(report, record) {
+        const role = record.binding.role;
+        if (role === "owned") return report;
+        const note = role === "reference"
+            ? " The row is on a shared list, so it was left out of the suggestions."
+            : " The sheet is read-only, so the row was ignored.";
+        return {
+            error: (stage, code, message, where) => {
+                record.invalid = true;
+                report.warning(stage, code, message + note, where);
+            },
+            warning: (...args) => report.warning(...args),
+        };
     }
 
     /**
@@ -650,7 +673,7 @@ export default class SdfValidator {
                     record.values.set(key, row.canonical);
                     continue;
                 }
-                report.error(2, "bad_format", `${address}: "${text}" is not a valid ${column.pgType}.`, { sheet: record.sheet, cell: address });
+                this._sinkFor(report, record).error(2, "bad_format", `${address}: "${text}" is not a valid ${column.pgType}.`, { sheet: record.sheet, cell: address });
                 record.values.set(key, undefined);
             }
         }
@@ -892,11 +915,12 @@ export default class SdfValidator {
                     { sheet: r.sheet, cell: r.cells.get(schema.table(r.table).pk) });
             }
             else if (!inBaseline && !exists && r.binding.role !== "owned") {
-                report.error(3, "unknown_id", `There is no row ${r.pk.value} in ${r.table}.`, { sheet: r.sheet, cell: r.cells.get(schema.table(r.table).pk) });
+                this._sinkFor(report, r).error(3, "unknown_id", `There is no row ${r.pk.value} in ${r.table}.`, { sheet: r.sheet, cell: r.cells.get(schema.table(r.table).pk) });
             }
         }
 
         await this._resolveForeignKeys(ctx);
+        ctx.records = ctx.records.filter(r => !r.invalid); //shared-list rows with problems, left out
         this._resolveProposedTables(ctx);
         if (report.hasErrors()) return;
         await this._checkAttachment(ctx);
@@ -1005,6 +1029,7 @@ export default class SdfValidator {
         //3. resolve and report
         for (const r of ctx.records) {
             const table = schema.table(r.table);
+            const issues = this._sinkFor(report, r);
             for (const fk of table.fks) {
                 if (!r.values.has(fk.column)) continue;
                 const value = r.values.get(fk.column);
@@ -1020,10 +1045,10 @@ export default class SdfValidator {
                     const count = found.length + fresh.length;
                     const labelWhere = { sheet: r.sheet, cell: label.address };
                     if (count === 0) {
-                        report.error(3, "label_not_found", `${label.address}: no ${target.sheet} is labelled "${label.text}". Pick a value from the list, or fill in ${fk.column}.`, labelWhere);
+                        issues.error(3, "label_not_found", `${label.address}: no ${target.sheet} is labelled "${label.text}". Pick a value from the list, or fill in ${fk.column}.`, labelWhere);
                     }
                     else if (count > 1) {
-                        report.error(3, "label_ambiguous",
+                        issues.error(3, "label_ambiguous",
                             `${label.address}: "${label.text}" matches ${count} ${target.sheet} rows` +
                             (found.length ? ` (${fk.parentColumn} ${found.slice(0, 5).map(x => x.k).join(", ")}${found.length > 5 ? ", …" : ""})` : "") +
                             `. Fill in ${fk.column} instead.`, labelWhere);
@@ -1039,7 +1064,7 @@ export default class SdfValidator {
                 if (typeof value === "string" && TOKEN.test(value) && target.pk === fk.parentColumn) {
                     const defined = ctx.tokens.get(fk.parent);
                     if (!defined || !defined.has(value)) {
-                        report.error(3, "unknown_token", `${where.cell}: ${value} is not defined as a new row on the ${target.sheet} sheet.`, where);
+                        issues.error(3, "unknown_token", `${where.cell}: ${value} is not defined as a new row on the ${target.sheet} sheet.`, where);
                     }
                     continue;
                 }
@@ -1047,19 +1072,19 @@ export default class SdfValidator {
                 //row, by _checkDeletes
                 const liveLabel = live.get(key)?.get(String(value));
                 if (liveLabel === undefined) {
-                    report.error(3, "fk_not_found", `${where.cell}: ${fk.column} = ${value}, but there is no such ${target.sheet} row.`, where);
+                    issues.error(3, "fk_not_found", `${where.cell}: ${fk.column} = ${value}, but there is no such ${target.sheet} row.`, where);
                     continue;
                 }
                 if (!label || keyEdited(r, fk.column, value) || sameLabel(label.text, String(value), liveLabel)) continue;
                 const named = matches(key, label.text);
                 const labelWhere = { sheet: r.sheet, cell: label.address };
                 if (named.length) {
-                    report.error(3, "label_mismatch",
+                    issues.error(3, "label_mismatch",
                         `${label.address}: the label says "${label.text}", but ${fk.column} ${value} is "${liveLabel}". ` +
                         `To use the label, clear ${fk.column} (${where.cell}); otherwise put the label back.`, labelWhere);
                 }
                 else {
-                    report.warning(3, "label_ignored",
+                    issues.warning(3, "label_ignored",
                         `${label.address}: "${label.text}" is not a ${target.sheet} label; ${fk.column} ${value} ("${liveLabel}") was used.`, labelWhere);
                 }
             }

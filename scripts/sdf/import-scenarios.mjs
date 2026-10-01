@@ -352,5 +352,19 @@ console.log(`Scenario G: spreadsheet structures, on site ${SITE}`);
     check("a hyperlink with rich text reads as its text", r.change_set?.updates?.some(u => u.fields.some(f => f.after === "Linked name")), r.change_set?.updates);
 }
 
+console.log(`Scenario H: a slip on a shared list does not block the import, on site ${SITE}`);
+{
+    const wb = await exportWorkbook(SITE);
+    const ps = wb.getWorksheet("physical_samples");
+    ps.getRow(2).getCell(col(ps, "sample_name")).value = "edited alongside";
+    const types = wb.getWorksheet("sample_types");
+    types.getRow(2).getCell(col(types, "type_name")).value = { formula: "A1", result: "x" };
+    const r = await validate(wb);
+    check("valid", r.ok === true, r.errors);
+    check("the shared-list row is reported and left out", (r.warnings || []).some(w => w.code === "formula" && w.sheet === "sample_types"), r.warnings);
+    check("no suggestion is made from it", !r.change_set?.proposals?.some(p => p.table === "tbl_sample_types"), r.change_set?.proposals);
+    check("the site-data edit still goes ahead", r.change_set?.updates?.some(u => u.fields.some(f => f.after === "edited alongside")), r.change_set?.updates);
+}
+
 console.log(failures ? `${failures} check(s) failed.` : "All checks passed.");
 process.exit(failures ? 1 : 0);
