@@ -37,9 +37,12 @@ export function quoteIdent(name) {
 }
 
 /**
- * The canonical form of one value for hashing (§9): NULL and '' are the same,
- * CRLF is compared as LF, and everything else is carried verbatim. Numbers are
- * JSON numbers, which JavaScript serialises as the shortest decimal that
+ * The canonical form of one value for hashing and comparison (§9): NULL and ''
+ * are the same, every line-break form (CRLF, LF CR, a lone CR) is one LF, and
+ * everything else is carried verbatim. Spreadsheet programs rewrite line breaks
+ * in a cell that already has one - LibreOffice folds a lone CR and LF CR into
+ * LF - so only this form can tell an edit from a re-save. Numbers are JSON
+ * numbers, which JavaScript serialises as the shortest decimal that
  * round-trips through an IEEE double.
  */
 export function canonicalValue(value) {
@@ -47,7 +50,7 @@ export function canonicalValue(value) {
         return null;
     }
     if (typeof value === "string") {
-        return value.replace(/\r\n/g, "\n");
+        return value.replace(/\r\n|\n\r|\r/g, "\n");
     }
     return value;
 }
@@ -85,18 +88,32 @@ export function sha256Hex(text) {
 /**
  * Encodes text for a spreadsheet cell so that it survives exactly (§8).
  *
- * XML cannot carry most control characters, and an XML parser folds a raw CR
- * into LF, so a stored value containing either would come back changed. OOXML's
- * own escape, `_xHHHH_`, is what Excel writes for these and decodes on read.
- * A literal `_xHHHH_` already in the text is protected by escaping its
- * underscore as `_x005F_`, which is the same rule Excel applies.
+ * XML cannot carry most control characters, U+FFFE, U+FFFF or unpaired
+ * surrogates, and an XML parser folds a raw CR into LF, so a stored value
+ * containing any of them would come back changed, or make the workbook
+ * unreadable. OOXML's own escape, `_xHHHH_`, is what Excel writes for these and
+ * decodes on read.
+ *
+ * Text that already looks like an escape is protected by writing its
+ * underscore as `_x005F_`. Every underscore followed by x or X and four hex
+ * digits is protected, whatever follows: two escape-like sequences can share an
+ * underscore (`_x005F_x000D_`), and one can be completed by the escape of the
+ * character after it (`_x000D` then a CR), so a narrower rule decodes to
+ * something else.
  */
 export function encodeCellText(text) {
     return text
-        .replace(/_(x[0-9A-Fa-f]{4}_)/g, "_x005F_$1")
-        .replace(/[\x00-\x08\x0B\x0C\x0D\x0E-\x1F\x7F]/g, ch =>
+        .replace(/_(?=[xX][0-9A-Fa-f]{4})/g, "_x005F_")
+        .replace(/[\x00-\x08\x0B\x0C\x0D\x0E-\x1F\x7F\uFFFE\uFFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, ch =>
             `_x${ch.charCodeAt(0).toString(16).toUpperCase().padStart(4, "0")}_`);
 }
+
+/**
+ * Text that looks like an OOXML escape. LibreOffice's own writer mis-encodes
+ * overlapping sequences of this kind (§8), so a changed value containing one is
+ * worth a second look.
+ */
+export const ESCAPE_LIKE = /_[xX][0-9A-Fa-f]{4}/;
 
 /**
  * Significant digits in a decimal string as PostgreSQL renders numeric: no

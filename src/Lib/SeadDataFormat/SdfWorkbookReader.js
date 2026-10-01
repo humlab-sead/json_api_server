@@ -26,6 +26,10 @@ export const CELL = {
  * before parsing. The importer never reads them, and ExcelJS's reader expands a
  * validated range into one entry per cell, so a curator who extends a dropdown
  * to a whole column would otherwise make the file unreadable.
+ *
+ * Escapes are decoded case-insensitively (§8): LibreOffice writes `_x000b_`
+ * where Excel writes `_x000B_`, and ExcelJS only decodes the latter, so the hex
+ * of every escape is upper-cased first, in one left-to-right pass.
  */
 export async function loadWorkbook(buffer) {
     const looksLikeZip = buffer.length > 4 && buffer[0] === 0x50 && buffer[1] === 0x4b;
@@ -51,13 +55,17 @@ export async function loadWorkbook(buffer) {
     }
 
     for (const path of Object.keys(zip.files)) {
-        if (!/^xl\/worksheets\/[^/]+\.xml$/.test(path)) continue;
+        const isSheet = /^xl\/worksheets\/[^/]+\.xml$/.test(path);
+        if (!isSheet && path !== "xl/sharedStrings.xml") continue;
         const xml = await zip.file(path).async("string");
-        const stripped = xml
-            .replace(/<dataValidations\b[\s\S]*?<\/dataValidations>/g, "")
-            .replace(/<conditionalFormatting\b[\s\S]*?<\/conditionalFormatting>/g, "")
-            .replace(/<extLst\b[\s\S]*?<\/extLst>/g, "");
-        if (stripped !== xml) zip.file(path, stripped);
+        let patched = xml.replace(/_x([0-9A-Fa-f]{4})_/g, (m, hex) => `_x${hex.toUpperCase()}_`);
+        if (isSheet) {
+            patched = patched
+                .replace(/<dataValidations\b[\s\S]*?<\/dataValidations>/g, "")
+                .replace(/<conditionalFormatting\b[\s\S]*?<\/conditionalFormatting>/g, "")
+                .replace(/<extLst\b[\s\S]*?<\/extLst>/g, "");
+        }
+        if (patched !== xml) zip.file(path, patched);
     }
 
     const wb = new ExcelJS.Workbook();

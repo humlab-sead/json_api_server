@@ -1,7 +1,7 @@
 import SdfSchema from "./SdfSchema.class.js";
 import { fetchRows, arrayType } from "./SdfRows.js";
 import { loadWorkbook, readCell, plainValue, plainRows, CELL } from "./SdfWorkbookReader.js";
-import { SdfError, quoteIdent, rowHash, canonicalValue, canonicalCsv, sha256Hex } from "./SdfCommon.js";
+import { SdfError, quoteIdent, rowHash, canonicalValue, canonicalCsv, sha256Hex, ESCAPE_LIKE } from "./SdfCommon.js";
 
 /**
  * Import stages 1-4 (spec §10): structural check, cell coercion, referential
@@ -1162,6 +1162,13 @@ export default class SdfValidator {
             }
             cs.updates.push(update);
             if (baseline && baseline.shared) cs.shared.push({ table: r.table, id: r.pk.value });
+            for (const f of fields) {
+                if (typeof f.after === "string" && ESCAPE_LIKE.test(f.after)) {
+                    report.warning(4, "escape_like_text",
+                        `${r.cells.get(f.column)}: the new value contains text like _x000D_, which LibreOffice can alter when it saves. Check that it reads as intended.`,
+                        { sheet: r.sheet, cell: r.cells.get(f.column) });
+                }
+            }
         }
 
         this._collectProposals(ctx);
