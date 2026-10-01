@@ -18,6 +18,7 @@ const args = Object.fromEntries(process.argv.slice(2).reduce((acc, a, i, all) =>
 const base = args.base || "http://localhost:8484";
 const SITE = Number(args.site || 1);
 const SHARED_SITE = Number(args["shared-site"] || 321);
+const DENDRO_SITE = Number(args["dendro-site"] || 4129);
 
 let failures = 0;
 const check = (name, condition, detail) => {
@@ -364,6 +365,20 @@ console.log(`Scenario H: a slip on a shared list does not block the import, on s
     check("the shared-list row is reported and left out", (r.warnings || []).some(w => w.code === "formula" && w.sheet === "sample_types"), r.warnings);
     check("no suggestion is made from it", !r.change_set?.proposals?.some(p => p.table === "tbl_sample_types"), r.change_set?.proposals);
     check("the site-data edit still goes ahead", r.change_set?.updates?.some(u => u.fields.some(f => f.after === "edited alongside")), r.change_set?.updates);
+}
+
+console.log(`Scenario I: legacy dendro tables, on site ${DENDRO_SITE}`);
+{
+    const wb = await exportWorkbook(DENDRO_SITE);
+    check("tbl_dendro_lookup is a read-only legacy sheet", plainRows(wb.getWorksheet("_sdf_columns")).some(r => r[0] === "dendro_lookup" && r[9] === "reference-deprecated"));
+    //edit a typed value of an analysis value that tbl_dendro also holds
+    const sheet = ["analysis_integer_values", "analysis_numerical_values", "analysis_categorical_values", "analysis_notes"].map(n => wb.getWorksheet(n)).find(Boolean);
+    const valueCol = ["value", "note", "value_type_item_id"].find(k => { try { col(sheet, k); return true; } catch { return false; } });
+    const cell = sheet.getRow(2).getCell(col(sheet, valueCol));
+    cell.value = typeof cell.value === "number" ? cell.value + 1 : `${cell.value} (edited)`;
+    const r = await validate(wb);
+    check("validates", r.ok === true, r.errors);
+    check("the edit is flagged: the legacy copy is not updated", (r.warnings || []).some(w => w.code === "legacy_dendro_copy"), { sheet: sheet.name, warnings: r.warnings });
 }
 
 console.log(failures ? `${failures} check(s) failed.` : "All checks passed.");

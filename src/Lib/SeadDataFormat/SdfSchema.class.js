@@ -42,6 +42,7 @@ const DEPRECATED = {
     tbl_dendro: "excluded",
     tbl_dendro_date_notes: "excluded",
     tbl_dendro_dates: "read-only", //OQ-24, sead_change_control#451
+    tbl_dendro_lookup: "read-only", //a lookup of the legacy tables only: shipped, but never proposed on
 };
 
 //§5: columns the database maintains itself. Exported, never read back.
@@ -319,6 +320,7 @@ export default class SdfSchema {
                 this.referenced.set(table.name, {
                     table,
                     mode: USED_ONLY_REFERENCES.has(table.name) ? "used-only" : "full",
+                    deprecated: DEPRECATED[table.name] || null,
                 });
             }
         }
@@ -374,7 +376,7 @@ export default class SdfSchema {
     }
 
     deprecationOf(tableName) {
-        const entry = this.owned.get(tableName);
+        const entry = this.owned.get(tableName) || this.referenced.get(tableName);
         return entry ? entry.deprecated : null;
     }
 

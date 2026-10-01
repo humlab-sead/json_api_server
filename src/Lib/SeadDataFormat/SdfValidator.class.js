@@ -1481,6 +1481,7 @@ export default class SdfValidator {
         this._collectProposals(ctx);
         this._propagateBlocking(ctx);
         await this._sharedSites(ctx);
+        await this._warnLegacyDendro(ctx);
 
         report.change_set = cs;
         report.summary = {
@@ -1569,6 +1570,46 @@ export default class SdfValidator {
             if (!dependsOnBlocked(cs.updates[i])) continue;
             cs.blocked.push({ ...cs.updates[i], reason: "depends_on_proposal" });
             cs.updates.splice(i, 1);
+        }
+    }
+
+    /**
+     * OQ-24: the legacy table tbl_dendro still holds a copy of dendro
+     * measurements, and SDF edits only the modern store. Until the legacy
+     * tables are retired the copies drift apart, so such edits are flagged.
+     */
+    async _warnLegacyDendro(ctx) {
+        const { report, schema, client } = ctx;
+        if (!schema.tables.has("tbl_dendro") || !schema.tables.has("tbl_analysis_values")) return;
+        const byTable = new Map();
+        for (const u of ctx.changeSet.updates) {
+            if (!byTable.has(u.table)) byTable.set(u.table, []);
+            byTable.get(u.table).push(u);
+        }
+        for (const [tableName, updates] of byTable) {
+            const table = schema.table(tableName);
+            let mirrored;
+            if (tableName === "tbl_analysis_values") {
+                mirrored = "exists (select 1 from public.tbl_dendro d where d.analysis_entity_id = t.analysis_entity_id)";
+            }
+            else {
+                const fk = table.fks.find(f => f.parent === "tbl_analysis_values");
+                if (!fk) continue;
+                mirrored = `exists (select 1 from public.tbl_analysis_values av
+                                    join public.tbl_dendro d on d.analysis_entity_id = av.analysis_entity_id
+                                    where av.analysis_value_id = t.${quoteIdent(fk.column)})`;
+            }
+            const res = await client.query(
+                `select t.${quoteIdent(table.pk)} as id from public.${quoteIdent(tableName)} t
+                 where t.${quoteIdent(table.pk)} = any($1::${arrayType(schema, table, table.pk)}) and ${mirrored}`,
+                [updates.map(u => u.id)]);
+            const ids = new Set(res.rows.map(r => Number(r.id)));
+            for (const u of updates) {
+                if (!ids.has(u.id)) continue;
+                report.warning(4, "legacy_dendro_copy",
+                    `${table.sheet} ${u.id} is a dendro value that the legacy table tbl_dendro also holds. Only the modern store is changed; the legacy copy keeps the old value until it is retired.`,
+                    { sheet: u.sheet, cell: `A${u.row}` });
+            }
         }
     }
 

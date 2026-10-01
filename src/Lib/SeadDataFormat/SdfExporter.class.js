@@ -335,10 +335,10 @@ export default class SdfExporter {
             sheets.push(this._sheet(schema, entry.table, role, null, data.rows, data.shared, labels));
         }
         for (const name of schema.referencedOrder) {
-            const { table, mode } = schema.referenced.get(name);
+            const { table, mode, deprecated } = schema.referenced.get(name);
             const data = referenced.get(name);
             if (mode === "used-only" && data.rows.length === 0) continue;
-            sheets.push(this._sheet(schema, table, "reference", mode, data.rows, new Set(), labels));
+            sheets.push(this._sheet(schema, table, deprecated ? "reference-deprecated" : "reference", mode, data.rows, new Set(), labels));
         }
         return sheets;
     }
