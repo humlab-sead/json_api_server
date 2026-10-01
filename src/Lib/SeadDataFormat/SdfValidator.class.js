@@ -1127,7 +1127,11 @@ export default class SdfValidator {
             const deferred = this._proposedOf(r);
             if (outcome === "none" && !Object.keys(deferred).length) { cs.unchanged++; continue; }
 
-            const fields = outcome === "update-extra" ? diffs.filter(d => !baseKeys.includes(d.column)) : diffs;
+            //rule 2 wins over proposed columns: a row left alone here writes nothing,
+            //even when it carries values in a proposed column
+            const fields = outcome === "none" ? []
+                : outcome === "update-extra" ? diffs.filter(d => !baseKeys.includes(d.column))
+                : diffs;
             if (outcome === "conflict") {
                 cs.conflicts.push({ table: r.table, sheet: r.sheet, row: r.row, id: r.pk.value, reason: "changed_on_both_sides",
                     message: `${table.sheet} ${r.pk.value} was edited in this workbook and also changed in the database after export.`,
