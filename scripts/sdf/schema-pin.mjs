@@ -43,6 +43,7 @@ try {
                 reach: e.reach,
                 ...(e.deprecated ? { deprecated: e.deprecated } : {}),
                 ownership_keys: schema.ownershipKeys(e.table.name).map(fk => `${fk.column} -> ${fk.parent}`).sort(),
+                ...(e.table.triggers.length ? { triggers: e.table.triggers } : {}),
             }])),
         referenced: Object.fromEntries([...schema.referenced.values()]
             .sort((a, b) => a.table.name.localeCompare(b.table.name))

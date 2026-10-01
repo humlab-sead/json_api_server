@@ -86,11 +86,16 @@ export default class SdfSchema {
     }
 
     async _introspect(client) {
+        //partitions and inheritance children are left out: their rows are read
+        //through their parent, and would otherwise be exported twice
         const tables = await client.query(`
-            select c.relname as name, obj_description(c.oid, 'pg_class') as comment
+            select c.relname as name, obj_description(c.oid, 'pg_class') as comment,
+                   c.relrowsecurity or c.relforcerowsecurity as row_security,
+                   array(select t.tgname from pg_trigger t where t.tgrelid = c.oid and not t.tgisinternal order by 1)::text[] as triggers
             from pg_class c
             join pg_namespace n on n.oid = c.relnamespace
-            where n.nspname = 'public' and c.relkind in ('r', 'p')`);
+            where n.nspname = 'public' and c.relkind in ('r', 'p') and not c.relispartition
+              and not exists (select 1 from pg_inherits i where i.inhrelid = c.oid)`);
 
         const columns = await client.query(`
             select c.relname as table_name, a.attname as name, a.attnum as position,
@@ -152,6 +157,8 @@ export default class SdfSchema {
                 fks: [],       //outgoing
                 incoming: [],  //fks pointing at this table
                 uniques: [],   //[{ name, columns }]
+                rowSecurity: row.row_security,
+                triggers: row.triggers,
             });
         }
         for (const row of columns.rows) {
@@ -362,6 +369,10 @@ export default class SdfSchema {
     _checkSheetNames() {
         const seen = new Map();
         for (const name of [...this.owned.keys(), ...this.referenced.keys()]) {
+            //row-level security would hide rows from the export and its self-audit alike
+            if (this._table(name).rowSecurity) {
+                throw new SdfError("unsupported_schema", `${name} has row-level security, which could hide rows from an export (§3).`);
+            }
             const sheet = this._table(name).sheet;
             if (RESERVED_SHEET.test(sheet)) {
                 throw new SdfError("unsupported_schema", `${name} would get the sheet name "${sheet}", which SDF reserves (§4).`);
@@ -447,6 +458,26 @@ export default class SdfSchema {
             if (other.reach === "reverse" && other.via.table === tableName) keys.push(other.via);
         }
         return keys;
+    }
+
+    /**
+     * A SQL predicate over alias `a`: the row of `tableName` belongs to some site.
+     * Rows of an owned table for which it is false are orphans, outside every export.
+     */
+    reachablePredicate(tableName, a, depth = 0) {
+        const entry = this.owned.get(tableName);
+        const table = entry.table;
+        const b = `r${depth + 1}`;
+        if (entry.reach === "root") return "true";
+        if (entry.reach === "reverse") {
+            const via = entry.via;
+            return `exists (select 1 from public.${quoteIdent(via.table)} ${b}
+                            where ${b}.${quoteIdent(via.column)} = ${a}.${quoteIdent(via.parentColumn)}
+                              and ${this.reachablePredicate(via.table, b, depth + 1)})`;
+        }
+        return entry.edges.map(fk => `exists (select 1 from public.${quoteIdent(fk.parent)} ${b}
+                            where ${b}.${quoteIdent(fk.parentColumn)} = ${a}.${quoteIdent(fk.column)}
+                              and ${this.reachablePredicate(fk.parent, b, depth + 1)})`).join(" or ") || "false";
     }
 
     /**

@@ -480,8 +480,18 @@ export default class SdfChangeRequest {
                 : "              No changes were deployed between export and generation.",
             ctx.changeSet.conflicts.length ? `              ${count(ctx.changeSet.conflicts.length, "conflicting row")} left out; see report.json.` : null,
             ctx.changeSet.blocked.length ? `              ${count(ctx.changeSet.blocked.length, "row")} waiting on proposals left out; see report.json.` : null,
+            ...this._triggerNotes(ctx, plan),
         ].filter(l => l !== null).map(l => `  ${l}`.replace(/\*\//g, "* /"));
         return ["/" + "*".repeat(112), ...lines, "*".repeat(113) + "/"].join("\n");
+    }
+
+    /** Triggers on changed tables run on deploy and on revert; revert does not undo what they did elsewhere. */
+    _triggerNotes(ctx, plan) {
+        const tables = [...new Set([...plan.inserts, ...plan.updates, ...plan.deletes].map(x => x.table))]
+            .filter(t => ctx.schema.table(t).triggers.length);
+        return tables.length
+            ? [`              Triggers fire on ${tables.join(", ")}; anything they change elsewhere is not reverted.`]
+            : [];
     }
 
     _issueBody(ctx, plan, name, exportId) {
