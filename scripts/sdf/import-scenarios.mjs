@@ -10,8 +10,8 @@
  * Exits non-zero if any scenario fails.
  */
 import ExcelJS from "exceljs";
-import { canonicalCsv, sha256Hex } from "../../src/Lib/SeadDataFormat/SdfCommon.js";
-import { plainRows } from "../../src/Lib/SeadDataFormat/SdfWorkbookReader.js";
+import { canonicalCsv, sha256Hex, rowHash } from "../../src/Lib/SeadDataFormat/SdfCommon.js";
+import { plainRows, readCell } from "../../src/Lib/SeadDataFormat/SdfWorkbookReader.js";
 
 const args = Object.fromEntries(process.argv.slice(2).reduce((acc, a, i, all) =>
     (a.startsWith("--") ? [...acc, [a.slice(2), all[i + 1]]] : acc), []));
@@ -67,6 +67,25 @@ function tamperBaseline(wb, table, id, hash) {
     for (let r = 2; r <= meta.rowCount; r++) if (meta.getRow(r).getCell(1).value === "checksum") meta.getRow(r).getCell(2).value = checksum;
 }
 
+/**
+ * Test-only: simulate "the database changed this row after export" without
+ * touching the database. The workbook row is given an older value for one
+ * column, and the baseline is re-hashed to match, so workbook = baseline while
+ * the live row differs (rule 2's situation).
+ */
+function simulateDatabaseChange(wb, sheetName, rowNumber, column, olderValue) {
+    const ws = wb.getWorksheet(sheetName);
+    const columns = plainRows(wb.getWorksheet("_sdf_columns"));
+    const h = columns[0];
+    const dataKeys = columns.slice(1).filter(r => r[h.indexOf("sheet")] === sheetName && r[h.indexOf("kind")] === "data").map(r => r[h.indexOf("key")]);
+    const table = columns.find(r => r[h.indexOf("sheet")] === sheetName)[h.indexOf("table")];
+    ws.getRow(rowNumber).getCell(col(ws, column)).value = olderValue;
+    const values = dataKeys.map(k => readCell(ws.getRow(rowNumber).getCell(col(ws, k))).value);
+    const pk = ws.getRow(rowNumber).getCell(col(ws, dataKeys[0])).value;
+    tamperBaseline(wb, table, pk, rowHash(values));
+    return pk;
+}
+
 const codes = report => (report.errors || []).map(e => e.code);
 
 //-------------------------------------------------------------------------
@@ -75,41 +94,26 @@ console.log(`Scenario A: a valid set of edits on site ${SITE}`);
 {
     const wb = await exportWorkbook(SITE);
     const ps = wb.getWorksheet("physical_samples");
-    const sg = wb.getWorksheet("sample_groups");
     const types = wb.getWorksheet("sample_types");
-    const typeLabel = types.getRow(2).getCell(col(types, "type_name")).value;
 
     //update a sample name, keeping a leading zero
     ps.getRow(2).getCell(col(ps, "sample_name")).value = "0123 edited";
 
-    //new sample group, and a new sample in it whose type is chosen by label
-    const sgRow = sg.rowCount + 1;
-    sg.getRow(sgRow).getCell(col(sg, "sample_group_id")).value = "NEW-sgA";
-    sg.getRow(sgRow).getCell(col(sg, "site_id")).value = SITE;
-    sg.getRow(sgRow).getCell(col(sg, "sample_group_name")).value = "Trench SDF test";
-    sg.getRow(sgRow).getCell(col(sg, "method_id")).value = sg.getRow(2).getCell(col(sg, "method_id")).value;
-    sg.getRow(sgRow).getCell(col(sg, "sampling_context_id")).value = sg.getRow(2).getCell(col(sg, "sampling_context_id")).value;
-    const psRow = ps.rowCount + 1;
-    ps.getRow(psRow).getCell(col(ps, "physical_sample_id")).value = "NEW-psA";
-    ps.getRow(psRow).getCell(col(ps, "sample_group_id")).value = "NEW-sgA";
-    ps.getRow(psRow).getCell(col(ps, "sample_name")).value = "0001";
-    ps.getRow(psRow).getCell(col(ps, "sample_type_id:label")).value = typeLabel;
+    //change a sample's type by label: clear the id, pick another type's label
+    const typeNow = ps.getRow(5).getCell(col(ps, "sample_type_id")).value;
+    const tOther = firstRowWhere(types, row => row.getCell(col(types, "sample_type_id")).value !== typeNow);
+    const otherId = types.getRow(tOther).getCell(col(types, "sample_type_id")).value;
+    ps.getRow(5).getCell(col(ps, "sample_type_id")).value = null;
+    ps.getRow(5).getCell(col(ps, "sample_type_id:label")).value = types.getRow(tOther).getCell(col(types, "type_name")).value;
 
-    //delete a leaf row
-    const notes = wb.getWorksheet("sample_notes");
-    notes.getRow(2).getCell(col(notes, "_action")).value = "delete";
-
-    //propose a new sample type, and a new sample using it (blocked)
+    //propose a new sample type, and point an existing sample at it (blocked)
     const tRow = types.rowCount + 1;
     types.getRow(tRow).getCell(col(types, "sample_type_id")).value = "NEW-typeX";
     types.getRow(tRow).getCell(col(types, "type_name")).value = "SDF test type";
-    const psRow2 = psRow + 1;
-    ps.getRow(psRow2).getCell(col(ps, "physical_sample_id")).value = "NEW-psB";
-    ps.getRow(psRow2).getCell(col(ps, "sample_group_id")).value = "NEW-sgA";
-    ps.getRow(psRow2).getCell(col(ps, "sample_name")).value = "0002";
-    ps.getRow(psRow2).getCell(col(ps, "sample_type_id")).value = "NEW-typeX";
+    const blockedId = ps.getRow(4).getCell(col(ps, "physical_sample_id")).value;
+    ps.getRow(4).getCell(col(ps, "sample_type_id")).value = "NEW-typeX";
 
-    //propose a new column with a value on an existing sample
+    //propose a new column with a value on an existing sample (blocked on the column)
     const texture = ps.columnCount + 1;
     ps.getRow(1).getCell(texture).value = "texture";
     ps.getRow(3).getCell(texture).value = "clay";
@@ -122,15 +126,37 @@ console.log(`Scenario A: a valid set of edits on site ${SITE}`);
     const r = await validate(wb);
     const cs = r.change_set || {};
     check("validates", r.ok === true, r.errors);
-    check("one update, the sample name", cs.updates?.length === 1 && cs.updates[0].fields.some(f => f.column === "sample_name" && f.after === "0123 edited"), cs.updates);
-    check("two inserts: group and sample", cs.inserts?.length === 2, cs.inserts);
-    check("label resolved to a sample_type_id", cs.inserts?.some(i => i.table === "tbl_physical_samples" && Number.isInteger(i.values.sample_type_id)), cs.inserts);
-    check("one delete", cs.deletes?.length === 1 && cs.deletes[0].table === "tbl_sample_notes", cs.deletes);
+    check("two updates: the sample name, and the type chosen by label", cs.updates?.length === 2 &&
+        cs.updates.some(u => u.fields.some(f => f.column === "sample_name" && f.after === "0123 edited")) &&
+        cs.updates.some(u => u.fields.some(f => f.column === "sample_type_id" && f.after === otherId)), cs.updates);
+    check("no inserts or deletes", cs.inserts?.length === 0 && cs.deletes?.length === 0, { inserts: cs.inserts, deletes: cs.deletes });
     check("reference proposal for the new type", cs.proposals?.some(p => p.kind === "reference" && p.op === "insert" && p.table === "tbl_sample_types"), cs.proposals);
     check("schema proposal: column texture", cs.proposals?.some(p => p.kind === "schema" && p.type === "column" && p.column === "texture"), cs.proposals);
     check("schema proposal: table sample_textures", cs.proposals?.some(p => p.kind === "schema" && p.type === "table" && p.sheet === "sample_textures"), cs.proposals);
-    check("sample using the proposed type is blocked", cs.blocked?.some(b => b.token === "NEW-psB"), cs.blocked);
+    check("the sample pointed at the proposed type is blocked", cs.blocked?.some(b => b.id === blockedId && b.reason === "depends_on_proposal"), cs.blocked);
+    check("the sample with only a proposed value is blocked", cs.blocked?.some(b => b.reason === "proposed_columns_only"), cs.blocked);
     check("no conflicts", cs.conflicts?.length === 0, cs.conflicts);
+}
+
+console.log(`Scenario A2: adding and deleting rows is refused on site ${SITE}`);
+{
+    const wb = await exportWorkbook(SITE);
+    const ps = wb.getWorksheet("physical_samples");
+    const nr = ps.rowCount + 1;
+    ps.getRow(nr).getCell(col(ps, "physical_sample_id")).value = "NEW-psA";
+    ps.getRow(nr).getCell(col(ps, "sample_group_id")).value = ps.getRow(2).getCell(col(ps, "sample_group_id")).value;
+    ps.getRow(nr).getCell(col(ps, "sample_name")).value = "0001";
+    ps.getRow(nr).getCell(col(ps, "sample_type_id")).value = ps.getRow(2).getCell(col(ps, "sample_type_id")).value;
+    const nr2 = nr + 1;
+    ps.getRow(nr2).getCell(col(ps, "sample_group_id")).value = ps.getRow(2).getCell(col(ps, "sample_group_id")).value;
+    ps.getRow(nr2).getCell(col(ps, "sample_name")).value = "blank id";
+    const notes = wb.getWorksheet("sample_notes");
+    notes.getRow(2).getCell(col(notes, "_action")).value = "delete";
+    const r = await validate(wb);
+    check("rejected at stage 2", r.ok === false && r.stage_reached === 2, { stage: r.stage_reached, codes: codes(r) });
+    check("both new rows: insert_not_supported", codes(r).filter(c => c === "insert_not_supported").length === 2, r.errors);
+    check("the delete mark: delete_not_supported", codes(r).includes("delete_not_supported"), codes(r));
+    check("anchored to the ID and _action cells", r.errors.every(e => e.sheet && /^[A-Z]+\d+$/.test(e.cell || "")), r.errors);
 }
 
 console.log(`Scenario B: cell-level errors on site ${SITE}`);
@@ -157,48 +183,24 @@ console.log(`Scenario C: referential errors on site ${SITE}`);
 {
     const wb = await exportWorkbook(SITE);
     const ps = wb.getWorksheet("physical_samples");
-    //a sample that analysis entities still point at
-    const ae = wb.getWorksheet("analysis_entities");
-    const referenced = ae.getRow(2).getCell(col(ae, "physical_sample_id")).value;
-    const psRow = firstRowWhere(ps, row => row.getCell(col(ps, "physical_sample_id")).value === referenced);
-    ps.getRow(psRow).getCell(col(ps, "_action")).value = "delete";
-    //a token nobody defines
-    const nr = ps.rowCount + 1;
-    ps.getRow(nr).getCell(col(ps, "physical_sample_id")).value = "NEW-x";
-    ps.getRow(nr).getCell(col(ps, "sample_group_id")).value = "NEW-nowhere";
-    ps.getRow(nr).getCell(col(ps, "sample_name")).value = "x";
-    ps.getRow(nr).getCell(col(ps, "sample_type_id")).value = ps.getRow(2).getCell(col(ps, "sample_type_id")).value;
-    //a label that matches nothing
-    const nr2 = nr + 1;
-    ps.getRow(nr2).getCell(col(ps, "physical_sample_id")).value = "NEW-y";
-    ps.getRow(nr2).getCell(col(ps, "sample_group_id")).value = ps.getRow(2).getCell(col(ps, "sample_group_id")).value;
-    ps.getRow(nr2).getCell(col(ps, "sample_name")).value = "y";
-    ps.getRow(nr2).getCell(col(ps, "sample_type_id:label")).value = "No such sample type";
+    //a token nobody defines, in an existing row
+    ps.getRow(2).getCell(col(ps, "sample_group_id")).value = "NEW-nowhere";
+    //a label that matches nothing, on an existing row whose id was cleared
+    ps.getRow(3).getCell(col(ps, "sample_type_id")).value = null;
+    ps.getRow(3).getCell(col(ps, "sample_type_id:label")).value = "No such sample type";
+    //an id that does not exist
+    ps.getRow(4).getCell(col(ps, "sample_type_id")).value = 99999999;
     //a row copied in from another site's workbook
     const other = await exportWorkbook(SHARED_SITE);
     const otherPs = other.getWorksheet("physical_samples");
-    const nr3 = nr2 + 1;
-    ps.getRow(nr3).getCell(col(ps, "physical_sample_id")).value = otherPs.getRow(2).getCell(col(otherPs, "physical_sample_id")).value;
-    ps.getRow(nr3).getCell(col(ps, "sample_group_id")).value = ps.getRow(2).getCell(col(ps, "sample_group_id")).value;
-    ps.getRow(nr3).getCell(col(ps, "sample_name")).value = "copied";
-    ps.getRow(nr3).getCell(col(ps, "sample_type_id")).value = ps.getRow(2).getCell(col(ps, "sample_type_id")).value;
+    const nr = ps.rowCount + 1;
+    ps.getRow(nr).getCell(col(ps, "physical_sample_id")).value = otherPs.getRow(2).getCell(col(otherPs, "physical_sample_id")).value;
+    ps.getRow(nr).getCell(col(ps, "sample_group_id")).value = ps.getRow(2).getCell(col(ps, "sample_group_id")).value;
+    ps.getRow(nr).getCell(col(ps, "sample_name")).value = "copied";
+    ps.getRow(nr).getCell(col(ps, "sample_type_id")).value = ps.getRow(5).getCell(col(ps, "sample_type_id")).value;
     const r = await validate(wb);
     check("rejected at stage 3", r.ok === false && r.stage_reached === 3, { stage: r.stage_reached, codes: codes(r) });
-    for (const code of ["unknown_token", "label_not_found"]) check(`reports ${code}`, codes(r).includes(code), codes(r));
-    check("reports row_not_in_bundle", codes(r).includes("row_not_in_bundle"), codes(r));
-}
-
-console.log(`Scenario C2: deleting a row that is still referenced, on site ${SITE}`);
-{
-    const wb = await exportWorkbook(SITE);
-    const ps = wb.getWorksheet("physical_samples");
-    const ae = wb.getWorksheet("analysis_entities");
-    const referenced = ae.getRow(2).getCell(col(ae, "physical_sample_id")).value;
-    const psRow = firstRowWhere(ps, row => row.getCell(col(ps, "physical_sample_id")).value === referenced);
-    ps.getRow(psRow).getCell(col(ps, "_action")).value = "delete";
-    const r = await validate(wb);
-    check("reports delete_still_referenced, once", codes(r).filter(c => c === "delete_still_referenced").length === 1, codes(r));
-    check("names what still points at it", /analysis_entities/.test(r.errors.find(e => e.code === "delete_still_referenced")?.message || ""), r.errors);
+    for (const code of ["unknown_token", "label_not_found", "fk_not_found", "row_not_in_bundle"]) check(`reports ${code}`, codes(r).includes(code), codes(r));
 }
 
 console.log(`Scenario D: three-way comparison on site ${SITE} (baseline altered to simulate a database change)`);
@@ -206,14 +208,28 @@ console.log(`Scenario D: three-way comparison on site ${SITE} (baseline altered 
     const wb = await exportWorkbook(SITE);
     const ps = wb.getWorksheet("physical_samples");
     const idX = ps.getRow(2).getCell(col(ps, "physical_sample_id")).value;
-    const idY = ps.getRow(3).getCell(col(ps, "physical_sample_id")).value;
     tamperBaseline(wb, "tbl_physical_samples", idX, "0000000000000000");
-    tamperBaseline(wb, "tbl_physical_samples", idY, "0000000000000000");
     ps.getRow(2).getCell(col(ps, "sample_name")).value = "edited on both sides";
+    const idY = simulateDatabaseChange(wb, "physical_samples", 3, "sample_name", "older name");
     const r = await validate(wb);
     const cs = r.change_set || {};
     check("edited row changed on both sides is a conflict", cs.conflicts?.some(c => c.id === idX && c.reason === "changed_on_both_sides"), cs.conflicts);
     check("untouched row changed in the database is left alone (rule 2)", !cs.updates?.some(u => u.id === idY) && !cs.conflicts?.some(c => c.id === idY), { updates: cs.updates, conflicts: cs.conflicts });
+}
+
+console.log(`Scenario D2: a proposed column on a row the database changed since export, on site ${SITE}`);
+{
+    const wb = await exportWorkbook(SITE);
+    const ps = wb.getWorksheet("physical_samples");
+    const id = simulateDatabaseChange(wb, "physical_samples", 2, "sample_name", "older name");
+    const texture = ps.columnCount + 1;
+    ps.getRow(1).getCell(texture).value = "texture";
+    ps.getRow(2).getCell(texture).value = "clay";
+    const r = await validate(wb);
+    const cs = r.change_set || {};
+    check("validates", r.ok === true, r.errors);
+    check("the stale exported values are not written back", !cs.updates?.some(u => u.id === id), cs.updates);
+    check("the row is blocked on the column proposal", cs.blocked?.some(b => b.id === id && b.reason === "proposed_columns_only"), cs.blocked);
 }
 
 console.log(`Scenario E: shared rows on site ${SHARED_SITE}`);
@@ -228,7 +244,7 @@ console.log(`Scenario E: shared rows on site ${SHARED_SITE}`);
     check("update of a shared dataset is flagged with the other site", r.change_set?.shared?.some(s => s.id === sharedIds[0] && s.other_site_ids?.length), r.change_set?.shared);
     ds.getRow(rowB).getCell(col(ds, "_action")).value = "delete";
     r = await validate(wb);
-    check("delete of a shared dataset is refused", codes(r).includes("delete_shared_row"), codes(r));
+    check("delete of a shared dataset is refused", codes(r).includes("delete_not_supported"), codes(r));
 }
 
 console.log("Scenario F: structural refusals");
