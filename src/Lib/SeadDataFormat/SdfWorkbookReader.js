@@ -1,0 +1,141 @@
+import ExcelJS from "exceljs";
+import JSZip from "jszip";
+import { SdfError } from "./SdfCommon.js";
+
+/**
+ * Loading an uploaded workbook for import (spec §10 stage 1), and reading its
+ * cells by stored type (§8: the importer reads what a cell is, not what it
+ * displays).
+ */
+
+export const CELL = {
+    BLANK: "blank",
+    NUMBER: "number",
+    STRING: "string",
+    BOOLEAN: "boolean",
+    DATE: "date",
+    FORMULA: "formula",
+    ERROR: "error",
+};
+
+/**
+ * Loads an .xlsx for reading. Anything that is not one is refused with a named
+ * error, CSV in particular (§8: only .xlsx is input).
+ *
+ * Data validations, conditional formatting and extension lists are removed
+ * before parsing. The importer never reads them, and ExcelJS's reader expands a
+ * validated range into one entry per cell, so a curator who extends a dropdown
+ * to a whole column would otherwise make the file unreadable.
+ */
+export async function loadWorkbook(buffer) {
+    const looksLikeZip = buffer.length > 4 && buffer[0] === 0x50 && buffer[1] === 0x4b;
+    if (!looksLikeZip) {
+        const head = buffer.slice(0, 2048).toString("utf8");
+        const csvLike = /[,;\t]/.test(head) && !/[\x00-\x08]/.test(head);
+        throw new SdfError(csvLike ? "csv_not_accepted" : "not_xlsx",
+            csvLike
+                ? "This looks like a CSV file. CSV cannot be imported, because it does not keep values like 0123 or 20-30 intact. Upload the .xlsx workbook you downloaded from SEAD."
+                : "This is not an .xlsx workbook. Upload the .xlsx file you downloaded from SEAD.",
+            {}, 422);
+    }
+
+    let zip;
+    try {
+        zip = await JSZip.loadAsync(buffer);
+    }
+    catch (err) {
+        throw new SdfError("not_xlsx", "The file could not be opened as an .xlsx workbook. It may be damaged.", {}, 422);
+    }
+    if (!zip.file("xl/workbook.xml")) {
+        throw new SdfError("not_xlsx", "This is not an .xlsx workbook (it may be another kind of zip file).", {}, 422);
+    }
+
+    for (const path of Object.keys(zip.files)) {
+        if (!/^xl\/worksheets\/[^/]+\.xml$/.test(path)) continue;
+        const xml = await zip.file(path).async("string");
+        const stripped = xml
+            .replace(/<dataValidations\b[\s\S]*?<\/dataValidations>/g, "")
+            .replace(/<conditionalFormatting\b[\s\S]*?<\/conditionalFormatting>/g, "")
+            .replace(/<extLst\b[\s\S]*?<\/extLst>/g, "");
+        if (stripped !== xml) zip.file(path, stripped);
+    }
+
+    const wb = new ExcelJS.Workbook();
+    try {
+        await wb.xlsx.load(await zip.generateAsync({ type: "nodebuffer" }));
+    }
+    catch (err) {
+        throw new SdfError("not_xlsx", `The workbook could not be read: ${err.message}`, {}, 422);
+    }
+    return wb;
+}
+
+/**
+ * A cell as { kind, value, address }. Rich text and hyperlinks read as their
+ * text. Formulas are reported as formulas whatever their cached result, since
+ * §8 does not trust the cache.
+ */
+export function readCell(cell) {
+    const address = cell.address;
+    const v = cell.value;
+    switch (cell.type) {
+        case ExcelJS.ValueType.Null:
+        case ExcelJS.ValueType.Merge:
+            return { kind: CELL.BLANK, value: null, address };
+        case ExcelJS.ValueType.Number:
+            return { kind: CELL.NUMBER, value: v, address };
+        case ExcelJS.ValueType.String:
+        case ExcelJS.ValueType.SharedString:
+            return v === "" ? { kind: CELL.BLANK, value: null, address } : { kind: CELL.STRING, value: v, address };
+        case ExcelJS.ValueType.RichText: {
+            const text = v.richText.map(r => r.text).join("");
+            return text === "" ? { kind: CELL.BLANK, value: null, address } : { kind: CELL.STRING, value: text, address };
+        }
+        case ExcelJS.ValueType.Hyperlink:
+            return { kind: CELL.STRING, value: typeof v.text === "string" ? v.text : String(v.text), address };
+        case ExcelJS.ValueType.Date:
+            return { kind: CELL.DATE, value: v, address };
+        case ExcelJS.ValueType.Boolean:
+            return { kind: CELL.BOOLEAN, value: v, address };
+        case ExcelJS.ValueType.Formula: {
+            const formula = v.formula || v.sharedFormula || "";
+            //LibreOffice stores every boolean as the formula TRUE() or FALSE();
+            //those two are constants, not calculations
+            const constant = /^\s*(TRUE|FALSE)\s*\(\s*\)\s*$/i.exec(formula);
+            if (constant) return { kind: CELL.BOOLEAN, value: constant[1].toUpperCase() === "TRUE", address };
+            return { kind: CELL.FORMULA, value: formula, address };
+        }
+        case ExcelJS.ValueType.Error:
+            return { kind: CELL.ERROR, value: v && v.error, address };
+        default:
+            return { kind: CELL.STRING, value: String(v), address };
+    }
+}
+
+/** A cell's plain value for machine sheets and headers: blank is null. */
+export function plainValue(cell) {
+    const c = readCell(cell);
+    return c.kind === CELL.BLANK ? null : c.value;
+}
+
+/**
+ * The rows of a worksheet as arrays of plain values, header row included,
+ * trailing blank rows dropped. For the machine sheets.
+ */
+export function plainRows(ws) {
+    const width = ws.columnCount;
+    const rows = [];
+    ws.eachRow({ includeEmpty: true }, (row, rowNumber) => {
+        const values = [];
+        for (let c = 1; c <= width; c++) values.push(plainValue(row.getCell(c)));
+        rows[rowNumber - 1] = values;
+    });
+    for (let i = 0; i < rows.length; i++) {
+        if (!rows[i]) rows[i] = new Array(width).fill(null);
+    }
+    while (rows.length && rows[rows.length - 1].every(v => v === null)) rows.pop();
+    //a sheet's width can exceed its data; trim columns that are blank throughout
+    let used = 0;
+    for (const r of rows) r.forEach((v, i) => { if (v !== null) used = Math.max(used, i + 1); });
+    return rows.map(r => r.slice(0, used));
+}

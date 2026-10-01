@@ -82,8 +82,7 @@ class SeadJsonApiServer {
         }
         this.expressApp = express();
         this.expressApp.use(cors());
-        //Default body limit is 100kb; SDF import bundles (POST /sdf/import) and
-        //bulk site/datagroup requests are far larger.
+        //Default body limit is 100kb; bulk site/datagroup requests are far larger.
         this.expressApp.use(bodyParser.json({ limit: process.env.JSON_BODY_LIMIT || "128mb" }));
 
         const artificialLatency = parseInt(process.env.ARTIFICIAL_LATENCY_MS) || 0;
