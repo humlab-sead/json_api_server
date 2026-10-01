@@ -10,10 +10,12 @@ import { SDF_VERSION, SdfError, quoteIdent } from "./SdfCommon.js";
  * hand-written change request.
  *
  * The bundle:
- *   <name>/deploy/<name>.sql   guards, then inserts, updates, deletes, sequences
+ *   <name>/deploy/<name>.sql   guards, then inserts, updates, deletes, sequences, then
+ *                              the verify checks, so a deploy that did not land exactly
+ *                              as planned rolls itself back
  *   <name>/revert/<name>.sql   the exact inverse, guarded the same way
  *   <name>/verify/<name>.sql   asserts the post-deploy state, inside BEGIN/ROLLBACK
- *   <name>/change.json         name, suggested project, plan note, issue text
+ *   <name>/change.json         name, project, plan note, issue text
  *   <name>/report.json         the full stage 1-4 report
  *   <name>/source.xlsx         the workbook as uploaded
  *   <name>/proposals/*.md      one draft issue per proposal
@@ -28,6 +30,15 @@ import { SDF_VERSION, SdfError, quoteIdent } from "./SdfCommon.js";
  */
 
 const TOKEN = /^NEW-[A-Za-z0-9_-]{1,32}$/;
+
+//The Sqitch project every SDF change request belongs to. It is listed last in
+//sead_change_control's projects.txt, so in a release it deploys after every other
+//project's changes, which are the state its guards were computed against.
+const SQITCH_PROJECT = "sdf";
+
+//Set on every updated row, to the time the change request was generated: a fixed
+//literal, so staging and production end up with the same value.
+const UPDATED_COLUMN = "date_updated";
 
 export default class SdfChangeRequest {
 
@@ -59,17 +70,22 @@ export default class SdfChangeRequest {
         }
 
         const siteIds = ctx.bundleSiteIds;
-        const date = (await client.query("select to_char(now(), 'YYYYMMDD') as d, to_char(now(), 'YYYY-MM-DD') as iso")).rows[0];
-        const name = `${date.d}_DML_SDF_${siteIds.length <= 3 ? `SITE_${siteIds.join("_")}` : `SITES_${siteIds.length}`}`;
+        const date = (await client.query(`
+            select to_char(now(), 'YYYYMMDD') as d, to_char(now(), 'YYYY-MM-DD') as iso,
+                   to_char(now() at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as generated_at`)).rows[0];
         const exportId = meta.get("export_id");
+        //the export id keeps two change requests for the same sites on the same day apart
+        const exportTag = String(exportId || "").replace(/[^0-9A-Fa-f]/g, "").slice(0, 8).toUpperCase();
+        const name = `${date.d}_DML_SDF_${siteIds.length <= 3 ? `SITE_${siteIds.join("_")}` : `SITES_${siteIds.length}`}` +
+            (exportTag ? `_${exportTag}` : "");
         const author = opts.author || meta.get("exported_by") || "SDF import";
 
         const ids = await this._allocateIds(ctx);
-        const plan = this._plan(ctx, ids);
+        const plan = this._plan(ctx, ids, date.generated_at);
 
         const files = {};
         const dir = name;
-        const project = "general";
+        const project = SQITCH_PROJECT;
         if (dataChanges) {
             const header = this._header(ctx, { name, project, author, date: date.iso, exportId, plan });
             files[`${dir}/deploy/${name}.sql`] = this._deploy(ctx, plan, header, project, name);
@@ -85,8 +101,7 @@ export default class SdfChangeRequest {
             `${plan.deletes.length} delete${plan.deletes.length === 1 ? "" : "s"} (sdf-export:${exportId})`;
         files[`${dir}/change.json`] = JSON.stringify({
             name: dataChanges ? name : null,
-            suggested_project: dataChanges ? project : null,
-            project_note: "Suggested only. Confirm the owning project before adding the change request (sead_change_control docs/DEVELOPMENT.md).",
+            project: dataChanges ? project : null,
             plan_note: dataChanges ? note : null,
             issue: dataChanges ? {
                 title: name,
@@ -142,9 +157,10 @@ export default class SdfChangeRequest {
 
     /**
      * Resolves tokens to ids and orders everything by foreign-key dependency:
-     * inserts parents first, deletes children first.
+     * inserts parents first, deletes children first. Every update also sets
+     * date_updated to the generation time, where the table has one.
      */
-    _plan(ctx, ids) {
+    _plan(ctx, ids, generatedAt) {
         const { schema } = ctx;
         const cs = ctx.changeSet;
         const resolve = (tableName, column, value) => {
@@ -166,10 +182,13 @@ export default class SdfChangeRequest {
             }
             return { table: e.table, sheet: e.sheet, row: e.row, token: e.token, id: e.id, values };
         });
-        const updates = cs.updates.map(u => ({
-            table: u.table, sheet: u.sheet, row: u.row, id: u.id, before: u.before,
-            fields: u.fields.map(f => ({ column: f.column, before: f.before, after: resolve(u.table, f.column, f.after) })),
-        }));
+        const updates = cs.updates.map(u => {
+            const fields = u.fields.map(f => ({ column: f.column, before: f.before, after: resolve(u.table, f.column, f.after) }));
+            if (schema.column(schema.table(u.table), UPDATED_COLUMN) && !fields.some(f => f.column === UPDATED_COLUMN)) {
+                fields.push({ column: UPDATED_COLUMN, before: u.before[UPDATED_COLUMN] ?? null, after: generatedAt });
+            }
+            return { table: u.table, sheet: u.sheet, row: u.row, id: u.id, before: u.before, fields };
+        });
         const deletes = cs.deletes.map(d => ({ table: d.table, sheet: d.sheet, row: d.row, id: d.id, before: d.before }));
 
         const order = this._tableOrder(schema, new Set([...inserts, ...updates, ...deletes].map(x => x.table)));
@@ -284,6 +303,10 @@ export default class SdfChangeRequest {
             }
             out.push("");
         }
+        //the verify checks, inside the deploy transaction: they run however Sqitch is
+        //invoked (deploy-staging passes --no-verify)
+        out.push("-- 6. Verify: abort, and roll everything back, unless every change landed as planned.",
+            this._guardBlock(tag, this._verifyChecks(schema, plan)));
         out.push("commit;", "");
         return out.join("\n");
     }
@@ -366,8 +389,12 @@ export default class SdfChangeRequest {
     }
 
     _verify(ctx, plan, project, name) {
-        const { schema } = ctx;
         const tag = this._tag(plan);
+        return [`-- Verify ${project}:${name} on pg`, "", "begin;", "", this._guardBlock(tag, this._verifyChecks(ctx.schema, plan)), "rollback;", ""].join("\n");
+    }
+
+    /** Assertions that the database holds exactly what the deploy script wrote. */
+    _verifyChecks(schema, plan) {
         const pkOf = t => quoteIdent(schema.table(t).pk);
         const checks = [];
         for (const i of plan.inserts) {
@@ -389,7 +416,7 @@ export default class SdfChangeRequest {
         ${this._raise(`SDF verify: public.${d.table} ${d.id} still exists.`)}
     end if;`);
         }
-        return [`-- Verify ${project}:${name} on pg`, "", "begin;", "", this._guardBlock(tag, checks), "rollback;", ""].join("\n");
+        return checks;
     }
 
     _header(ctx, { name, project, author, date, exportId, plan }) {
