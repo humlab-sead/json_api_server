@@ -383,6 +383,26 @@ export default class SdfSchema {
         return this.tables.get(`tbl_${sheetName}`) || null;
     }
 
+    /**
+     * §3: the foreign keys of an owned table that tie its rows to a site - its
+     * ownership edges, plus the keys through which a reverse-reached table
+     * (datasets, features) belongs to a site at all.
+     */
+    ownershipKeys(tableName) {
+        const entry = this.owned.get(tableName);
+        if (!entry) return [];
+        const keys = [...entry.edges];
+        for (const other of this.owned.values()) {
+            if (other.reach === "reverse" && other.via.table === tableName) keys.push(other.via);
+        }
+        return keys;
+    }
+
+    /** The reverse-reached tables (datasets, features) and the key that reaches each. */
+    reverseReached() {
+        return [...this.owned.values()].filter(e => e.reach === "reverse").map(e => ({ table: e.table.name, via: e.via }));
+    }
+
     /** Primary-key column names of the owned tables, for new-sheet attachment (§10). */
     ownedKeyColumns() {
         const keys = new Map();

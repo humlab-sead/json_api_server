@@ -118,6 +118,10 @@ console.log(`Scenario A: a valid set of edits on site ${SITE}`);
     const otherId = types.getRow(tOther).getCell(col(types, "sample_type_id")).value;
     ps.getRow(5).getCell(col(ps, "sample_type_id")).value = null;
     ps.getRow(5).getCell(col(ps, "sample_type_id:label")).value = types.getRow(tOther).getCell(col(types, "type_name")).value;
+    //change a sample's type by id, leaving the old label: the id wins (H4)
+    const byIdRow = firstRowWhere(ps, (row, n) => n > 6 && row.getCell(col(ps, "sample_type_id")).value === typeNow);
+    const byIdSample = ps.getRow(byIdRow).getCell(col(ps, "physical_sample_id")).value;
+    ps.getRow(byIdRow).getCell(col(ps, "sample_type_id")).value = otherId;
 
     //propose a new sample type, and point an existing sample at it (blocked)
     const tRow = types.rowCount + 1;
@@ -141,7 +145,8 @@ console.log(`Scenario A: a valid set of edits on site ${SITE}`);
     check("validates", r.ok === true, r.errors);
     check("the dropdown offers duplicated labels in a unique form", suffixed === "C14 Conventional [151]", lists.slice(1).map(r => r[methodCol]).filter(v => /C14 Conv/.test(v || "")));
     check("the suffixed label resolves to its method", cs.updates?.some(u => u.table === "tbl_sample_groups" && u.fields.some(f => f.column === "method_id" && f.after === 151)), cs.updates);
-    check("four updates: two sample names, a type and a method chosen by label", cs.updates?.length === 4 &&
+    check("a type changed by id with its old label left is applied", cs.updates?.some(u => u.id === byIdSample && u.fields.some(f => f.column === "sample_type_id" && f.after === otherId)), cs.updates);
+    check("five updates: two sample names, two types and a method", cs.updates?.length === 5 &&
         cs.updates.some(u => u.fields.some(f => f.column === "sample_name" && f.after === "0123 edited")) &&
         cs.updates.some(u => u.fields.some(f => f.column === "sample_name" && f.after === "NEW-found layer")) &&
         cs.updates.some(u => u.fields.some(f => f.column === "sample_type_id" && f.after === otherId)), cs.updates);
@@ -224,6 +229,35 @@ console.log(`Scenario C: referential errors on site ${SITE}`);
     const r = await validate(wb);
     check("rejected at stage 3", r.ok === false && r.stage_reached === 3, { stage: r.stage_reached, codes: codes(r) });
     for (const code of ["unknown_token", "label_not_found", "fk_not_found", "row_not_in_bundle", "label_mismatch"]) check(`reports ${code}`, codes(r).includes(code), codes(r));
+}
+
+console.log(`Scenario C3: site data stays attached to this workbook's sites, on site ${SITE}`);
+{
+    const wb = await exportWorkbook(SITE);
+    const other = await exportWorkbook(SHARED_SITE);
+    //a sample moved into another site's sample group
+    const ps = wb.getWorksheet("physical_samples");
+    const otherSg = other.getWorksheet("sample_groups");
+    ps.getRow(2).getCell(col(ps, "sample_group_id")).value = otherSg.getRow(2).getCell(col(otherSg, "sample_group_id")).value;
+    //a sample group detached from its site
+    const sg = wb.getWorksheet("sample_groups");
+    sg.getRow(2).getCell(col(sg, "site_id")).value = null;
+    sg.getRow(2).getCell(col(sg, "site_id:label")).value = null; //with the label left, it would choose the site again
+    //every analysis entity of one dataset moved to another dataset of this site
+    const ae = wb.getWorksheet("analysis_entities");
+    const counts = new Map();
+    for (let r = 2; r <= ae.rowCount; r++) {
+        const d = ae.getRow(r).getCell(col(ae, "dataset_id")).value;
+        if (d !== null) counts.set(d, (counts.get(d) || 0) + 1);
+    }
+    const [smallest, target] = [...counts].sort((a, b) => a[1] - b[1]).map(([d]) => d);
+    for (let r = 2; r <= ae.rowCount; r++) {
+        if (ae.getRow(r).getCell(col(ae, "dataset_id")).value === smallest) ae.getRow(r).getCell(col(ae, "dataset_id")).value = target;
+    }
+    const r = await validate(wb);
+    check("rejected at stage 3", r.ok === false && r.stage_reached === 3, { stage: r.stage_reached, codes: codes(r) });
+    for (const code of ["outside_bundle", "ownership_cleared", "orphaned"]) check(`reports ${code}`, codes(r).includes(code), codes(r));
+    check("names the dataset that would be orphaned", r.errors.some(e => e.code === "orphaned" && e.message.includes(` ${smallest},`)), r.errors.filter(e => e.code === "orphaned"));
 }
 
 console.log(`Scenario D: three-way comparison on site ${SITE} (baseline altered to simulate a database change)`);

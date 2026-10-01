@@ -861,6 +861,7 @@ export default class SdfValidator {
         await this._resolveForeignKeys(ctx);
         this._resolveProposedTables(ctx);
         if (report.hasErrors()) return;
+        await this._checkAttachment(ctx);
         await this._checkDeletes(ctx);
         this._checkNotNull(ctx);
         await this._checkUniques(ctx);
@@ -873,9 +874,11 @@ export default class SdfValidator {
      * that reference a column other than the primary key too (qualifier symbols).
      *
      * A label that disagrees with a filled key is an error when it names another
-     * row: the dropdowns sit on the label columns, so picking a value there and
-     * leaving the ID alone must not be silently ignored. A label that names no
-     * row at all is reported and the key is used.
+     * row and the key itself was not changed: the dropdowns sit on the label
+     * columns, so picking a value there and leaving the ID alone must not be
+     * silently ignored. A label that names no row at all is reported and the key
+     * is used. Where the key was changed, the key wins and its old label is
+     * simply out of date.
      *
      * Labels pointing at site data match only rows of this workbook's sites
      * (§3); a dropdown label made unique with " [id]" (§5) is accepted too.
@@ -911,6 +914,11 @@ export default class SdfValidator {
             const m = SUFFIXED_LABEL.exec(text);
             return !!m && m[1] === liveLabel && m[2] === k;
         };
+        //the key was edited (it differs from the live row): the label is just out of date
+        const keyEdited = (r, column, value) => {
+            const row = r.pk.kind === "id" ? ctx.live.get(r.table)?.get(r.pk.value) : null;
+            return !!row && canonicalValue(row[column]) !== canonicalValue(value);
+        };
         const lookups = new Map(); //"table.column" -> Set(label text)
         for (const r of ctx.records) {
             for (const fk of schema.table(r.table).fks) {
@@ -921,7 +929,7 @@ export default class SdfValidator {
                 if (value === undefined) continue;
                 if (value !== null) {
                     const liveLabel = live.get(key)?.get(String(value));
-                    if (liveLabel === undefined || sameLabel(label.text, String(value), liveLabel)) continue;
+                    if (liveLabel === undefined || keyEdited(r, fk.column, value) || sameLabel(label.text, String(value), liveLabel)) continue;
                 }
                 else if (typeof value === "string" && TOKEN.test(value)) continue;
                 add(lookups, key, label.text);
@@ -1004,7 +1012,7 @@ export default class SdfValidator {
                     report.error(3, "fk_not_found", `${where.cell}: ${fk.column} = ${value}, but there is no such ${target.sheet} row.`, where);
                     continue;
                 }
-                if (!label || sameLabel(label.text, String(value), liveLabel)) continue;
+                if (!label || keyEdited(r, fk.column, value) || sameLabel(label.text, String(value), liveLabel)) continue;
                 const named = matches(key, label.text);
                 const labelWhere = { sheet: r.sheet, cell: label.address };
                 if (named.length) {
@@ -1032,6 +1040,71 @@ export default class SdfValidator {
         }
         ctx.bundleIdsByTable = out;
         return out;
+    }
+
+    /**
+     * §3, the attachment invariant: site data stays attached to this workbook's
+     * sites. A key that ties a row to its site may be changed only to a row of
+     * those sites, never emptied, and no dataset or feature may lose the last
+     * row that ties it to a site. Each of these is valid SQL and reads as an
+     * ordinary change in review, but the rows would then belong to another site,
+     * or to none, and no export of these sites would show them again.
+     */
+    async _checkAttachment(ctx) {
+        const { report, schema, client } = ctx;
+        const movedAway = new Map(); //reverse table -> { via, old: Set(values), movers: Set(child ids) }
+        for (const r of ctx.records) {
+            if (r.binding.role !== "owned" || r.pk.kind !== "id" || r.action === "delete") continue;
+            const live = ctx.live.get(r.table)?.get(r.pk.value);
+            if (!live) continue;
+            for (const fk of schema.ownershipKeys(r.table)) {
+                if (!r.values.has(fk.column)) continue;
+                const value = r.values.get(fk.column);
+                const before = live[fk.column];
+                if (value === undefined || canonicalValue(value) === canonicalValue(before)) continue;
+                const where = { sheet: r.sheet, cell: r.cells.get(fk.column) };
+                const parent = schema.table(fk.parent);
+                if (value === null) {
+                    report.error(3, "ownership_cleared",
+                        `${where.cell}: ${fk.column} ties this ${schema.table(r.table).sheet} row to its site and cannot be emptied; the row would belong to no site.`, where);
+                    continue;
+                }
+                if (typeof value === "string" && TOKEN.test(value)) continue; //a new row of this workbook
+                if (!ctx.baseline.has(`${fk.parent}:${value}`)) {
+                    report.error(3, "outside_bundle",
+                        `${where.cell}: ${fk.column} = ${value} is a ${parent.sheet} row of another site. Rows can only be moved within the sites in this workbook.`, where);
+                    continue;
+                }
+                const reverse = schema.reverseReached().find(x => x.via.table === r.table && x.via.column === fk.column);
+                if (reverse && before !== null && before !== undefined) {
+                    if (!movedAway.has(reverse.table)) movedAway.set(reverse.table, { via: reverse.via, old: new Set(), movers: new Set() });
+                    movedAway.get(reverse.table).old.add(before);
+                    movedAway.get(reverse.table).movers.add(r.pk.value);
+                }
+            }
+        }
+        //a dataset or feature whose last tie to a site is moved away would be orphaned
+        for (const [tableName, { via, old, movers }] of movedAway) {
+            const child = schema.table(via.table);
+            const stillTied = new Set();
+            for (const r of ctx.records) {
+                if (r.table !== via.table || r.action === "delete") continue;
+                const v = r.values.get(via.column);
+                if (v !== null && v !== undefined && old.has(v)) stillTied.add(v);
+            }
+            const res = await client.query(
+                `select distinct t.${quoteIdent(via.column)} as v from public.${quoteIdent(child.name)} t
+                 where t.${quoteIdent(via.column)} = any($1::${arrayType(schema, child, via.column)})
+                   and not (t.${quoteIdent(child.pk)} = any($2::${arrayType(schema, child, child.pk)}))`,
+                [[...old], [...movers]]);
+            for (const row of res.rows) stillTied.add(Number(row.v));
+            for (const v of old) {
+                if (stillTied.has(v)) continue;
+                report.error(3, "orphaned",
+                    `After this change no ${child.sheet} row would point at ${schema.table(tableName).sheet} ${v}, so it would belong to no site and disappear from every export. Keep at least one row on it.`,
+                    { sheet: schema.table(tableName).sheet });
+            }
+        }
     }
 
     /** New rows of a table whose label is a plain column, matched by that column. */
