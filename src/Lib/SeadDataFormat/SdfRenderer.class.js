@@ -163,7 +163,9 @@ export default class SdfRenderer {
     _headerNote(sheet, column) {
         const lines = [];
         if (column.kind === "action") {
-            lines.push("Action", "Leave empty, or type delete to delete this row. Rows missing from the sheet are never deleted.");
+            lines.push("Action", sheet.role === "reference"
+                ? "Leave empty, or type delete to suggest removing this entry from the shared list."
+                : "Leave empty. Deleting rows is not supported yet. Rows missing from the sheet are never deleted.");
             return lines.join("\n");
         }
         lines.push(friendlyTitle(column.key));

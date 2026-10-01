@@ -5,7 +5,8 @@ import { SdfError, quoteIdent, rowHash, canonicalValue, canonicalCsv, sha256Hex 
 
 /**
  * Import stages 1-4 (spec §10): structural check, cell coercion, referential
- * resolution and the three-way diff. It writes nothing, to any database.
+ * resolution and the three-way diff. It writes nothing, to any database. For
+ * now, an import only edits rows that exist (SUPPORTED_OPERATIONS).
  *
  * Every error and warning is anchored to a sheet, and to a cell where there is
  * one. Processing halts at the first stage that produces an error, so the
@@ -30,6 +31,15 @@ const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?)?(Z|[
 const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 const RANGE = /^(empty|[[(][^,]*,[^,]*[\])])$/;
 const MAX_REPORTED_PER_CODE = 200;
+
+//Which changes to site data an import may make. The first version only edits rows
+//that exist (spec §10, "Scope"). The insert and delete paths are kept, switched
+//off: before either is switched on, the review's findings on it must be fixed -
+//inserts: ID allocation and reservations, sequences, materialised UUIDs, applying
+//a workbook twice, self-references, the follow-up; deletes: guards against rows
+//added under a deleted row since generation, blocking, the legacy dendro tables,
+//foreign keys from other schemas.
+const SUPPORTED_OPERATIONS = { insert: false, delete: false };
 
 class Report {
     constructor() {
@@ -553,6 +563,40 @@ export default class SdfValidator {
                 }
                 p.rows.push({ row: rowNumber, values });
             });
+        }
+
+        this._checkSupportedOperations(ctx);
+    }
+
+    /**
+     * §10 scope: new rows and deletes in site data are refused while the
+     * operation is not supported. Shared lists are unaffected, since a new or
+     * deleted row there is only ever a proposal.
+     */
+    _checkSupportedOperations(ctx) {
+        const { report, schema } = ctx;
+        const addedSheets = new Set();
+        for (const b of ctx.bindings) {
+            if (b.role !== "owned" || b.mode !== "added" || SUPPORTED_OPERATIONS.insert) continue;
+            if (!ctx.records.some(r => r.binding === b)) continue;
+            addedSheets.add(b.sheet);
+            report.error(2, "insert_not_supported",
+                `Sheet "${b.sheet}" adds rows to a table this file did not contain. Adding rows is not supported yet; ` +
+                "only changes to rows that already exist can be imported. Remove the sheet.", { sheet: b.sheet });
+        }
+        for (const r of ctx.records) {
+            if (r.binding.role !== "owned" || addedSheets.has(r.sheet)) continue;
+            const pkCell = r.cells.get(schema.table(r.table).pk);
+            if (r.pk.kind !== "id" && !SUPPORTED_OPERATIONS.insert) {
+                report.error(2, "insert_not_supported",
+                    `Row ${r.row} is a new row. Adding rows is not supported yet; only changes to rows that already exist can be imported. Remove the row.`,
+                    { sheet: r.sheet, cell: pkCell || `A${r.row}` });
+            }
+            else if (r.action === "delete" && !SUPPORTED_OPERATIONS.delete) {
+                report.error(2, "delete_not_supported",
+                    `Row ${r.row} is marked delete. Deleting rows is not supported yet; clear its _action cell.`,
+                    { sheet: r.sheet, cell: `${r.binding.ws.getColumn(r.binding.action).letter}${r.row}` });
+            }
         }
     }
 
