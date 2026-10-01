@@ -16,7 +16,7 @@ const TABLE = { name: "tbl_samples", sheet: "samples", pk: "sample_id", fks: [] 
  * baseline hash), `workbook` the curator's copy, `live` the database now (null
  * when deleted). Returns the change set and the report.
  */
-async function diff({ exported, workbook, live, proposed = {}, baseKeys = KEYS, dataKeys = KEYS }) {
+async function diff({ exported, workbook, live, proposed = {}, baseKeys = KEYS, dataKeys = KEYS, columnsGone = [], hashKeys = baseKeys }) {
     const report = {
         errors: [], warnings: [],
         error(stage, code, message) { this.errors.push({ code, message }); },
@@ -28,14 +28,14 @@ async function diff({ exported, workbook, live, proposed = {}, baseKeys = KEYS, 
         values: new Map(dataKeys.map(k => [k, workbook[k] ?? null])),
         cells: new Map(dataKeys.map((k, i) => [k, `${String.fromCharCode(66 + i)}2`])),
         proposed: new Map(Object.entries(proposed).map(([k, v]) => [k, { value: v, address: "Z2" }])),
-        binding: { role: "owned", baseKeys, data: new Map(dataKeys.map((k, i) => [k, i + 2])) },
+        binding: { role: "owned", baseKeys, columnsGone, data: new Map(dataKeys.map((k, i) => [k, i + 2])) },
     };
     const ctx = {
         report,
         schema: { table: () => TABLE, tables: new Map([[TABLE.name, TABLE]]) },
         records: [record],
         live: new Map([[TABLE.name, new Map(live ? [[live.sample_id, live]] : [])]]),
-        baseline: new Map([[`${TABLE.name}:${exported.sample_id}`, { hash: rowHash(baseKeys.map(k => exported[k] ?? null)), shared: false }]]),
+        baseline: new Map([[`${TABLE.name}:${exported.sample_id}`, { hash: rowHash(hashKeys.map(k => exported[k] ?? null)), shared: false }]]),
         schemaProposals: Object.keys(proposed).map(column => ({ kind: "schema", type: "column", table: TABLE.name, sheet: TABLE.sheet, column })),
         bundleSiteIds: [1],
         client: { query: async () => ({ rows: [] }) },
@@ -106,5 +106,15 @@ test("a column added since export still compares: only it is updated", async () 
 
 test("line endings alone are not an edit", async () => {
     const { cs } = await diff({ exported: row("a\r\nb"), workbook: row("a\nb"), live: row("a\r\nb") });
+    assert.equal(cs.updates.length + cs.conflicts.length, 0);
+});
+
+test("after a column is removed, a differing row is a conflict that says why; an equal row is fine", async () => {
+    //exported with a "colour" column that the database has since dropped
+    const gone = { exported: { ...row("a"), colour: "red" }, hashKeys: [...KEYS, "colour"], baseKeys: KEYS, columnsGone: ["colour"] };
+    let { cs } = await diff({ ...gone, workbook: row("b"), live: row("a") });
+    assert.equal(cs.updates.length, 0);
+    assert.equal(cs.conflicts[0]?.reason, "columns_removed_since_export");
+    ({ cs } = await diff({ ...gone, workbook: row("a"), live: row("a") }));
     assert.equal(cs.updates.length + cs.conflicts.length, 0);
 });

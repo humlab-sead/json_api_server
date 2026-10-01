@@ -349,6 +349,7 @@ export default class SdfValidator {
             ws, sheet, table, mode, role, exported,
             action: null, data: new Map(), label: new Map(), system: new Map(), proposed: new Map(),
             baseKeys: exported ? exported.dataKeys.filter(k => schema.column(table, k)) : [],
+            columnsGone: exported ? exported.dataKeys.filter(k => !schema.column(table, k)) : [],
             headerIndexes: new Set(headers.map(h => h.index)),
         };
         for (const { key, index } of headers) {
@@ -374,11 +375,14 @@ export default class SdfValidator {
         }
 
         if (exported) {
+            if (binding.columnsGone.length) {
+                report.warning(1, "column_gone",
+                    `${binding.columnsGone.length === 1 ? `Column ${binding.columnsGone[0]} has` : `Columns ${binding.columnsGone.join(", ")} have`} been removed from ${table.name} since export. ` +
+                    "Their values are ignored, and rows on this sheet that differ from the database can no longer be told apart from database changes: " +
+                    "they are listed as conflicts. Export the sites again to edit them.", { sheet });
+            }
             for (const key of exported.dataKeys) {
-                if (!schema.column(table, key)) {
-                    report.warning(1, "column_gone", `Column ${key} has been removed from ${table.name} since export; its values are ignored.`, { sheet });
-                    continue;
-                }
+                if (!schema.column(table, key)) continue;
                 if (!binding.data.has(key)) {
                     report.error(1, "missing_column",
                         `Column ${key} has been deleted or renamed. Every column of an exported sheet must stay, with its name in row 1 unchanged; hide columns you do not need instead.`,
@@ -1426,6 +1430,7 @@ export default class SdfValidator {
 
             let outcome;
             if (diffs.length === 0) outcome = "none";            //rule 1
+            else if (r.binding.columnsGone.length && B !== null) outcome = "schema-changed"; //the baseline hash covers columns that are gone
             else if (B === null) outcome = "update";             //row not in baseline (reference rows only)
             else if (hashW === B && hashL !== B) {
                 //rule 2, for the exported columns; columns added since export still count
@@ -1444,6 +1449,12 @@ export default class SdfValidator {
             const fields = outcome === "none" ? []
                 : outcome === "update-extra" ? diffs.filter(d => !baseKeys.includes(d.column))
                 : diffs;
+            if (outcome === "schema-changed") {
+                cs.conflicts.push({ table: r.table, sheet: r.sheet, row: r.row, id: r.pk.value, reason: "columns_removed_since_export",
+                    message: `${table.sheet} ${r.pk.value} differs from the database, and columns removed since export make it impossible to tell who changed it.`,
+                    fields: diffs.map(d => ({ column: d.column, workbook: d.after, live: d.before })) });
+                continue;
+            }
             if (outcome === "conflict") {
                 cs.conflicts.push({ table: r.table, sheet: r.sheet, row: r.row, id: r.pk.value, reason: "changed_on_both_sides",
                     message: `${table.sheet} ${r.pk.value} was edited in this workbook and also changed in the database after export.`,
