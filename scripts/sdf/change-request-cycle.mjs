@@ -186,6 +186,13 @@ try {
     const again = inContainer(`bin/add-sdf-change-request /tmp/${name}.zip --no-issues`);
     check("adding the same bundle twice is refused", !again.ok && /already in sdf\/sqitch.plan/.test(again.out), again.out);
 
+    //the edited rows exactly as the database holds them, scale and microseconds included
+    const rowText = () => psql(
+        `select t::text from public.tbl_physical_samples t where physical_sample_id in (${edited.sampleName.id}, ${edited.sampleType.id})
+         union all select t::text from public.tbl_sample_groups t where sample_group_id = ${edited.groupName.id}
+         union all select t::text from public.tbl_sites t where site_id = ${edited.latitude.id} order by 1`).out;
+    const textBefore = rowText();
+
     //----------------------------------------------------------------- deploy
     console.log("Deploy it, as deploy-staging does (--no-verify), then verify");
     const deployed = sqitch("deploy --no-verify");
@@ -219,6 +226,7 @@ try {
     check("reverts", reverted.ok, reverted.out);
     const afterRevert = differences(cells(original), cells(await exporter.export([SITE])));
     check("the database is exactly as before, date_updated included", afterRevert.length === 0, afterRevert.slice(0, 10));
+    check("the edited rows are byte for byte as before", rowText() === textBefore, { before: textBefore, after: rowText() });
 
     //----------------------------------------------------- a stale change request
     console.log("A row changes after generation: the deploy must abort and change nothing");

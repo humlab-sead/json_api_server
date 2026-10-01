@@ -1,5 +1,5 @@
 import SdfSchema from "./SdfSchema.class.js";
-import { fetchRows, arrayType, carrierExpression, isNormalisedText } from "./SdfRows.js";
+import { fetchRows, arrayType, carrierExpression, isNormalisedText, UNREPRESENTABLE } from "./SdfRows.js";
 import { loadWorkbook, readCell, plainValue, plainRows, CELL } from "./SdfWorkbookReader.js";
 import { SdfError, quoteIdent, rowHash, canonicalValue, machineChecksum, ESCAPE_LIKE, plainDecimal } from "./SdfCommon.js";
 
@@ -672,6 +672,11 @@ export default class SdfValidator {
             for (const { record, key, address } of items) {
                 const text = record.values.get(key);
                 const row = byText.get(text);
+                if (row && row.ok && row.canonical !== null && row.canonical.startsWith(UNREPRESENTABLE)) {
+                    this._sinkFor(report, record).error(2, "bad_format", `${address}: "${text}" is a date before year 1 or an infinite one, which SDF cannot carry yet.`, { sheet: record.sheet, cell: address });
+                    record.values.set(key, undefined);
+                    continue;
+                }
                 if (row && row.ok) {
                     record.values.set(key, row.canonical);
                     continue;

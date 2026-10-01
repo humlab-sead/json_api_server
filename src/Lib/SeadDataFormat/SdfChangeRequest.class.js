@@ -82,6 +82,7 @@ export default class SdfChangeRequest {
 
         const ids = await this._allocateIds(ctx);
         const plan = this._plan(ctx, ids, date.generated_at);
+        await this._exactDecimals(ctx, plan);
 
         const files = {};
         const dir = name;
@@ -201,6 +202,32 @@ export default class SdfChangeRequest {
         return { inserts, updates, deletes, order };
     }
 
+    /**
+     * The database's own text for every decimal in a before-image (§8, M15). An
+     * unconstrained numeric keeps the scale it was written with (12.50), which
+     * the carrier number (12.5) loses; guards compare numerically either way,
+     * but a revert must write back exactly what was there.
+     */
+    async _exactDecimals(ctx, plan) {
+        const { schema, client } = ctx;
+        const byTable = new Map();
+        for (const x of [...plan.updates, ...plan.deletes]) {
+            if (!byTable.has(x.table)) byTable.set(x.table, []);
+            byTable.get(x.table).push(x);
+        }
+        for (const [tableName, rows] of byTable) {
+            const table = schema.table(tableName);
+            const decimals = schema.exportedColumns(table).filter(c => c.valueKind === "decimal").map(c => c.name);
+            if (!decimals.length) continue;
+            const res = await client.query(
+                `select t.${quoteIdent(table.pk)} as id, ${decimals.map(c => `t.${quoteIdent(c)}::text as ${quoteIdent(c)}`).join(", ")}
+                 from public.${quoteIdent(tableName)} t where t.${quoteIdent(table.pk)} = any($1::${schema.column(table, table.pk).typname}[])`,
+                [rows.map(r => r.id)]);
+            const exact = new Map(res.rows.map(r => [Number(r.id), r]));
+            for (const r of rows) r.beforeText = exact.get(r.id) || {};
+        }
+    }
+
     /** Tables ordered parents before children (Kahn's algorithm over the fks). */
     _tableOrder(schema, tables) {
         const deps = new Map([...tables].map(t => [t, new Set(
@@ -221,18 +248,22 @@ export default class SdfChangeRequest {
      * explicit cast to varchar(n) truncates silently, while assigning a base-typed
      * value to the column raises on anything that does not fit.
      */
-    _literal(schema, tableName, column, value) {
+    _literal(schema, tableName, column, value, exact) {
         if (value === null || value === undefined) return "null";
         const col = schema.column(schema.table(tableName), column);
         const type = col ? col.baseType : "text";
-        if (typeof value === "number") return `${value < 0 ? `(${value})` : value}::${type}`;
+        if (typeof value === "number") {
+            //the database's own text, where it holds this very number (scale kept)
+            const text = typeof exact === "string" && Number(exact) === value ? exact : String(value);
+            return `${value < 0 ? `(${text})` : text}::${type}`;
+        }
         if (typeof value === "boolean") return value ? "true" : "false";
         return `${stringLiteral(String(value))}::${type}`;
     }
 
     /** `col is not distinct from <literal>` for every column of a row image. */
-    _matches(schema, tableName, image, columns) {
-        return columns.map(c => `${quoteIdent(c)} is not distinct from ${this._literal(schema, tableName, c, image[c])}`).join("\n              and ");
+    _matches(schema, tableName, image, columns, exact = {}) {
+        return columns.map(c => `${quoteIdent(c)} is not distinct from ${this._literal(schema, tableName, c, image[c], exact[c])}`).join("\n              and ");
     }
 
     _imageColumns(schema, tableName, image) {
@@ -269,7 +300,7 @@ export default class SdfChangeRequest {
             const cols = this._imageColumns(schema, u.table, u.before);
             checks.push(`    if not exists (select 1 from public.${quoteIdent(u.table)}
             where ${pkOf(u.table)} = ${u.id}
-              and ${this._matches(schema, u.table, u.before, cols)}) then
+              and ${this._matches(schema, u.table, u.before, cols, u.beforeText)}) then
         ${this._raise(`SDF guard: public.${u.table} ${u.id} has changed since this change request was generated.`)}
     end if;`);
         }
@@ -332,7 +363,7 @@ export default class SdfChangeRequest {
                 group.push(inserts[j]);
                 j++;
             }
-            const rows = group.map(g => `    (${cols.map(c => this._literal(schema, g.table, c, g.values[c])).join(", ")})`);
+            const rows = group.map(g => `    (${cols.map(c => this._literal(schema, g.table, c, g.values[c], g.exact?.[c])).join(", ")})`);
             out.push(`insert into public.${quoteIdent(first.table)} (${cols.map(quoteIdent).join(", ")}) values\n${rows.join(",\n")};`);
             i = j;
         }
@@ -372,14 +403,14 @@ export default class SdfChangeRequest {
 
         if (plan.deletes.length) {
             out.push("-- Restore deleted rows, parents before children.");
-            const restore = [...plan.deletes].reverse().map(d => ({ table: d.table, row: d.row, id: d.id,
+            const restore = [...plan.deletes].reverse().map(d => ({ table: d.table, row: d.row, id: d.id, exact: d.beforeText,
                 values: Object.fromEntries(this._imageColumns(schema, d.table, d.before).map(c => [c, d.before[c]])) }));
             out.push(...this._insertStatements(schema, restore), "");
         }
         if (plan.updates.length) {
             out.push("-- Restore updated columns.");
             for (const u of plan.updates) {
-                const sets = u.fields.map(f => `${quoteIdent(f.column)} = ${this._literal(schema, u.table, f.column, f.before)}`).join(", ");
+                const sets = u.fields.map(f => `${quoteIdent(f.column)} = ${this._literal(schema, u.table, f.column, f.before, u.beforeText?.[f.column])}`).join(", ");
                 out.push(`update public.${quoteIdent(u.table)} set ${sets} where ${pkOf(u.table)} = ${u.id};`);
             }
             out.push("");

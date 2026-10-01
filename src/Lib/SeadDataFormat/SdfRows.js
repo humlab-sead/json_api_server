@@ -27,19 +27,26 @@ export function selectList(schema, table) {
  * curator types and what the database holds are compared in one form.
  */
 export function carrierExpression(col, q) {
+    //to_char drops the era and returns NULL for infinity, so those values are
+    //marked instead, and refused (§8, M15)
+    const dated = (lowest, format) =>
+        `case when isfinite(${q}) and ${q} >= ${lowest} then ${format} else '${UNREPRESENTABLE}' || ${q}::text end`;
     switch (col.typname) {
         case "int2": case "int4": case "bool":
             return q;
         case "date":
-            return `to_char(${q}, 'YYYY-MM-DD')`;
+            return dated("'0001-01-01'::date", `to_char(${q}, 'YYYY-MM-DD')`);
         case "timestamptz":
-            return `to_char(${q} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
+            return dated("'0001-01-01Z'::timestamptz", `to_char(${q} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`);
         case "timestamp":
-            return `to_char(${q}, 'YYYY-MM-DD"T"HH24:MI:SS.US')`;
+            return dated("'0001-01-01'::timestamp", `to_char(${q}, 'YYYY-MM-DD"T"HH24:MI:SS.US')`);
         default:
             return `${q}::text`;
     }
 }
+
+/** Marks a date or timestamp that a cell cannot carry: before year 1, or infinite. */
+export const UNREPRESENTABLE = "!unrepresentable:";
 
 /** Text-carried types whose text PostgreSQL normalises: dates, UUIDs, ranges, … */
 export function isNormalisedText(col) {
@@ -90,6 +97,10 @@ export function normaliseRow(schema, table, row) {
                     `${table.name}.${col.name} holds ${value}, more than ${MAX_EXACT_SIGNIFICANT_DIGITS} significant digits.`, where());
             }
             row[col.name] = n;
+        }
+        else if (typeof value === "string" && value.startsWith(UNREPRESENTABLE)) {
+            throw new SdfError("value_not_representable",
+                `${table.name}.${col.name} holds ${value.slice(UNREPRESENTABLE.length)}, a date before year 1 or an infinite one, which SDF cannot carry yet.`, where());
         }
         else if (col.valueKind === "text" && value.length > EXCEL_MAX_CELL_CHARS) {
             throw new SdfError("text_too_long",
