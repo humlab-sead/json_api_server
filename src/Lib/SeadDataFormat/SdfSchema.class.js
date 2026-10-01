@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { SdfError, quoteIdent } from "./SdfCommon.js";
 
 /**
@@ -44,6 +45,10 @@ const DEPRECATED = {
     tbl_dendro_dates: "read-only", //OQ-24, sead_change_control#451
     tbl_dendro_lookup: "read-only", //a lookup of the legacy tables only: shipped, but never proposed on
 };
+
+//§4: what a spreadsheet allows in a sheet name, and the names SDF keeps for itself.
+const MAX_SHEET_NAME = 31;
+const RESERVED_SHEET = /^(readme|readme_.*|view_.*|scratch.*|_.*)$/i;
 
 //§5: columns the database maintains itself. Exported, never read back.
 const SYSTEM_COLUMNS = new Set(["date_updated"]);
@@ -139,7 +144,7 @@ export default class SdfSchema {
         for (const row of tables.rows) {
             this.tables.set(row.name, {
                 name: row.name,
-                sheet: row.name.replace(/^tbl_/, ""),
+                sheet: sheetName(row.name),
                 comment: row.comment,
                 columns: [],
                 pk: null,
@@ -245,7 +250,8 @@ export default class SdfSchema {
         }
 
         //explicit additions, and the tables that hang off them (dataset contacts,
-        //methods and submissions). Their only ownership edge is to the explicit table.
+        //methods and submissions), followed as far as they go: a table referencing one
+        //of those is owned too. Their ownership edges are their keys into that subtree.
         const closureNames = new Set(this.owned.keys());
         for (const spec of EXPLICIT_OWNED) {
             const table = this._table(spec.table);
@@ -257,14 +263,26 @@ export default class SdfSchema {
             this.owned.set(table.name, {
                 table, level: this.owned.get(viaTable.name).level + 1, edges: [], reach: "reverse", via: viaFk,
             });
-            for (const fk of table.incoming) {
-                if (fk.table === table.name || closureNames.has(fk.table) || this.owned.has(fk.table)) continue;
-                this.owned.set(fk.table, {
-                    table: this._table(fk.table),
-                    level: this.owned.get(table.name).level + 1,
-                    edges: [fk],
-                    reach: "explicit-child",
-                });
+            const subtree = new Set([table.name]);
+            let frontier = [table.name];
+            while (frontier.length) {
+                const next = [];
+                for (const parentName of frontier) {
+                    for (const fk of this._table(parentName).incoming) {
+                        if (fk.table === fk.parent || closureNames.has(fk.table) || this.owned.has(fk.table)) continue;
+                        const child = this._table(fk.table);
+                        subtree.add(child.name);
+                        this.owned.set(child.name, {
+                            table: child,
+                            level: this.owned.get(parentName).level + 1,
+                            edges: child.fks.filter(f => f.parent !== f.table && subtree.has(f.parent)),
+                            reach: "explicit-child",
+                            root: table.name,
+                        });
+                        next.push(child.name);
+                    }
+                }
+                frontier = next;
             }
         }
 
@@ -283,12 +301,12 @@ export default class SdfSchema {
             const at = list.indexOf(anchor);
             list.splice(at < 0 ? list.length : at + 1, 0, ...names);
         };
-        const datasetGroup = ["tbl_datasets", ...[...this.owned.values()]
-            .filter(e => e.reach === "explicit-child" && e.edges[0].parent === "tbl_datasets")
-            .map(e => e.table.name).sort()];
-        const featureGroup = ["tbl_features", ...[...this.owned.values()]
-            .filter(e => e.reach === "explicit-child" && e.edges[0].parent === "tbl_features")
-            .map(e => e.table.name).sort()];
+        const subtreeOf = root => [root, ...[...this.owned.values()]
+            .filter(e => e.reach === "explicit-child" && e.root === root)
+            .sort((a, b) => a.level - b.level || a.table.name.localeCompare(b.table.name))
+            .map(e => e.table.name)];
+        const datasetGroup = subtreeOf("tbl_datasets");
+        const featureGroup = subtreeOf("tbl_features");
         insertAfter(byLevel, "tbl_analysis_entities", datasetGroup);
         insertAfter(byLevel, "tbl_physical_samples", featureGroup);
         this.ownedOrder = byLevel;
@@ -326,6 +344,28 @@ export default class SdfSchema {
         }
         this.referencedOrder = [...this.referenced.keys()].sort((a, b) =>
             this._table(a).sheet.localeCompare(this._table(b).sheet));
+        this._checkSheetNames();
+    }
+
+    /**
+     * §4: every exported table needs a sheet name a spreadsheet accepts and the
+     * importer can bind. Names are shortened deterministically (sheetName), but a
+     * clash with a reserved name, or two names equal ignoring case, is refused:
+     * ExcelJS throws on the latter, and the former would be ignored on import.
+     */
+    _checkSheetNames() {
+        const seen = new Map();
+        for (const name of [...this.owned.keys(), ...this.referenced.keys()]) {
+            const sheet = this._table(name).sheet;
+            if (RESERVED_SHEET.test(sheet)) {
+                throw new SdfError("unsupported_schema", `${name} would get the sheet name "${sheet}", which SDF reserves (§4).`);
+            }
+            const key = sheet.toLowerCase();
+            if (seen.has(key)) {
+                throw new SdfError("unsupported_schema", `${seen.get(key)} and ${name} would get sheet names that differ only in case (§4).`);
+            }
+            seen.set(key, name);
+        }
     }
 
     _assignLabels() {
@@ -380,9 +420,12 @@ export default class SdfSchema {
         return entry ? entry.deprecated : null;
     }
 
-    /** The table a sheet name denotes (§4: table name without tbl_), if any. */
-    tableForSheet(sheetName) {
-        return this.tables.get(`tbl_${sheetName}`) || null;
+    /** The table a sheet name denotes (§4: table name without tbl_, shortened), if any. */
+    tableForSheet(name) {
+        for (const table of this.tables.values()) {
+            if (table.sheet === name) return table;
+        }
+        return null;
     }
 
     /**
@@ -413,6 +456,18 @@ export default class SdfSchema {
         }
         return keys;
     }
+}
+
+/**
+ * §4: a table's sheet name, its name without tbl_. A spreadsheet allows 31
+ * characters, so a longer name keeps its first 26 and adds "~" and four hex
+ * digits of a hash of the full name: deterministic, and distinct.
+ */
+function sheetName(tableName) {
+    const name = tableName.replace(/^tbl_/, "");
+    if (name.length <= MAX_SHEET_NAME) return name;
+    const hash = crypto.createHash("sha1").update(tableName).digest("hex").slice(0, 4);
+    return `${name.slice(0, MAX_SHEET_NAME - 5)}~${hash}`;
 }
 
 /**

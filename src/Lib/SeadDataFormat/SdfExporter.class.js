@@ -20,6 +20,10 @@ import { SDF_VERSION, SdfError, DEFAULT_MAX_CELLS, quoteIdent, rowHash, canonica
  * nothing here knows what any table means; a self-audit then recounts every
  * table by an independent route and refuses to export on any mismatch.
  */
+//§6: a shared list shipped in full feeds a dropdown. One far larger than any today
+//(the largest has a few hundred rows) belongs in USED_ONLY_REFERENCES instead.
+const MAX_FULL_LIST_ROWS = 2000;
+
 export default class SdfExporter {
 
     constructor(app) {
@@ -235,6 +239,11 @@ export default class SdfExporter {
             let rows;
             if (mode === "full") {
                 rows = await fetchRows(client, schema, table, "true", []);
+                if (rows.length > MAX_FULL_LIST_ROWS) {
+                    throw new SdfError("unsupported_schema",
+                        `${name} has ${rows.length} rows, too many to ship in full as a dropdown list (at most ${MAX_FULL_LIST_ROWS}). It needs to be added to the used-only shared lists (§6).`,
+                        { table: name, rows: rows.length }, 500);
+                }
             }
             else {
                 const byColumn = new Map();
