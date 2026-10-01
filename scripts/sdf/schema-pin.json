@@ -1,0 +1,736 @@
+{
+  "owned": {
+    "tbl_abundance_ident_levels": {
+      "sheet": "abundance_ident_levels",
+      "reach": "closure",
+      "ownership_keys": [
+        "abundance_id -> tbl_abundances"
+      ]
+    },
+    "tbl_abundance_modifications": {
+      "sheet": "abundance_modifications",
+      "reach": "closure",
+      "ownership_keys": [
+        "abundance_id -> tbl_abundances"
+      ]
+    },
+    "tbl_abundance_properties": {
+      "sheet": "abundance_properties",
+      "reach": "closure",
+      "ownership_keys": [
+        "abundance_id -> tbl_abundances"
+      ]
+    },
+    "tbl_abundances": {
+      "sheet": "abundances",
+      "reach": "closure",
+      "ownership_keys": [
+        "analysis_entity_id -> tbl_analysis_entities"
+      ]
+    },
+    "tbl_aggregate_sample_ages": {
+      "sheet": "aggregate_sample_ages",
+      "reach": "closure",
+      "ownership_keys": [
+        "analysis_entity_age_id -> tbl_analysis_entity_ages"
+      ]
+    },
+    "tbl_aggregate_samples": {
+      "sheet": "aggregate_samples",
+      "reach": "closure",
+      "ownership_keys": [
+        "analysis_entity_id -> tbl_analysis_entities"
+      ]
+    },
+    "tbl_analysis_boolean_values": {
+      "sheet": "analysis_boolean_values",
+      "reach": "closure",
+      "ownership_keys": [
+        "analysis_value_id -> tbl_analysis_values"
+      ]
+    },
+    "tbl_analysis_categorical_values": {
+      "sheet": "analysis_categorical_values",
+      "reach": "closure",
+      "ownership_keys": [
+        "analysis_value_id -> tbl_analysis_values"
+      ]
+    },
+    "tbl_analysis_dating_ranges": {
+      "sheet": "analysis_dating_ranges",
+      "reach": "closure",
+      "ownership_keys": [
+        "analysis_value_id -> tbl_analysis_values"
+      ]
+    },
+    "tbl_analysis_entities": {
+      "sheet": "analysis_entities",
+      "reach": "closure",
+      "ownership_keys": [
+        "dataset_id -> tbl_datasets",
+        "physical_sample_id -> tbl_physical_samples"
+      ]
+    },
+    "tbl_analysis_entity_ages": {
+      "sheet": "analysis_entity_ages",
+      "reach": "closure",
+      "ownership_keys": [
+        "analysis_entity_id -> tbl_analysis_entities"
+      ]
+    },
+    "tbl_analysis_entity_dimensions": {
+      "sheet": "analysis_entity_dimensions",
+      "reach": "closure",
+      "ownership_keys": [
+        "analysis_entity_id -> tbl_analysis_entities"
+      ]
+    },
+    "tbl_analysis_entity_prep_methods": {
+      "sheet": "analysis_entity_prep_methods",
+      "reach": "closure",
+      "ownership_keys": [
+        "analysis_entity_id -> tbl_analysis_entities"
+      ]
+    },
+    "tbl_analysis_identifiers": {
+      "sheet": "analysis_identifiers",
+      "reach": "closure",
+      "ownership_keys": [
+        "analysis_value_id -> tbl_analysis_values"
+      ]
+    },
+    "tbl_analysis_integer_ranges": {
+      "sheet": "analysis_integer_ranges",
+      "reach": "closure",
+      "ownership_keys": [
+        "analysis_value_id -> tbl_analysis_values"
+      ]
+    },
+    "tbl_analysis_integer_values": {
+      "sheet": "analysis_integer_values",
+      "reach": "closure",
+      "ownership_keys": [
+        "analysis_value_id -> tbl_analysis_values"
+      ]
+    },
+    "tbl_analysis_notes": {
+      "sheet": "analysis_notes",
+      "reach": "closure",
+      "ownership_keys": [
+        "analysis_value_id -> tbl_analysis_values"
+      ]
+    },
+    "tbl_analysis_numerical_ranges": {
+      "sheet": "analysis_numerical_ranges",
+      "reach": "closure",
+      "ownership_keys": [
+        "analysis_value_id -> tbl_analysis_values"
+      ]
+    },
+    "tbl_analysis_numerical_values": {
+      "sheet": "analysis_numerical_values",
+      "reach": "closure",
+      "ownership_keys": [
+        "analysis_value_id -> tbl_analysis_values"
+      ]
+    },
+    "tbl_analysis_taxon_counts": {
+      "sheet": "analysis_taxon_counts",
+      "reach": "closure",
+      "ownership_keys": [
+        "analysis_value_id -> tbl_analysis_values"
+      ]
+    },
+    "tbl_analysis_value_dimensions": {
+      "sheet": "analysis_value_dimensions",
+      "reach": "closure",
+      "ownership_keys": [
+        "analysis_value_id -> tbl_analysis_values"
+      ]
+    },
+    "tbl_analysis_values": {
+      "sheet": "analysis_values",
+      "reach": "closure",
+      "ownership_keys": [
+        "analysis_entity_id -> tbl_analysis_entities"
+      ]
+    },
+    "tbl_ceramics": {
+      "sheet": "ceramics",
+      "reach": "closure",
+      "ownership_keys": [
+        "analysis_entity_id -> tbl_analysis_entities"
+      ]
+    },
+    "tbl_dataset_contacts": {
+      "sheet": "dataset_contacts",
+      "reach": "explicit-child",
+      "ownership_keys": [
+        "dataset_id -> tbl_datasets"
+      ]
+    },
+    "tbl_dataset_methods": {
+      "sheet": "dataset_methods",
+      "reach": "explicit-child",
+      "ownership_keys": [
+        "dataset_id -> tbl_datasets"
+      ]
+    },
+    "tbl_dataset_submissions": {
+      "sheet": "dataset_submissions",
+      "reach": "explicit-child",
+      "ownership_keys": [
+        "dataset_id -> tbl_datasets"
+      ]
+    },
+    "tbl_datasets": {
+      "sheet": "datasets",
+      "reach": "reverse",
+      "ownership_keys": []
+    },
+    "tbl_dating_material": {
+      "sheet": "dating_material",
+      "reach": "closure",
+      "ownership_keys": [
+        "geochron_id -> tbl_geochronology"
+      ]
+    },
+    "tbl_dendro": {
+      "sheet": "dendro",
+      "reach": "closure",
+      "deprecated": "excluded",
+      "ownership_keys": [
+        "analysis_entity_id -> tbl_analysis_entities"
+      ]
+    },
+    "tbl_dendro_date_notes": {
+      "sheet": "dendro_date_notes",
+      "reach": "closure",
+      "deprecated": "excluded",
+      "ownership_keys": [
+        "dendro_date_id -> tbl_dendro_dates"
+      ]
+    },
+    "tbl_dendro_dates": {
+      "sheet": "dendro_dates",
+      "reach": "closure",
+      "deprecated": "read-only",
+      "ownership_keys": [
+        "analysis_entity_id -> tbl_analysis_entities"
+      ]
+    },
+    "tbl_feature_properties": {
+      "sheet": "feature_properties",
+      "reach": "explicit-child",
+      "ownership_keys": [
+        "feature_id -> tbl_features"
+      ]
+    },
+    "tbl_features": {
+      "sheet": "features",
+      "reach": "reverse",
+      "ownership_keys": []
+    },
+    "tbl_geochron_refs": {
+      "sheet": "geochron_refs",
+      "reach": "closure",
+      "ownership_keys": [
+        "geochron_id -> tbl_geochronology"
+      ]
+    },
+    "tbl_geochronology": {
+      "sheet": "geochronology",
+      "reach": "closure",
+      "ownership_keys": [
+        "analysis_entity_id -> tbl_analysis_entities"
+      ]
+    },
+    "tbl_isotopes": {
+      "sheet": "isotopes",
+      "reach": "closure",
+      "ownership_keys": [
+        "analysis_entity_id -> tbl_analysis_entities"
+      ]
+    },
+    "tbl_lithology": {
+      "sheet": "lithology",
+      "reach": "closure",
+      "ownership_keys": [
+        "sample_group_id -> tbl_sample_groups"
+      ]
+    },
+    "tbl_measured_value_dimensions": {
+      "sheet": "measured_value_dimensions",
+      "reach": "closure",
+      "ownership_keys": [
+        "measured_value_id -> tbl_measured_values"
+      ]
+    },
+    "tbl_measured_values": {
+      "sheet": "measured_values",
+      "reach": "closure",
+      "ownership_keys": [
+        "analysis_entity_id -> tbl_analysis_entities"
+      ]
+    },
+    "tbl_physical_sample_features": {
+      "sheet": "physical_sample_features",
+      "reach": "closure",
+      "ownership_keys": [
+        "feature_id -> tbl_features",
+        "physical_sample_id -> tbl_physical_samples"
+      ]
+    },
+    "tbl_physical_samples": {
+      "sheet": "physical_samples",
+      "reach": "closure",
+      "ownership_keys": [
+        "sample_group_id -> tbl_sample_groups"
+      ]
+    },
+    "tbl_relative_dates": {
+      "sheet": "relative_dates",
+      "reach": "closure",
+      "ownership_keys": [
+        "analysis_entity_id -> tbl_analysis_entities"
+      ]
+    },
+    "tbl_sample_alt_refs": {
+      "sheet": "sample_alt_refs",
+      "reach": "closure",
+      "ownership_keys": [
+        "physical_sample_id -> tbl_physical_samples"
+      ]
+    },
+    "tbl_sample_colours": {
+      "sheet": "sample_colours",
+      "reach": "closure",
+      "ownership_keys": [
+        "physical_sample_id -> tbl_physical_samples"
+      ]
+    },
+    "tbl_sample_coordinates": {
+      "sheet": "sample_coordinates",
+      "reach": "closure",
+      "ownership_keys": [
+        "physical_sample_id -> tbl_physical_samples"
+      ]
+    },
+    "tbl_sample_descriptions": {
+      "sheet": "sample_descriptions",
+      "reach": "closure",
+      "ownership_keys": [
+        "physical_sample_id -> tbl_physical_samples"
+      ]
+    },
+    "tbl_sample_dimensions": {
+      "sheet": "sample_dimensions",
+      "reach": "closure",
+      "ownership_keys": [
+        "physical_sample_id -> tbl_physical_samples"
+      ]
+    },
+    "tbl_sample_group_coordinates": {
+      "sheet": "sample_group_coordinates",
+      "reach": "closure",
+      "ownership_keys": [
+        "sample_group_id -> tbl_sample_groups"
+      ]
+    },
+    "tbl_sample_group_descriptions": {
+      "sheet": "sample_group_descriptions",
+      "reach": "closure",
+      "ownership_keys": [
+        "sample_group_id -> tbl_sample_groups"
+      ]
+    },
+    "tbl_sample_group_dimensions": {
+      "sheet": "sample_group_dimensions",
+      "reach": "closure",
+      "ownership_keys": [
+        "sample_group_id -> tbl_sample_groups"
+      ]
+    },
+    "tbl_sample_group_images": {
+      "sheet": "sample_group_images",
+      "reach": "closure",
+      "ownership_keys": [
+        "sample_group_id -> tbl_sample_groups"
+      ]
+    },
+    "tbl_sample_group_notes": {
+      "sheet": "sample_group_notes",
+      "reach": "closure",
+      "ownership_keys": [
+        "sample_group_id -> tbl_sample_groups"
+      ]
+    },
+    "tbl_sample_group_references": {
+      "sheet": "sample_group_references",
+      "reach": "closure",
+      "ownership_keys": [
+        "sample_group_id -> tbl_sample_groups"
+      ]
+    },
+    "tbl_sample_groups": {
+      "sheet": "sample_groups",
+      "reach": "closure",
+      "ownership_keys": [
+        "site_id -> tbl_sites"
+      ]
+    },
+    "tbl_sample_horizons": {
+      "sheet": "sample_horizons",
+      "reach": "closure",
+      "ownership_keys": [
+        "physical_sample_id -> tbl_physical_samples"
+      ]
+    },
+    "tbl_sample_images": {
+      "sheet": "sample_images",
+      "reach": "closure",
+      "ownership_keys": [
+        "physical_sample_id -> tbl_physical_samples"
+      ]
+    },
+    "tbl_sample_locations": {
+      "sheet": "sample_locations",
+      "reach": "closure",
+      "ownership_keys": [
+        "physical_sample_id -> tbl_physical_samples"
+      ]
+    },
+    "tbl_sample_notes": {
+      "sheet": "sample_notes",
+      "reach": "closure",
+      "ownership_keys": [
+        "physical_sample_id -> tbl_physical_samples"
+      ]
+    },
+    "tbl_site_images": {
+      "sheet": "site_images",
+      "reach": "closure",
+      "ownership_keys": [
+        "site_id -> tbl_sites"
+      ]
+    },
+    "tbl_site_locations": {
+      "sheet": "site_locations",
+      "reach": "closure",
+      "ownership_keys": [
+        "site_id -> tbl_sites"
+      ]
+    },
+    "tbl_site_natgridrefs": {
+      "sheet": "site_natgridrefs",
+      "reach": "closure",
+      "ownership_keys": [
+        "site_id -> tbl_sites"
+      ]
+    },
+    "tbl_site_other_records": {
+      "sheet": "site_other_records",
+      "reach": "closure",
+      "ownership_keys": [
+        "site_id -> tbl_sites"
+      ]
+    },
+    "tbl_site_preservation_status": {
+      "sheet": "site_preservation_status",
+      "reach": "closure",
+      "ownership_keys": [
+        "site_id -> tbl_sites"
+      ]
+    },
+    "tbl_site_properties": {
+      "sheet": "site_properties",
+      "reach": "closure",
+      "ownership_keys": [
+        "site_id -> tbl_sites"
+      ]
+    },
+    "tbl_site_references": {
+      "sheet": "site_references",
+      "reach": "closure",
+      "ownership_keys": [
+        "site_id -> tbl_sites"
+      ]
+    },
+    "tbl_site_site_types": {
+      "sheet": "site_site_types",
+      "reach": "closure",
+      "ownership_keys": [
+        "site_id -> tbl_sites"
+      ]
+    },
+    "tbl_sites": {
+      "sheet": "sites",
+      "reach": "root",
+      "ownership_keys": []
+    },
+    "tbl_tephra_dates": {
+      "sheet": "tephra_dates",
+      "reach": "closure",
+      "ownership_keys": [
+        "analysis_entity_id -> tbl_analysis_entities"
+      ]
+    }
+  },
+  "referenced": {
+    "tbl_abundance_elements": {
+      "sheet": "abundance_elements",
+      "mode": "full"
+    },
+    "tbl_age_types": {
+      "sheet": "age_types",
+      "mode": "full"
+    },
+    "tbl_aggregate_datasets": {
+      "sheet": "aggregate_datasets",
+      "mode": "full"
+    },
+    "tbl_alt_ref_types": {
+      "sheet": "alt_ref_types",
+      "mode": "full"
+    },
+    "tbl_biblio": {
+      "sheet": "biblio",
+      "mode": "used-only"
+    },
+    "tbl_ceramics_lookup": {
+      "sheet": "ceramics_lookup",
+      "mode": "full"
+    },
+    "tbl_chronologies": {
+      "sheet": "chronologies",
+      "mode": "full"
+    },
+    "tbl_colours": {
+      "sheet": "colours",
+      "mode": "full"
+    },
+    "tbl_contact_types": {
+      "sheet": "contact_types",
+      "mode": "full"
+    },
+    "tbl_contacts": {
+      "sheet": "contacts",
+      "mode": "used-only"
+    },
+    "tbl_coordinate_method_dimensions": {
+      "sheet": "coordinate_method_dimensions",
+      "mode": "full"
+    },
+    "tbl_data_types": {
+      "sheet": "data_types",
+      "mode": "full"
+    },
+    "tbl_dataset_masters": {
+      "sheet": "dataset_masters",
+      "mode": "full"
+    },
+    "tbl_dataset_submission_types": {
+      "sheet": "dataset_submission_types",
+      "mode": "full"
+    },
+    "tbl_dating_labs": {
+      "sheet": "dating_labs",
+      "mode": "full"
+    },
+    "tbl_dating_uncertainty": {
+      "sheet": "dating_uncertainty",
+      "mode": "full"
+    },
+    "tbl_dendro_lookup": {
+      "sheet": "dendro_lookup",
+      "mode": "full",
+      "deprecated": "read-only"
+    },
+    "tbl_dimensions": {
+      "sheet": "dimensions",
+      "mode": "full"
+    },
+    "tbl_feature_types": {
+      "sheet": "feature_types",
+      "mode": "full"
+    },
+    "tbl_horizons": {
+      "sheet": "horizons",
+      "mode": "full"
+    },
+    "tbl_identification_levels": {
+      "sheet": "identification_levels",
+      "mode": "full"
+    },
+    "tbl_image_types": {
+      "sheet": "image_types",
+      "mode": "full"
+    },
+    "tbl_isotope_measurements": {
+      "sheet": "isotope_measurements",
+      "mode": "full"
+    },
+    "tbl_isotope_standards": {
+      "sheet": "isotope_standards",
+      "mode": "full"
+    },
+    "tbl_isotope_value_specifiers": {
+      "sheet": "isotope_value_specifiers",
+      "mode": "full"
+    },
+    "tbl_locations": {
+      "sheet": "locations",
+      "mode": "used-only"
+    },
+    "tbl_methods": {
+      "sheet": "methods",
+      "mode": "full"
+    },
+    "tbl_modification_types": {
+      "sheet": "modification_types",
+      "mode": "full"
+    },
+    "tbl_projects": {
+      "sheet": "projects",
+      "mode": "used-only"
+    },
+    "tbl_property_types": {
+      "sheet": "property_types",
+      "mode": "full"
+    },
+    "tbl_record_types": {
+      "sheet": "record_types",
+      "mode": "full"
+    },
+    "tbl_relative_ages": {
+      "sheet": "relative_ages",
+      "mode": "used-only"
+    },
+    "tbl_sample_description_types": {
+      "sheet": "sample_description_types",
+      "mode": "full"
+    },
+    "tbl_sample_group_description_types": {
+      "sheet": "sample_group_description_types",
+      "mode": "full"
+    },
+    "tbl_sample_group_sampling_contexts": {
+      "sheet": "sample_group_sampling_contexts",
+      "mode": "full"
+    },
+    "tbl_sample_location_types": {
+      "sheet": "sample_location_types",
+      "mode": "full"
+    },
+    "tbl_sample_types": {
+      "sheet": "sample_types",
+      "mode": "full"
+    },
+    "tbl_seasons": {
+      "sheet": "seasons",
+      "mode": "full"
+    },
+    "tbl_site_types": {
+      "sheet": "site_types",
+      "mode": "full"
+    },
+    "tbl_taxa_tree_master": {
+      "sheet": "taxa_tree_master",
+      "mode": "used-only"
+    },
+    "tbl_tephras": {
+      "sheet": "tephras",
+      "mode": "full"
+    },
+    "tbl_units": {
+      "sheet": "units",
+      "mode": "full"
+    },
+    "tbl_value_classes": {
+      "sheet": "value_classes",
+      "mode": "full"
+    },
+    "tbl_value_qualifier_symbols": {
+      "sheet": "value_qualifier_symbols",
+      "mode": "full"
+    },
+    "tbl_value_qualifiers": {
+      "sheet": "value_qualifiers",
+      "mode": "full"
+    },
+    "tbl_value_type_items": {
+      "sheet": "value_type_items",
+      "mode": "full"
+    }
+  },
+  "sheet_order": [
+    "sites",
+    "sample_groups",
+    "site_images",
+    "site_locations",
+    "site_natgridrefs",
+    "site_other_records",
+    "site_preservation_status",
+    "site_properties",
+    "site_references",
+    "site_site_types",
+    "lithology",
+    "physical_samples",
+    "features",
+    "feature_properties",
+    "sample_group_coordinates",
+    "sample_group_descriptions",
+    "sample_group_dimensions",
+    "sample_group_images",
+    "sample_group_notes",
+    "sample_group_references",
+    "analysis_entities",
+    "datasets",
+    "dataset_contacts",
+    "dataset_methods",
+    "dataset_submissions",
+    "physical_sample_features",
+    "sample_alt_refs",
+    "sample_colours",
+    "sample_coordinates",
+    "sample_descriptions",
+    "sample_dimensions",
+    "sample_horizons",
+    "sample_images",
+    "sample_locations",
+    "sample_notes",
+    "abundances",
+    "aggregate_samples",
+    "analysis_entity_ages",
+    "analysis_entity_dimensions",
+    "analysis_entity_prep_methods",
+    "analysis_values",
+    "ceramics",
+    "dendro",
+    "dendro_dates",
+    "geochronology",
+    "isotopes",
+    "measured_values",
+    "relative_dates",
+    "tephra_dates",
+    "abundance_ident_levels",
+    "abundance_modifications",
+    "abundance_properties",
+    "aggregate_sample_ages",
+    "analysis_boolean_values",
+    "analysis_categorical_values",
+    "analysis_dating_ranges",
+    "analysis_identifiers",
+    "analysis_integer_ranges",
+    "analysis_integer_values",
+    "analysis_notes",
+    "analysis_numerical_ranges",
+    "analysis_numerical_values",
+    "analysis_taxon_counts",
+    "analysis_value_dimensions",
+    "dating_material",
+    "dendro_date_notes",
+    "geochron_refs",
+    "measured_value_dimensions"
+  ]
+}
