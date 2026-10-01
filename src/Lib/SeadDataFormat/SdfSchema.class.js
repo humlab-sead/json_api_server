@@ -88,9 +88,11 @@ export default class SdfSchema {
 
         const columns = await client.query(`
             select c.relname as table_name, a.attname as name, a.attnum as position,
-                   format_type(a.atttypid, a.atttypmod) as pg_type, t.typname,
+                   format_type(a.atttypid, a.atttypmod) as pg_type, format_type(a.atttypid, null) as base_type, t.typname,
                    a.attnotnull as not_null, a.attgenerated <> '' as generated, a.atthasdef as has_default,
                    case when t.typname in ('varchar', 'bpchar') and a.atttypmod > 0 then a.atttypmod - 4 end as max_length,
+                   case when t.typname = 'numeric' and a.atttypmod > 0 then ((a.atttypmod - 4) >> 16) & 65535 end as numeric_precision,
+                   case when t.typname = 'numeric' and a.atttypmod > 0 then (a.atttypmod - 4) & 65535 end as numeric_scale,
                    col_description(a.attrelid, a.attnum) as comment
             from pg_attribute a
             join pg_class c on c.oid = a.attrelid
@@ -153,11 +155,15 @@ export default class SdfSchema {
                 name: row.name,
                 position: row.position,
                 pgType: row.pg_type,
+                //unbounded form for casts; "character" alone would mean char(1)
+                baseType: row.typname === "bpchar" ? "text" : row.base_type,
                 typname: row.typname,
                 nullable: !row.not_null,
                 generated: row.generated,
                 hasDefault: row.has_default,
                 maxLength: row.max_length,
+                numericPrecision: row.numeric_precision,
+                numericScale: row.numeric_scale,
                 comment: row.comment,
                 system: SYSTEM_COLUMNS.has(row.name),
                 valueKind: valueKindOf(row.typname),

@@ -1,7 +1,7 @@
 import SdfSchema from "./SdfSchema.class.js";
 import { fetchRows, arrayType } from "./SdfRows.js";
 import { loadWorkbook, readCell, plainValue, plainRows, CELL } from "./SdfWorkbookReader.js";
-import { SdfError, quoteIdent, rowHash, canonicalValue, canonicalCsv, sha256Hex, ESCAPE_LIKE } from "./SdfCommon.js";
+import { SdfError, quoteIdent, rowHash, canonicalValue, canonicalCsv, sha256Hex, ESCAPE_LIKE, plainDecimal } from "./SdfCommon.js";
 
 /**
  * Import stages 1-4 (spec §10): structural check, cell coercion, referential
@@ -31,6 +31,11 @@ const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?)?(Z|[
 const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 const RANGE = /^(empty|[[(][^,]*,[^,]*[\])])$/;
 const MAX_REPORTED_PER_CODE = 200;
+const INTEGER_RANGE = {
+    int2: [-32768, 32767],
+    int4: [-2147483648, 2147483647],
+    int8: [Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER], //what a cell holds exactly
+};
 
 //Which changes to site data an import may make. The first version only edits rows
 //that exist (spec §10, "Scope"). The insert and delete paths are kept, switched
@@ -623,23 +628,23 @@ export default class SdfValidator {
         switch (column.valueKind) {
             case "integer": {
                 if (cell.kind === CELL.NUMBER) {
-                    if (Number.isInteger(cell.value)) return cell.value;
+                    if (Number.isInteger(cell.value)) return this._checkInteger(report, cell.value, column, addr, where);
                     report.error(2, "not_integer", `${addr}: ${column.name} takes a whole number, not ${cell.value}.`, where);
                     return undefined;
                 }
                 if (cell.kind === CELL.STRING && STRICT_INTEGER.test(cell.value.trim())) {
                     report.warning(2, "number_stored_as_text", `${addr}: "${cell.value}" was stored as text; read as the number ${Number(cell.value)}.`, where);
-                    return Number(cell.value.trim());
+                    return this._checkInteger(report, Number(cell.value.trim()), column, addr, where);
                 }
                 break;
             }
             case "decimal": {
-                if (cell.kind === CELL.NUMBER) return cell.value;
+                if (cell.kind === CELL.NUMBER) return this._checkDecimal(report, cell.value, column, addr, where);
                 if (cell.kind === CELL.STRING) {
                     const t = cell.value.trim();
                     if (STRICT_DECIMAL.test(t)) {
                         report.warning(2, "number_stored_as_text", `${addr}: "${cell.value}" was stored as text; read as the number ${Number(t)}.`, where);
-                        return Number(t);
+                        return this._checkDecimal(report, Number(t), column, addr, where);
                     }
                     if (COMMA_DECIMAL.test(t)) {
                         report.error(2, "decimal_comma",
@@ -691,8 +696,14 @@ export default class SdfValidator {
                     report.error(2, "bad_format", `${addr}: "${text}" is not a valid ${column.pgType}.`, where);
                     return undefined;
                 }
-                if (column.maxLength && text.length > column.maxLength) {
-                    report.error(2, "too_long", `${addr}: ${text.length} characters; ${column.name} holds at most ${column.maxLength}.`, where);
+                if (text.includes("\u0000")) {
+                    report.error(2, "nul_character", `${addr}: the value contains a NUL character (_x0000_), which the database cannot store.`, where);
+                    return undefined;
+                }
+                //PostgreSQL counts characters (code points), not UTF-16 units
+                const length = [...text].length;
+                if (column.maxLength && length > column.maxLength) {
+                    report.error(2, "too_long", `${addr}: ${length} characters; ${column.name} holds at most ${column.maxLength}.`, where);
                     return undefined;
                 }
                 return text;
@@ -701,6 +712,43 @@ export default class SdfValidator {
         const shown = cell.value instanceof Date ? cell.value.toISOString().slice(0, 10) : JSON.stringify(cell.value);
         report.error(2, "bad_value", `${addr}: ${column.name} is ${column.pgType}; ${shown} is not one.`, where);
         return undefined;
+    }
+
+    /** §8: an integer the column's type can hold. */
+    _checkInteger(report, value, column, addr, where) {
+        const [min, max] = INTEGER_RANGE[column.typname] || INTEGER_RANGE.int8;
+        if (value < min || value > max) {
+            report.error(2, "integer_out_of_range", `${addr}: ${value} is outside what ${column.name} (${column.pgType}) holds, ${min} to ${max}.`, where);
+            return undefined;
+        }
+        return value;
+    }
+
+    /**
+     * §8: a decimal the column holds exactly. More decimals than the column's
+     * scale would be rounded by the database, and more integer digits than
+     * precision - scale overflow at deploy; both are refused here instead.
+     */
+    _checkDecimal(report, value, column, addr, where) {
+        if (!Number.isFinite(value)) {
+            report.error(2, "not_finite", `${addr}: ${value} is not a number the database can store.`, where);
+            return undefined;
+        }
+        if (column.numericScale === null || column.numericScale === undefined) return value;
+        const [int, frac = ""] = plainDecimal(Math.abs(value)).split(".");
+        const scale = column.numericScale;
+        const intDigits = int.replace(/^0+/, "").length;
+        if (frac.length > scale) {
+            report.error(2, "too_many_decimals",
+                `${addr}: ${value} has ${frac.length} decimals; ${column.name} (${column.pgType}) holds at most ${scale}. Round it in the workbook.`, where);
+            return undefined;
+        }
+        if (intDigits > column.numericPrecision - scale) {
+            report.error(2, "numeric_overflow",
+                `${addr}: ${value} is too large for ${column.name} (${column.pgType}), which holds at most ${column.numericPrecision - scale} digits before the decimal point.`, where);
+            return undefined;
+        }
+        return value;
     }
 
     //=================================================== stage 3: references

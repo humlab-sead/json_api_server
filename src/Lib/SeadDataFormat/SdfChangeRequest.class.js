@@ -216,10 +216,15 @@ export default class SdfChangeRequest {
 
     //------------------------------------------------------------------ SQL
 
+    /**
+     * A literal cast to the column's base type, without length or scale: an
+     * explicit cast to varchar(n) truncates silently, while assigning a base-typed
+     * value to the column raises on anything that does not fit.
+     */
     _literal(schema, tableName, column, value) {
         if (value === null || value === undefined) return "null";
         const col = schema.column(schema.table(tableName), column);
-        const type = col ? col.pgType : "text";
+        const type = col ? col.baseType : "text";
         if (typeof value === "number") return `${value < 0 ? `(${value})` : value}::${type}`;
         if (typeof value === "boolean") return value ? "true" : "false";
         return `${stringLiteral(String(value))}::${type}`;

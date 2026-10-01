@@ -116,6 +116,23 @@ export function encodeCellText(text) {
 export const ESCAPE_LIKE = /_[xX][0-9A-Fa-f]{4}/;
 
 /**
+ * A finite number as a plain decimal string, without an exponent: the shortest
+ * decimal that round-trips through an IEEE double, which is what a spreadsheet
+ * cell holds. 1e-7 becomes "0.0000001", 1.5e21 "1500000000000000000000".
+ */
+export function plainDecimal(n) {
+    const text = String(n);
+    const m = /^(-?)(\d+)(?:\.(\d+))?e([+-]\d+)$/.exec(text);
+    if (!m) return text;
+    const [, sign, int, frac = "", exp] = m;
+    const digits = int + frac;
+    const point = int.length + Number(exp);
+    if (point <= 0) return `${sign}0.${"0".repeat(-point)}${digits}`;
+    if (point >= digits.length) return `${sign}${digits}${"0".repeat(point - digits.length)}`;
+    return `${sign}${digits.slice(0, point)}.${digits.slice(point)}`;
+}
+
+/**
  * Significant digits in a decimal string as PostgreSQL renders numeric: no
  * exponent, optional sign and point. Leading zeros and trailing fractional
  * zeros are not significant.
