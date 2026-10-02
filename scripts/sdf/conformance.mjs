@@ -14,10 +14,18 @@
  * Usage, from the json_api_server directory (inside the container, where the
  * POSTGRES_* variables are set):
  *   node scripts/sdf/conformance.mjs --sites 1,79,321
- *   node scripts/sdf/conformance.mjs --all [--import] [--concurrency 2] [--out sdf-conformance.jsonl]
+ *   node scripts/sdf/conformance.mjs --all [--import] [--concurrency 2] [--out sdf-conformance.jsonl] [--retry-failed]
  *   node scripts/sdf/conformance.mjs --file workbook.xlsx --site 1
  *     (checks a workbook re-saved elsewhere, e.g. by Excel or LibreOffice,
  *      against a fresh export of the same site)
+ *
+ * A run over many sites can be interrupted and resumed. Each site's result is
+ * appended to the --out file (default sdf-conformance.jsonl with --all) and
+ * flushed to disk as soon as it is known; a rerun with the same file skips the
+ * sites it already holds, and --retry-failed checks the failed ones again. When
+ * the server cannot be reached (down, or restarting after a code change), the
+ * site is retried for a while and the run then stops without recording it, so an
+ * outage never counts as a failure. The summary covers every site in the file.
  *
  * Options: --base http://localhost:8484 (the server to test).
  * Exits non-zero if any site fails.
@@ -149,29 +157,92 @@ function parseArgs(argv) {
     return out;
 }
 
-const sites = await siteList();
-const concurrency = Math.max(1, parseInt(args.concurrency) || 1);
-const out = args.out ? fs.createWriteStream(args.out) : null;
-let failed = 0, done = 0;
-const queue = [...sites];
+/** The server could not be reached at all: not a result for the site. */
+function unreachable(err) {
+    const code = err && (err.cause?.code || err.code);
+    return err instanceof TypeError && /fetch failed/.test(err.message)
+        || ["ECONNREFUSED", "ECONNRESET", "EPIPE", "UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT"].includes(code);
+}
 
-await Promise.all(Array.from({ length: concurrency }, async () => {
-    while (queue.length) {
-        const siteId = queue.shift();
-        let result;
-        try { result = await checkSite(siteId); }
-        catch (err) { result = { siteId, error: String(err && err.stack || err).slice(0, 400) }; }
-        if (result.error || !result.ok) failed++;
-        done++;
-        if (out) out.write(JSON.stringify(result) + "\n");
-        if (!out || result.error || !result.ok || sites.length <= 20) {
-            console.log(JSON.stringify(result));
-        }
-        else if (done % 100 === 0) {
-            console.log(`${done}/${sites.length} checked, ${failed} failed`);
+/** Checks a site, waiting out a server that is briefly unreachable. Returns null if it stays so. */
+async function checkWithRetry(siteId) {
+    const waits = [2, 5, 10, 20, 30, 60]; //seconds
+    for (let attempt = 0; ; attempt++) {
+        try { return await checkSite(siteId); }
+        catch (err) {
+            if (!unreachable(err)) return { siteId, error: String(err && err.stack || err).slice(0, 400) };
+            if (attempt >= waits.length) return null;
+            console.log(`site ${siteId}: server unreachable (${err.cause?.code || err.message}); retrying in ${waits[attempt]} s`);
+            await new Promise(r => setTimeout(r, waits[attempt] * 1000));
         }
     }
+}
+
+/** The results already in a progress file, latest per site; a torn last line is ignored. */
+function readProgress(path) {
+    const results = new Map();
+    if (!path || !fs.existsSync(path)) return results;
+    for (const line of fs.readFileSync(path, "utf8").split("\n")) {
+        if (!line.trim()) continue;
+        try {
+            const r = JSON.parse(line);
+            if (r && r.siteId !== undefined) results.set(r.siteId, r);
+        }
+        catch {
+            //a line cut short by a crash: that site is checked again
+        }
+    }
+    return results;
+}
+
+const passed = r => !r.error && r.ok;
+const sites = await siteList();
+const concurrency = Math.max(1, parseInt(args.concurrency) || 1);
+const outPath = args.out || (args.all ? "sdf-conformance.jsonl" : null);
+const build = await fetch(`${base}/sdf/version`).then(r => r.json()).then(v => v.exporter_build).catch(() => null);
+
+const previous = readProgress(outPath);
+const todo = sites.filter(id => !previous.has(id) || (args["retry-failed"] && !passed(previous.get(id))));
+if (previous.size) {
+    const earlierBuilds = new Set([...previous.values()].map(r => r.build).filter(Boolean));
+    console.log(`Resuming from ${outPath}: ${previous.size} site(s) already checked` +
+        ` (${[...previous.values()].filter(r => !passed(r)).length} failed); ${todo.length} to go.`);
+    if (build && [...earlierBuilds].some(b => b !== build)) {
+        console.log(`Note: earlier results came from ${[...earlierBuilds].join(", ")}; this server is ${build}.`);
+    }
+}
+
+//one line per site, appended and flushed at once, so an interruption loses at most the sites in flight
+const fd = outPath ? fs.openSync(outPath, "a") : null;
+const record = result => {
+    if (fd === null) return;
+    fs.writeSync(fd, JSON.stringify({ ...result, build, checked_at: new Date().toISOString() }) + "\n");
+    fs.fsyncSync(fd);
+};
+
+let failed = 0, done = 0, stopped = false;
+const queue = [...todo];
+await Promise.all(Array.from({ length: concurrency }, async () => {
+    while (queue.length && !stopped) {
+        const siteId = queue.shift();
+        const result = await checkWithRetry(siteId);
+        if (result === null) {
+            stopped = true;
+            console.log(`The server at ${base} stayed unreachable; stopping. Site ${siteId} and later ones are not recorded; run again to continue.`);
+            break;
+        }
+        if (!passed(result)) failed++;
+        done++;
+        record(result);
+        if (!fd || !passed(result) || todo.length <= 20) console.log(JSON.stringify(result));
+        else if (done % 100 === 0) console.log(`${done}/${todo.length} checked in this run, ${failed} failed`);
+    }
 }));
-if (out) out.end();
-console.log(`${sites.length} site(s) checked, ${failed} failed.`);
-process.exit(failed ? 1 : 0);
+if (fd !== null) fs.closeSync(fd);
+
+const all = fd !== null ? readProgress(outPath) : null;
+const total = all ? sites.filter(id => all.has(id)) : todo.slice(0, done);
+const totalFailed = all ? total.filter(id => !passed(all.get(id))).length : failed;
+console.log(`${done} site(s) checked in this run, ${failed} failed.` +
+    (all ? ` In ${outPath}: ${total.length} of ${sites.length} checked, ${totalFailed} failed${total.length < sites.length ? ", the rest still to go" : ""}.` : ""));
+process.exit(stopped ? 3 : totalFailed ? 1 : 0);
