@@ -5,6 +5,7 @@ import SdfChangeRequest from "../Lib/SeadDataFormat/SdfChangeRequest.class.js";
 import SdfRenderer from "../Lib/SeadDataFormat/SdfRenderer.class.js";
 import { guideConfig } from "../Lib/SeadDataFormat/SdfGuide.js";
 import { SDF_VERSION } from "../Lib/SeadDataFormat/SdfCommon.js";
+import { attributionOf } from "../Lib/Auth/AuthIdentity.js";
 
 /**
  * HTTP surface for the SEAD Data Format (plans/sead-data-format-design.html).
@@ -241,11 +242,7 @@ class SeadDataFormat {
         const handler = this.app.authHandler;
         const user = handler && typeof handler.getUser === "function" && typeof req.isAuthenticated === "function"
             ? handler.getUser(req) : null;
-        if (!user) return null;
-        const email = Array.isArray(user.emails) && user.emails.length
-            ? (typeof user.emails[0] === "string" ? user.emails[0] : user.emails[0].value)
-            : null;
-        return [user.displayName, email && `<${email}>`].filter(Boolean).join(" ") || null;
+        return attributionOf(user);
     }
 }
 

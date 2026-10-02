@@ -131,7 +131,10 @@ class SeadJsonApiServer {
             this.run();
         });
 
-        this.setupMongoDb().then(() => {
+        //Kept as a promise: the session store waits on it rather than on whichever
+        //of the two connections happens to come up first
+        this.mongoReady = this.setupMongoDb();
+        this.mongoReady.then(() => {
             console.log('Connected to MongoDB');
         });
 
@@ -4062,7 +4065,9 @@ class SeadJsonApiServer {
 
         const p4 = this.mongoClient ? this.mongoClient.close().then(() => console.log('MongoDB client closed')) : Promise.resolve();
 
-        Promise.all([p1, p2, p3, p4]).then(() => {
+        const p5 = this.authHandler ? this.authHandler.close() : Promise.resolve();
+
+        Promise.all([p1, p2, p3, p4, p5]).then(() => {
             clearTimeout(forceExitTimer);
             console.log('Shutdown complete');
             process.exit(0);
