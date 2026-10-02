@@ -26,8 +26,10 @@ import { attributionOf } from "../Lib/Auth/AuthIdentity.js";
  * Nothing here writes to any database. An import ends in a Sqitch change
  * request for sead_change_control (spec §10); SDF never applies changes itself.
  *
- * The import endpoints are for SEAD's data managers, behind the server's basic
- * auth for protected endpoints (PROTECTED_ENDPOINTS_USER / _PASS). SDF jobs hold
+ * The import endpoints are for SEAD's data managers: a signed-in user with the
+ * sysadmin role (src/Lib/Auth/UserRoles.js), which is how the client's "Import
+ * data" dialog reaches them, or the server's basic auth for protected endpoints
+ * (PROTECTED_ENDPOINTS_USER / _PASS), which is how scripts do. SDF jobs hold
  * whole workbooks in memory on the server that also
  * serves the public browser, so at most SDF_MAX_JOBS run at once, a few more
  * wait, and the rest are turned away with 503.
@@ -38,6 +40,8 @@ const DEFAULT_MAX_SITES = 25;
 const DEFAULT_MAX_UPLOAD_MB = 64;
 const DEFAULT_MAX_JOBS = 2;
 const MAX_WAITING_JOBS = 8;
+//Who may use the import endpoints, besides the protected-endpoint password
+const IMPORT_ROLE = "sysadmin";
 
 class SeadDataFormat {
     constructor(app) {
@@ -94,6 +98,7 @@ class SeadDataFormat {
 
     setupEndpoints() {
         const app = this.app.expressApp;
+        const importer = this.app.authHandler.requireRoleOrBasicAuth(IMPORT_ROLE);
 
         app.get("/sdf/version", (req, res) => {
             res.status(200).json({
@@ -121,7 +126,7 @@ class SeadDataFormat {
             await this._job(res, () => this._runExport(req, res, ids));
         });
 
-        app.post("/sdf/validate", this.app.checkBasicAuth, async (req, res) => {
+        app.post("/sdf/validate", importer, async (req, res) => {
             try {
                 const buffer = await this._readUpload(req);
                 await this._job(res, async () => {
@@ -134,7 +139,7 @@ class SeadDataFormat {
             }
         });
 
-        app.post("/sdf/change-request", this.app.checkBasicAuth, async (req, res) => {
+        app.post("/sdf/change-request", importer, async (req, res) => {
             try {
                 const buffer = await this._readUpload(req);
                 const result = await this._job(res, () => this.changeRequest.generate(buffer, { author: this._exportedBy(req) }));

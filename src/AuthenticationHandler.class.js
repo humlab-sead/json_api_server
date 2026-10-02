@@ -9,6 +9,7 @@ import { Strategy as OidcStrategy } from "openid-client/passport";
 import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import { Strategy as GitHubStrategy } from "passport-github2";
 import { samlUserFromHeaders, orcidUserFromClaims, userIdOf, safeReturnPath } from "./Lib/Auth/AuthIdentity.js";
+import UserRoles from "./Lib/Auth/UserRoles.js";
 
 //The session cookie. The __Host- prefix makes the browser refuse it unless it is
 //Secure, has Path=/ and no Domain - so a login on super.sead.se can never become a
@@ -73,6 +74,7 @@ export default class AuthenticationHandler {
         });
 
         this.installSessionSupport(this.app.expressApp);
+        this.userRoles = new UserRoles(this.app);
 
         // Serialize user - only the normalised fields, whatever else the provider returned
         passport.serializeUser((user, done) => {
@@ -99,7 +101,7 @@ export default class AuthenticationHandler {
         this.setupGoogle();
         this.setupGitHub();
 
-        this.app.expressApp.get('/auth/status', (req, res) => {
+        this.app.expressApp.get('/auth/status', async (req, res) => {
             res.set("Cache-Control", "no-store");
             const status = {
                 loggedIn: req.isAuthenticated(),
@@ -108,6 +110,8 @@ export default class AuthenticationHandler {
             };
             if (status.loggedIn) {
                 status.user = req.user;
+                //What the client offers (e.g. "Import data"). The endpoints check again themselves.
+                status.roles = await this.getRolesOrNone(req);
             }
             res.json(status);
         });
@@ -350,7 +354,7 @@ export default class AuthenticationHandler {
      * and ends the login: a redirect for a full-page login, otherwise the popup page.
      */
     completeLogin(req, res, user, returnPath) {
-        req.login(user, (err) => {
+        req.login(user, async (err) => {
             if (err) {
                 console.error("Login failed:", err);
                 return this.sendLoginFailure(res, user.provider, "Signing in did not succeed.");
@@ -359,7 +363,8 @@ export default class AuthenticationHandler {
             if (returnPath) {
                 return res.redirect(returnPath);
             }
-            this.sendPopupPage(res, { type: "login-success", provider: user.provider, user: req.user });
+            const roles = await this.getRolesOrNone(req);
+            this.sendPopupPage(res, { type: "login-success", provider: user.provider, user: req.user, roles });
         });
     }
 
@@ -415,6 +420,50 @@ export default class AuthenticationHandler {
             return res.status(403).json({ error: "Cross-origin request refused" });
         }
         next();
+    }
+
+    /**
+     * For endpoints that need a role: a signed-in user who has it, or the protected-endpoint
+     * password (basic auth), which scripts use. A request that carries an Authorization
+     * header is judged on the password alone. A session request has to come from our own
+     * origin, like the other session endpoints. Answers 401 when neither is there - without
+     * WWW-Authenticate, so a browser whose session has expired shows no password prompt.
+     */
+    requireRoleOrBasicAuth(role) {
+        return async (req, res, next) => {
+            if (req.get("authorization")) {
+                return this.app.checkBasicAuth(req, res, next);
+            }
+            const userId = this.getUserId(req);
+            if (!userId) {
+                return res.status(401).json({ error: "Please sign in to do this.", code: "sign_in_required" });
+            }
+            let roles;
+            try {
+                roles = await this.userRoles.rolesOf(userId);
+            }
+            catch (err) {
+                console.error(`Could not read the roles of ${userId}:`, err.message);
+                return res.status(503).json({ error: "Your permissions could not be checked. Please try again later.", code: "roles_unavailable" });
+            }
+            if (!roles.includes(role)) {
+                console.warn(`Refused ${req.method} ${req.path} to ${userId}: not ${role}`);
+                return res.status(403).json({ error: "Your account does not have permission to do this.", code: "forbidden" });
+            }
+            this.requireSameOrigin(req, res, next);
+        };
+    }
+
+    /** The signed-in user's roles; none when signed out, or when they cannot be read. */
+    async getRolesOrNone(req) {
+        const userId = this.getUserId(req);
+        try {
+            return await this.userRoles.rolesOf(userId);
+        }
+        catch (err) {
+            console.error(`Could not read the roles of ${userId}:`, err.message);
+            return [];
+        }
     }
 
     generateRandomSecret() {
