@@ -214,6 +214,14 @@ if (previous.size) {
 
 //one line per site, appended and flushed at once, so an interruption loses at most the sites in flight
 const fd = outPath ? fs.openSync(outPath, "a") : null;
+//a line torn by a crash has no newline: end it, so the next record starts on a line of its own
+if (fd !== null && fs.fstatSync(fd).size > 0) {
+    const last = Buffer.alloc(1);
+    const rfd = fs.openSync(outPath, "r");
+    fs.readSync(rfd, last, 0, 1, fs.fstatSync(rfd).size - 1);
+    fs.closeSync(rfd);
+    if (last[0] !== 0x0a) fs.writeSync(fd, "\n");
+}
 const record = result => {
     if (fd === null) return;
     fs.writeSync(fd, JSON.stringify({ ...result, build, checked_at: new Date().toISOString() }) + "\n");
