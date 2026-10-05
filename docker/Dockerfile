@@ -1,3 +1,8 @@
+# Built from the checkout it sits in: the build context is the repository root, so
+# this builds whatever is checked out - sead-deployment checks out the release's tag.
+#   podman build -f docker/Dockerfile .
+# In dev mode the checkout is mounted over the copy of the source made here, and
+# nodemon restarts the server on changes (see compose.override.yml in sead-deployment).
 FROM docker.io/debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y ca-certificates curl gnupg
@@ -6,14 +11,22 @@ RUN curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg -
 ENV NODE_MAJOR=22
 RUN echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_$NODE_MAJOR.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list
 
-RUN apt-get update && apt-get install -y nodejs git nano
+RUN apt-get update && apt-get install -y nodejs nano
+
+# Install nodemon for development mode
+RUN npm install -g nodemon
 
 ENV NODE_OPTIONS="--max-old-space-size=4096"
 
-WORKDIR /
+WORKDIR /json_api_server
+
+# The dependencies first, so they are only installed again when the lockfile changes
+COPY package.json package-lock.json ./
+RUN npm ci --legacy-peer-deps
+
+COPY . .
 
 # Build-time ARG
-ARG JAS_REF=main
 ARG MODE=prod
 ARG DOMAIN=localhost
 
@@ -21,17 +34,9 @@ ARG DOMAIN=localhost
 ENV MODE=${MODE}
 ENV DOMAIN=${DOMAIN}
 
-RUN git clone --recurse-submodules https://github.com/humlab-sead/json_api_server.git \
-    && cd json_api_server \
-    && git checkout ${JAS_REF} \
-    && git submodule update --init --recursive
-
-WORKDIR /json_api_server
-
-RUN npm install --legacy-peer-deps
-
-# Install nodemon for development mode
-RUN npm install -g nodemon
+# What was built, as 'git describe' put it; reported by 'deploy.sh versions'
+ARG SOURCE_VERSION=
+ENV SOURCE_VERSION=${SOURCE_VERSION}
 
 # Use conditional CMD based on MODE
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \

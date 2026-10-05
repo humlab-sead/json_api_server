@@ -1,0 +1,17 @@
+# The image installs these itself
+node_modules
+
+# Local data and test output, not part of the server
+baseline
+mongo-cluster
+test
+sdf-conformance*.jsonl
+sdf-conformance*.log
+
+**/.git
+.env
+.vscode
+.codex
+mcp.json
+settings.json
+gitignore
