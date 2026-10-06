@@ -10,3 +10,4 @@ gitignore
 baseline
 sdf-conformance*.jsonl
 sdf-conformance*.log
+.claude/
