@@ -73,6 +73,7 @@ class CeramicsModule {
                         biblio_ids: [],
                         method_ids: [],
                         method_group_ids: [],
+                        type: "ceramics",
                         values: []
                     };
 
@@ -97,6 +98,8 @@ class CeramicsModule {
 
                         analysisEntity.ceramic_values.forEach(ceramicValue => {
                             dataGroup.values.push({
+                                analysis_entity_id: analysisEntity.analysis_entity_id,
+                                dataset_id: analysisEntity.dataset_id,
                                 key: ceramicValue.name,
                                 value: ceramicValue.measurement_value,
                                 valueType: 'simple',
@@ -129,7 +132,52 @@ class CeramicsModule {
         return site;
     }
 
+    /*
+    * The datings of the ceramics analysis entities (relative dates, e.g. an archaeological period) go in the same data
+    * groups as their ceramics values, the way the dendro datings do. This is done here rather than in fetchSiteData,
+    * since the modules fetch in parallel and the dating values are attached to the analysis entities by DatingModule.
+    */
     postProcessSiteData(site) {
+        if(!this.siteHasModuleMethods(site)) {
+            return site;
+        }
+
+        const dataGroupsBySample = new Map();
+        site.data_groups.forEach(dataGroup => {
+            if(dataGroup.type == "ceramics") {
+                dataGroupsBySample.set(String(dataGroup.physical_sample_id), dataGroup);
+            }
+        });
+
+        //The analysis entities are read from the datasets, since they have been unlinked from the samples by now
+        site.datasets.forEach(dataset => {
+            if(!this.moduleMethods.includes(dataset.method_id)) {
+                return;
+            }
+            (dataset.analysis_entities || []).forEach(analysisEntity => {
+                const datingValues = analysisEntity.dating_values;
+                if(!datingValues || typeof datingValues.relative_date_id == "undefined") {
+                    return;
+                }
+                const dataGroup = dataGroupsBySample.get(String(analysisEntity.physical_sample_id));
+                if(!dataGroup) {
+                    return;
+                }
+
+                //methodId is the dating method (e.g. Archaeological period calendar years), which is not added to the
+                //data group's method_ids, since the data group still belongs to the ceramics method
+                dataGroup.values.push({
+                    analysis_entity_id: analysisEntity.analysis_entity_id,
+                    dataset_id: dataset.dataset_id,
+                    key: "Dating",
+                    value: datingValues.relative_age_name,
+                    valueType: 'complex',
+                    data: datingValues,
+                    methodId: datingValues.method_id,
+                });
+            });
+        });
+
         return site;
     }
 }
