@@ -532,8 +532,8 @@ class Graphs {
         {
           $project: {
               site_id: 1,
-              age_older: '$chronology_extremes.age_older',
-              age_younger: '$chronology_extremes.age_younger'
+              age_older: '$age_summary.older',
+              age_younger: '$age_summary.younger'
           }
       }
       ];

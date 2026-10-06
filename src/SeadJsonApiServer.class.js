@@ -2260,12 +2260,6 @@ class SeadJsonApiServer {
         await this.fetchDatingSummary(site);
         if(verbose) console.timeEnd("Fetched dating summary for site "+siteId);
 
-        /*
-        if(verbose) console.time("Fetched analysis entities ages for site "+siteId);
-        await this.fetchAnalysisEntitiesAges(site);
-        if(verbose) console.timeEnd("Fetched analysis entities ages for site "+siteId);
-        */
-
         if(verbose) console.time("Fetched analysis methods for site "+siteId);
         await this.fetchAnalysisMethods(site);
         if(verbose) console.timeEnd("Fetched analysis methods for site "+siteId);
@@ -2282,10 +2276,6 @@ class SeadJsonApiServer {
         await this.postProcessSiteData(site);
         if(verbose) console.timeEnd("Done post-processing primary data for site "+siteId);
 
-        //This is commented out because it's not finished yet
-        //if(verbose) console.time("Compiled site dating overviews for site "+siteId);
-        //this.compileSiteDatingOverview(site);
-        //if(verbose) console.timeEnd("Compiled site dating overviews for site "+siteId);
 
         if(verbose) console.timeEnd("Done fetching site "+siteId);
 
@@ -2450,6 +2440,9 @@ class SeadJsonApiServer {
             let module = this.dataFetchingModules[key];
             await module.postProcessSiteData(site);
         }
+
+        //Last, since it reads the data groups the modules have just built
+        this.getDataFetchingModuleByName("Dating").compileAgeSummary(site);
         return site;
     }
 
@@ -3040,97 +3033,9 @@ class SeadJsonApiServer {
     }
 
     async fetchDatingSummary(site) {
-        // Initialize the age summary structure; populated by DatingModule.fetchSiteData
+        //Placeholder until DatingModule.compileAgeSummary() has run, which is the last step of building a site
         site.analysis_entity_ages = [];
         site.age_summary = { older: null, younger: null, datings: [] };
-    }
-
-    async fetchAnalysisEntitiesAges(site) {
-        let pgClient = await this.getDbConnection();
-        if(!pgClient) {
-            return false;
-        }
-
-        let analysisEntityIds = [];
-        for(let sgKey in site.sample_groups) {
-            let sampleGroup = site.sample_groups[sgKey];
-            for(let psKey in sampleGroup.physical_samples) {
-                let sample = sampleGroup.physical_samples[psKey];
-                for(let aeKey in sample.analysis_entities) {
-                    let analysisEntity = sample.analysis_entities[aeKey];
-                    if(analysisEntityIds.indexOf(analysisEntity.analysis_entity_id) === -1) {
-                        analysisEntityIds.push(analysisEntity.analysis_entity_id);
-                    }
-                }
-            }
-        }
-
-        if(analysisEntityIds.length == 0) {
-            site.analysis_entity_ages = [];
-            site.age_summary = {
-                older: null,
-                younger: null
-            };
-            this.releaseDbConnection(pgClient);
-            return;
-        }
-
-        let analysisEntityIdsAsSqlArray = "("+analysisEntityIds.join(",")+")";
-
-        let sql = "SELECT * FROM tbl_analysis_entity_ages WHERE analysis_entity_id IN "+analysisEntityIdsAsSqlArray;
-        let result = await pgClient.query(sql);
-        site.analysis_entity_ages = result.rows;
-
-        //Create an age summary for each site that is an aggregation of the AE ages
-        let oldestAge = null;
-        let youngestAge = null;
-        for(let key in site.analysis_entity_ages) {
-            let age = site.analysis_entity_ages[key];
-            if(age.age_older && (age.age_older > oldestAge || oldestAge == null)) {
-                oldestAge = parseInt(age.age_older);
-            }
-            if(age.age_younger && (age.age_younger < youngestAge || youngestAge == null)) {
-                youngestAge = parseInt(age.age_younger);
-            }
-        }
-
-        this.releaseDbConnection(pgClient);
-
-        return {
-            older: oldestAge,
-            younger: youngestAge
-        };
-    }
-
-
-    compileSiteDatingOverview(site) {
-        //look for dendrochronology ages
-        let dendroDataGroups = [];
-        site.data_groups.forEach(dataGroup => {
-            if(dataGroup.method_ids.includes(10)) {
-                dendroDataGroups.push(dataGroup);
-            }
-        });
-
-        let oldestYear = null;
-        let youngestYear = null;
-
-        let sampleDataObjects = this.dendroLib.dataGroupsToSampleDataObjects(dendroDataGroups);
-        sampleDataObjects.forEach(sampleDataObject => {
-            let germinationYear = this.dendroLib.getOldestGerminationYear(sampleDataObject);
-            let fellingYear = this.dendroLib.getYoungestFellingYear(sampleDataObject);
-            
-            if(germinationYear.value != null) {
-                if(oldestYear == null || germinationYear.value < oldestYear) {
-                    oldestYear = germinationYear.value;
-                }
-            }
-            if(fellingYear.value != null) {
-                if(youngestYear == null || fellingYear.value > youngestYear) {
-                    youngestYear = fellingYear.value;
-                }
-            }
-        });
     }
 
     async fetchAnalysisEntitiesPrepMethods(site) {
