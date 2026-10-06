@@ -113,6 +113,24 @@ export function orcidUserFromClaims(claims) {
     };
 }
 
+/**
+ * The user a Google login produces, from passport-google-oauth20's profile. Google
+ * users are keyed on their email (userIdOf), so one Google has not verified is
+ * refused: returns null.
+ */
+export function googleUserFromProfile(profile) {
+    const email = profile && Array.isArray(profile.emails) ? profile.emails[0] : null;
+    if (!email || !email.value || email.verified !== true) return null;
+    return {
+        provider: "google",
+        issuer: "https://accounts.google.com",
+        id: profile.id,
+        displayName: profile.displayName || email.value,
+        emails: [{ value: email.value }],
+        photos: Array.isArray(profile.photos) ? profile.photos : [],
+    };
+}
+
 /** The first email of a user, whichever form the provider gave it in. */
 export function primaryEmail(user) {
     if (!user || !Array.isArray(user.emails) || user.emails.length === 0) return null;
@@ -122,8 +140,12 @@ export function primaryEmail(user) {
 
 /**
  * The key a user's data (viewstates) is stored under. SAML and ORCID users are keyed
- * on their stable subject. Google and GitHub keep the email-provider form they have
- * always had, so what was saved under them is not orphaned.
+ * on their stable subject.
+ *
+ * Google users are keyed on their bare email. That is what the old viewstate server
+ * (sqs_viewstate_server) stored their viewstates under, as sha1(email + salt), so with
+ * its salt as JAS_AUTH_SALT they find what they saved there
+ * (scripts/viewstates/import-viewstate-server.mjs). GitHub keeps the email-provider form.
  */
 export function userIdOf(user) {
     if (!user || !user.provider) return null;
@@ -131,7 +153,8 @@ export function userIdOf(user) {
         return user.id ? `${user.provider}:${user.id}` : null;
     }
     const email = primaryEmail(user);
-    return email ? `${email}-${user.provider}` : null;
+    if (!email) return null;
+    return user.provider === "google" ? email : `${email}-${user.provider}`;
 }
 
 /** Who exported or submitted something: "Name <orcid uri>", or "Name <email>". */

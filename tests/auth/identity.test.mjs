@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
     decodeHeader, splitMultiValued, samlUserFromHeaders, orcidUserFromClaims,
-    userIdOf, attributionOf, safeReturnPath,
+    googleUserFromProfile, userIdOf, attributionOf, safeReturnPath,
 } from "../../src/Lib/Auth/AuthIdentity.js";
 
 /** A header value as Node hands it over: the UTF-8 bytes read as latin-1. */
@@ -71,8 +71,23 @@ test("an ORCID user has no email, and falls back to the iD for a name", () => {
     assert.equal(unnamed.displayName, "0000-0002-1825-0097");
 });
 
-test("Google and GitHub keep the email-provider id, and a user with no email gets none", () => {
-    assert.equal(userIdOf({ provider: "google", emails: [{ value: "a@example.org", verified: true }] }), "a@example.org-google");
+test("a Google user needs a verified email", () => {
+    const profile = { provider: "google", id: "1083", displayName: "Ada Lovelace", emails: [{ value: "ada@example.org", verified: true }], photos: [{ value: "https://example.org/ada.png" }] };
+    assert.deepEqual(googleUserFromProfile(profile), {
+        provider: "google",
+        issuer: "https://accounts.google.com",
+        id: "1083",
+        displayName: "Ada Lovelace",
+        emails: [{ value: "ada@example.org" }],
+        photos: [{ value: "https://example.org/ada.png" }],
+    });
+    assert.equal(googleUserFromProfile({ ...profile, emails: [{ value: "ada@example.org", verified: false }] }), null);
+    assert.equal(googleUserFromProfile({ ...profile, emails: [{ value: "ada@example.org" }] }), null);
+    assert.equal(googleUserFromProfile({ ...profile, emails: [] }), null);
+});
+
+test("Google is keyed on the bare email, as the old viewstate server was; GitHub keeps email-provider", () => {
+    assert.equal(userIdOf({ provider: "google", emails: [{ value: "a@example.org" }] }), "a@example.org");
     assert.equal(userIdOf({ provider: "github", emails: ["b@example.org"] }), "b@example.org-github");
     assert.equal(userIdOf({ provider: "github", emails: [] }), null);
     assert.equal(userIdOf(null), null);

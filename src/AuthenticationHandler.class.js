@@ -8,7 +8,7 @@ import * as oidc from "openid-client";
 import { Strategy as OidcStrategy } from "openid-client/passport";
 import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import { Strategy as GitHubStrategy } from "passport-github2";
-import { samlUserFromHeaders, orcidUserFromClaims, userIdOf, safeReturnPath } from "./Lib/Auth/AuthIdentity.js";
+import { samlUserFromHeaders, orcidUserFromClaims, googleUserFromProfile, userIdOf, safeReturnPath } from "./Lib/Auth/AuthIdentity.js";
 import UserRoles from "./Lib/Auth/UserRoles.js";
 
 //The session cookie. The __Host- prefix makes the browser refuse it unless it is
@@ -35,9 +35,10 @@ export default class AuthenticationHandler {
         //What the sign-in dialog offers, in order. Served from /auth/status so the dialog
         //needs no client release to change its options.
         this.providers = [];
-        //Which providers may be offered at all. Google and GitHub stay off until their
-        //OAuth apps are registered for this domain, even where credentials are present.
-        this.allowedProviders = (process.env.AUTH_PROVIDERS || "saml,orcid").split(",").map(p => p.trim()).filter(Boolean);
+        //Which providers may be offered at all; one without credentials is left out anyway.
+        //GitHub stays off until its OAuth app is registered for this domain, even where
+        //credentials are present.
+        this.allowedProviders = (process.env.AUTH_PROVIDERS || "saml,orcid,google").split(",").map(p => p.trim()).filter(Boolean);
 
         let sessionSecret = process.env.SESSION_SECRET;
         if (!sessionSecret) {
@@ -289,7 +290,8 @@ export default class AuthenticationHandler {
             callbackURL: this.publicOrigin+'/jsonapi/auth/google/callback',
             state: true
         }, (accessToken, refreshToken, profile, done) => {
-            return done(null, profile);
+            const user = googleUserFromProfile(profile);
+            return user ? done(null, user) : done(null, false, { message: "the Google account has no verified email" });
         }));
         this.registerOAuthRoutes('google', { scope: ['profile', 'email'] });
         this.enabledProviders.google = true;
