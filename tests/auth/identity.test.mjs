@@ -26,9 +26,9 @@ test("multi-valued attributes are split on ; and \\; is kept as a ;", () => {
     assert.deepEqual(splitMultiValued("one"), ["one"]);
 });
 
-test("a SAML user is keyed on subject-id, with the attributes normalised", () => {
+test("a SAML user is keyed on eppn, even with subject-id, with the attributes normalised", () => {
     const user = samlUserFromHeaders({
-        "subject-id": "alice@sead-idp.local",
+        "subject-id": "8f2a91c0@sead-idp.local",
         "eppn": "alice@sead-idp.local",
         "displayname": asReceived("Åsa Öberg"),
         "mail": "asa@example.org",
@@ -48,8 +48,8 @@ test("a SAML user is keyed on subject-id, with the attributes normalised", () =>
     assert.equal(userIdOf(user), "saml:alice@sead-idp.local");
 });
 
-test("a SAML user without subject-id falls back to eppn, and without a name to givenName + sn", () => {
-    const user = samlUserFromHeaders({ "eppn": "bob@sead-idp.local", "givenname": "Bob", "sn": "Builder" });
+test("a SAML user without eppn falls back to subject-id, and without a name to givenName + sn", () => {
+    const user = samlUserFromHeaders({ "subject-id": "bob@sead-idp.local", "givenname": "Bob", "sn": "Builder" });
     assert.equal(user.id, "bob@sead-idp.local");
     assert.equal(user.displayName, "Bob Builder");
     assert.deepEqual(user.emails, []);

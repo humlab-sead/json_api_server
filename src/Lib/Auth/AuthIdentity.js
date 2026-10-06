@@ -63,12 +63,18 @@ export function splitMultiValued(value) {
 /**
  * The user the SAML hand-off logs in, from the attribute headers the router passed
  * on. Returns null when there is no stable subject to key the user on.
+ *
+ * The SP requests REFEDS Research and Scholarship, under which SWAMID IdPs release
+ * eduPersonPrincipalName (never reassigned in SWAMID) and not subject-id. eppn is
+ * therefore the key, even when an IdP releases subject-id too, so a user's id does not
+ * change if their IdP starts releasing it. subject-id only keys a user whose IdP sends
+ * no eppn, as under REFEDS Personalized Access.
  */
 export function samlUserFromHeaders(headers) {
     const values = name => splitMultiValued(decodeHeader(headers[name]));
     const first = name => values(name)[0] || null;
 
-    const id = first(SAML_HEADERS.subjectId) || first(SAML_HEADERS.eppn);
+    const id = first(SAML_HEADERS.eppn) || first(SAML_HEADERS.subjectId);
     if (!id) return null;
 
     const givenName = first(SAML_HEADERS.givenName);
