@@ -128,6 +128,17 @@ export function userIdOf(user) {
     return email ? `${email}-${user.provider}` : null;
 }
 
+/**
+ * What a user id looks like: saml:<id>, orcid:<iD>, or <email>-google / <email>-github.
+ * For ids that come from outside a login (an admin, a script) - a user who has never
+ * signed in can be given a role ahead of time.
+ */
+export const USER_ID_PATTERN = /^(saml|orcid):\S.*$|^\S.*-(google|github)$/;
+
+export function isUserId(value) {
+    return typeof value === "string" && value.length <= 512 && USER_ID_PATTERN.test(value);
+}
+
 /** Who exported or submitted something: "Name <orcid uri>", or "Name <email>". */
 export function attributionOf(user) {
     if (!user) return null;

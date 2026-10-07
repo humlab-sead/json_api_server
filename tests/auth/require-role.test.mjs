@@ -17,10 +17,11 @@ function handler(roles = { "orcid:0000-0002-1825-0097": ["sysadmin"] }, { failRo
     h.publicOrigin = ORIGIN;
     h.basicAuthCalls = 0;
     h.app = { checkBasicAuth: (req, res, next) => { h.basicAuthCalls++; next(); } };
+    h.userDirectory = { hasConsented: async () => true };
     h.userRoles = {
-        rolesOf: async id => {
+        accessOf: async id => {
             if (failRoles) throw new Error("mongo down");
-            return roles[id] || [];
+            return { roles: roles[id] || [], permissions: [] };
         },
     };
     return h;
