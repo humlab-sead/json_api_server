@@ -9,7 +9,9 @@ import { Strategy as OidcStrategy } from "openid-client/passport";
 import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import { Strategy as GitHubStrategy } from "passport-github2";
 import { samlUserFromHeaders, orcidUserFromClaims, userIdOf, safeReturnPath } from "./Lib/Auth/AuthIdentity.js";
-import UserRoles from "./Lib/Auth/UserRoles.js";
+import UserRoles, { PERMISSIONS, DEFAULT_ROLE } from "./Lib/Auth/UserRoles.js";
+import UserDirectory, { PRIVACY_POLICY_VERSION } from "./Lib/Auth/UserDirectory.js";
+import { endSessionsOf } from "./Lib/Auth/Sessions.js";
 
 //The session cookie. The __Host- prefix makes the browser refuse it unless it is
 //Secure, has Path=/ and no Domain - so a login on super.sead.se can never become a
@@ -75,6 +77,7 @@ export default class AuthenticationHandler {
 
         this.installSessionSupport(this.app.expressApp);
         this.userRoles = new UserRoles(this.app);
+        this.userDirectory = new UserDirectory(this.app);
 
         // Serialize user - only the normalised fields, whatever else the provider returned
         passport.serializeUser((user, done) => {
@@ -110,11 +113,22 @@ export default class AuthenticationHandler {
             };
             if (status.loggedIn) {
                 status.user = req.user;
-                //What the client offers (e.g. "Import data"). The endpoints check again themselves.
-                status.roles = await this.getRolesOrNone(req);
+                //What the client offers (e.g. "Import data", the SEAD agent), and whether the user
+                //still has to accept the privacy policy. The endpoints check again themselves.
+                Object.assign(status, await this.getAccessOrNone(req));
             }
             res.json(status);
         });
+
+        /*
+        * Accepting the privacy policy, which the client asks a signed-in user to do before
+        * anything else. The version is that of the text they were shown, and has to be the
+        * current one. It creates their account, and at the first acceptance gives them the
+        * default role.
+        */
+        this.app.expressApp.post('/auth/consent', this.requireSameOrigin.bind(this), this.handleConsent.bind(this));
+        this.app.expressApp.get('/auth/account', this.handleAccount.bind(this));
+        this.app.expressApp.delete('/auth/account', this.requireSameOrigin.bind(this), this.handleDeleteAccount.bind(this));
 
         this.app.expressApp.post('/auth/logout', this.requireSameOrigin.bind(this), (req, res) => {
             req.logout((err) => {
@@ -146,6 +160,80 @@ export default class AuthenticationHandler {
         expressApp.use(this.sessionMiddleware);
         expressApp.use(passport.initialize());
         expressApp.use(passport.session());
+    }
+
+    /**
+     * Accepting the privacy policy, which the client asks a signed-in user to do before
+     * anything else. The version is that of the text they were shown, and has to be the
+     * current one. It creates their account, and at the first acceptance gives them the
+     * default role.
+     */
+    async handleConsent(req, res) {
+        const userId = this.getUserId(req);
+        if (!userId) {
+            return res.status(401).json({ error: "Please sign in to do this.", code: "sign_in_required" });
+        }
+        if (!req.body || req.body.version !== PRIVACY_POLICY_VERSION) {
+            return res.status(409).json({ error: "The privacy policy has changed since this page was loaded. Please reload the page and read it again.", code: "policy_changed" });
+        }
+        try {
+            const first = await this.userDirectory.recordConsent(req.user, PRIVACY_POLICY_VERSION);
+            if (first) {
+                await this.userRoles.addRole(userId, DEFAULT_ROLE);
+            }
+            console.log(`User ${userId} accepted the privacy policy of ${PRIVACY_POLICY_VERSION}${first ? ", and has an account now" : ""}`);
+            res.json(await this.getAccessOrNone(req));
+        }
+        catch (err) {
+            console.error(`Could not record the consent of ${userId}:`, err);
+            res.status(500).json({ error: "Your answer could not be saved. Please try again." });
+        }
+    }
+
+    /** What SEAD keeps about the signed-in user, for the Account dialog. */
+    async handleAccount(req, res) {
+        res.set("Cache-Control", "no-store");
+        const userId = this.getUserId(req);
+        if (!userId) {
+            return res.status(401).json({ error: "Please sign in to do this.", code: "sign_in_required" });
+        }
+        try {
+            res.json(await this.accountOf(userId));
+        }
+        catch (err) {
+            console.error(`Could not read the account of ${userId}:`, err);
+            res.status(500).json({ error: "Your account could not be read." });
+        }
+    }
+
+    /**
+     * Deleting your own account: what SEAD keeps about you is removed, your private viewstates
+     * with it, your public ones are kept but no longer linked to you, and you are signed out
+     * everywhere. Not for an admin, who could otherwise leave no one able to administer users.
+     */
+    async handleDeleteAccount(req, res) {
+        const userId = this.getUserId(req);
+        if (!userId) {
+            return res.status(401).json({ error: "Please sign in to do this.", code: "sign_in_required" });
+        }
+        try {
+            const { permissions } = await this.userRoles.accessOf(userId);
+            if (permissions.includes("administer_users")) {
+                return res.status(409).json({ error: "Your account administers users. Ask another admin to take that role from you first.", code: "admin_account" });
+            }
+            await this.deleteAccount(userId);
+        }
+        catch (err) {
+            console.error(`Could not delete the account of ${userId}:`, err);
+            return res.status(500).json({ error: "Your account could not be deleted. Please try again, or contact us." });
+        }
+        console.log(`User ${userId} deleted their account`);
+        req.logout(() => {
+            req.session.destroy(() => {
+                res.clearCookie(SESSION_COOKIE_NAME, this.sessionCookieOptions);
+                res.json({ deleted: true });
+            });
+        });
     }
 
     /**
@@ -360,11 +448,15 @@ export default class AuthenticationHandler {
                 return this.sendLoginFailure(res, user.provider, "Signing in did not succeed.");
             }
             console.log(`User ${userIdOf(req.user)} signed in with ${user.provider}`);
+            //Kept for those with an account only. A login is not held up by it.
+            this.userDirectory.recordSignIn(req.user).catch(err => {
+                console.error(`Could not record the sign-in of ${userIdOf(req.user)}:`, err.message);
+            });
             if (returnPath) {
                 return res.redirect(returnPath);
             }
-            const roles = await this.getRolesOrNone(req);
-            this.sendPopupPage(res, { type: "login-success", provider: user.provider, user: req.user, roles });
+            const { roles, permissions, consent } = await this.getAccessOrNone(req);
+            this.sendPopupPage(res, { type: "login-success", provider: user.provider, user: req.user, roles, permissions, consent });
         });
     }
 
@@ -423,47 +515,145 @@ export default class AuthenticationHandler {
     }
 
     /**
-     * For endpoints that need a role: a signed-in user who has it, or the protected-endpoint
-     * password (basic auth), which scripts use. A request that carries an Authorization
-     * header is judged on the password alone. A session request has to come from our own
-     * origin, like the other session endpoints. Answers 401 when neither is there - without
-     * WWW-Authenticate, so a browser whose session has expired shows no password prompt.
+     * For endpoints that need a role: a signed-in user who has it. A request that changes
+     * something has to come from our own origin, like the other session endpoints. Answers
+     * 401 when signed out - without WWW-Authenticate, so a browser whose session has
+     * expired shows no password prompt - and 403 without the role.
      */
-    requireRoleOrBasicAuth(role) {
+    requireRole(role) {
+        return this.requireAccess(role, access => access.roles.includes(role));
+    }
+
+    /** For endpoints that need a permission (UserRoles.js): as requireRole, for any role that gives it. */
+    requirePermission(permission) {
+        return this.requireAccess(permission, access => access.permissions.includes(permission));
+    }
+
+    requireAccess(what, allowed) {
         return async (req, res, next) => {
-            if (req.get("authorization")) {
-                return this.app.checkBasicAuth(req, res, next);
-            }
             const userId = this.getUserId(req);
             if (!userId) {
                 return res.status(401).json({ error: "Please sign in to do this.", code: "sign_in_required" });
             }
-            let roles;
+            let access;
             try {
-                roles = await this.userRoles.rolesOf(userId);
+                access = await this.accessOf(userId);
             }
             catch (err) {
                 console.error(`Could not read the roles of ${userId}:`, err.message);
                 return res.status(503).json({ error: "Your permissions could not be checked. Please try again later.", code: "roles_unavailable" });
             }
-            if (!roles.includes(role)) {
-                console.warn(`Refused ${req.method} ${req.path} to ${userId}: not ${role}`);
+            if (!access.consented) {
+                return res.status(403).json({ error: "Please accept SEAD's privacy policy first.", code: "consent_required" });
+            }
+            if (!allowed(access)) {
+                console.warn(`Refused ${req.method} ${req.path} to ${userId}: not ${what}`);
                 return res.status(403).json({ error: "Your account does not have permission to do this.", code: "forbidden" });
+            }
+            //A browser sends no Origin on a same-origin GET, and a cross-origin read is
+            //kept from the response by CORS (no Allow-Credentials)
+            if (req.method === "GET" || req.method === "HEAD") {
+                return next();
             }
             this.requireSameOrigin(req, res, next);
         };
     }
 
-    /** The signed-in user's roles; none when signed out, or when they cannot be read. */
-    async getRolesOrNone(req) {
+    /**
+     * requireRole, or the protected-endpoint password (basic auth), which scripts use. A
+     * request that carries an Authorization header is judged on the password alone.
+     */
+    requireRoleOrBasicAuth(role) {
+        const signedIn = this.requireRole(role);
+        return (req, res, next) => {
+            if (req.get("authorization")) {
+                return this.app.checkBasicAuth(req, res, next);
+            }
+            return signedIn(req, res, next);
+        };
+    }
+
+    /**
+     * For endpoints that keep something about the user (viewstates): a signed-in user who has
+     * accepted the privacy policy.
+     */
+    async requireConsent(req, res, next) {
         const userId = this.getUserId(req);
+        if (!userId) {
+            return res.status(401).json({ error: "Please sign in to do this.", code: "sign_in_required" });
+        }
         try {
-            return await this.userRoles.rolesOf(userId);
+            if (!await this.userDirectory.hasConsented(userId)) {
+                return res.status(403).json({ error: "Please accept SEAD's privacy policy first.", code: "consent_required" });
+            }
+        }
+        catch (err) {
+            console.error(`Could not read the account of ${userId}:`, err.message);
+            return res.status(503).json({ error: "Your account could not be checked. Please try again later." });
+        }
+        next();
+    }
+
+    /**
+     * The user's roles and the permissions they give, and whether the user has accepted the
+     * privacy policy. Until they have, they have none: an account starts with that acceptance.
+     */
+    async accessOf(userId) {
+        if (!userId) return { roles: [], permissions: [], consented: false };
+        if (!await this.userDirectory.hasConsented(userId)) {
+            return { roles: [], permissions: [], consented: false };
+        }
+        return { ...await this.userRoles.accessOf(userId), consented: true };
+    }
+
+    /**
+     * The signed-in user's roles and permissions, and whether they still have to accept the
+     * privacy policy (consent.required, with the version to accept). None when signed out, or
+     * when they cannot be read.
+     */
+    async getAccessOrNone(req) {
+        const userId = this.getUserId(req);
+        let access = { roles: [], permissions: [], consented: false };
+        try {
+            access = await this.accessOf(userId);
         }
         catch (err) {
             console.error(`Could not read the roles of ${userId}:`, err.message);
-            return [];
         }
+        return {
+            roles: access.roles,
+            permissions: access.permissions,
+            consent: { required: userId != null && !access.consented, version: PRIVACY_POLICY_VERSION },
+        };
+    }
+
+    /** What SEAD keeps about a user, as the Account dialog shows it. */
+    async accountOf(userId) {
+        const doc = await this.userDirectory.get(userId);
+        const roleDoc = await this.app.mongo.collection("user_roles").findOne({ _id: userId });
+        const viewstates = this.app.viewstates ? await this.app.viewstates.countOf(userId) : 0;
+        return {
+            id: userId,
+            account: doc && doc.privacy_consent ? {
+                display_name: doc.display_name, email: doc.email, organization: doc.organization, uri: doc.uri,
+                first_sign_in_at: doc.first_sign_in_at || null, last_sign_in_at: doc.last_sign_in_at || null,
+                sign_ins: doc.sign_ins || 0, privacy_consent: doc.privacy_consent,
+            } : null,
+            roles: roleDoc && Array.isArray(roleDoc.roles) ? roleDoc.roles : [],
+            note: roleDoc && roleDoc.note ? roleDoc.note : null,
+            viewstates,
+        };
+    }
+
+    /** Removes what SEAD keeps about a user, and signs them out everywhere. */
+    async deleteAccount(userId) {
+        await this.app.mongoReady;
+        if (this.app.viewstates) {
+            await this.app.viewstates.forgetUser(userId);
+        }
+        await this.userRoles.deleteUser(userId);
+        await this.userDirectory.deleteUser(userId);
+        await endSessionsOf(this.app.mongo, userId);
     }
 
     generateRandomSecret() {

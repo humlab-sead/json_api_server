@@ -28,6 +28,7 @@ import Search from "./EndpointModules/Search.class.js";
 import Images from "./EndpointModules/Images.class.js";
 import IsoarchLocations from "./EndpointModules/IsoarchLocations.class.js";
 import SeadDataFormat from "./EndpointModules/SeadDataFormat.class.js";
+import UserAdmin from "./EndpointModules/UserAdmin.class.js";
 import Gadm from "./EndpointModules/Gadm.class.js";
 import AuthenticationHandler from './AuthenticationHandler.class.js';
 import basicAuth from 'basic-auth';
@@ -126,6 +127,7 @@ class SeadJsonApiServer {
             this.images = new Images(this);
             this.isoarchLocations = new IsoarchLocations(this);
             this.seadDataFormat = new SeadDataFormat(this);
+            this.userAdmin = new UserAdmin(this);
             this.gadm = new Gadm(this);
 
             this.run();
