@@ -11,7 +11,7 @@ RUN curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg -
 ENV NODE_MAJOR=22
 RUN echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_$NODE_MAJOR.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list
 
-RUN apt-get update && apt-get install -y nodejs nano
+RUN apt-get update && apt-get install -y nodejs nano tini
 
 # Install nodemon for development mode
 RUN npm install -g nodemon
@@ -38,8 +38,17 @@ ENV DOMAIN=${DOMAIN}
 ARG SOURCE_VERSION=
 ENV SOURCE_VERSION=${SOURCE_VERSION}
 
-# Use conditional CMD based on MODE
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://${DOMAIN}:8484/health || exit 1
+# tini is PID 1 so that exited processes get reaped. When a healthcheck times out, podman
+# gives up on it and its curl is left as a child of PID 1. With node as PID 1 (the exec
+# below) nothing reaped them, and the zombies piled up until the container hit its pids
+# limit. tini passes SIGTERM on to node, so the graceful shutdown still works.
+ENTRYPOINT ["/usr/bin/tini", "--"]
 
+# The server is asked over loopback, not through ${DOMAIN}: on a host running several
+# deployments, port 8484 is not published on the public address, and the connection
+# hung until the healthcheck timed out. --max-time ends curl before podman's timeout does.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -fsS --max-time 8 http://127.0.0.1:8484/health || exit 1
+
+# Use conditional CMD based on MODE
 CMD ["sh", "-c", "if [ \"$MODE\" = \"dev\" ]; then nodemon --legacy-watch /json_api_server/src/index.js; else exec node /json_api_server/src/index.js; fi"]
