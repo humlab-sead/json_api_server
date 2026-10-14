@@ -288,7 +288,7 @@ export default class AuthenticationHandler {
         this.enabledProviders.saml = true;
         this.providers.push({
             id: "saml",
-            label: process.env.SAML_LOGIN_LABEL || "SEAD login",
+            label: process.env.SAML_LOGIN_LABEL || "your institution",
             loginUrl: "/auth/saml/login"
         });
     }
