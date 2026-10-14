@@ -27,6 +27,7 @@ import MCR from "./EndpointModules/MCR.class.js";
 import Search from "./EndpointModules/Search.class.js";
 import Images from "./EndpointModules/Images.class.js";
 import IsoarchLocations from "./EndpointModules/IsoarchLocations.class.js";
+import NeotomaSites from "./EndpointModules/NeotomaSites.class.js";
 import SeadDataFormat from "./EndpointModules/SeadDataFormat.class.js";
 import UserAdmin from "./EndpointModules/UserAdmin.class.js";
 import Gadm from "./EndpointModules/Gadm.class.js";
@@ -126,6 +127,7 @@ class SeadJsonApiServer {
             this.search = new Search(this);
             this.images = new Images(this);
             this.isoarchLocations = new IsoarchLocations(this);
+            this.neotomaSites = new NeotomaSites(this);
             this.seadDataFormat = new SeadDataFormat(this);
             this.userAdmin = new UserAdmin(this);
             this.gadm = new Gadm(this);
