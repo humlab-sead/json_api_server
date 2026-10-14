@@ -36,7 +36,7 @@ import { attributionOf } from "../Lib/Auth/AuthIdentity.js";
  */
 
 const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-const DEFAULT_MAX_SITES = 25;
+const DEFAULT_MAX_SITES = 100;
 const DEFAULT_MAX_UPLOAD_MB = 64;
 const DEFAULT_MAX_JOBS = 2;
 const MAX_WAITING_JOBS = 8;
