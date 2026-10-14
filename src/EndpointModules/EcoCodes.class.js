@@ -5,6 +5,13 @@ class EcoCodes {
         this.app = app;
         this.taxaModule = new Taxa(app);
 
+        //The sample_ecocode_vectors collection, held in memory and grouped by site_id since every map request reads a large part of it
+        this.sampleVectorsBySite = null;
+        this.sampleVectorsLoading = null;
+        this.mapReference = null;
+        //Sites with fewer individuals than this are too small to say what is typical for an ecocode
+        this.mapReferenceMinIndividuals = 30;
+
         this.app.expressApp.get('/ecocodes/taxon/:taxonid', async (req, res) => {
             let taxonId = parseInt(req.params.taxonid);
             if(taxonId) {
@@ -80,6 +87,37 @@ class EcoCodes {
 
             res.header("Content-type", "application/json");
             res.end(JSON.stringify(summaries, null, 2));
+        });
+
+        /*
+        * The ecocode values of each site for the result map's ecocode layers. Body: { site_ids: [...], time_window: [younger, older] }
+        * where the time window (years BP) is optional - with one, only the samples dated to within it are counted, and undated samples are left out.
+        */
+        this.app.expressApp.post('/ecocodes/map/sites', async (req, res) => {
+            let siteIds = req.body ? req.body.site_ids : null;
+            if(!this.isValidSiteIdsInput(siteIds)) {
+                res.status(400);
+                res.send("Bad input - site_ids should be an array of site IDs");
+                return;
+            }
+
+            let timeWindow = this.parseTimeWindow(req.body.time_window);
+            if(timeWindow === false) {
+                res.status(400);
+                res.send("Bad input - time_window should be [younger, older] in years BP");
+                return;
+            }
+
+            try {
+                let data = await this.getEcoCodeMapData(siteIds.map(siteId => Number(siteId)), timeWindow);
+                res.header("Content-type", "application/json");
+                res.end(JSON.stringify(data));
+            }
+            catch(error) {
+                console.error("Failed to compile ecocode map data:", error);
+                res.status(500);
+                res.send("Failed to compile ecocode map data");
+            }
         });
 
         this.app.expressApp.post('/ecocodes/sites/:aggregationType', async (req, res) => {
@@ -159,6 +197,318 @@ class EcoCodes {
         });
 
         console.timeEnd("Preload of ecocodes complete");
+
+        await this.preloadSampleEcocodeVectors();
+    }
+
+    /*
+    * Function: preloadSampleEcocodeVectors
+    *
+    * Builds the sample_ecocode_vectors collection - one document per palaeoentomology sample with its abundance weighted Bugs ecocode
+    * values (the same values as the ecocode charts aggregate), its number of individuals and its age in years BP. The ages are taken
+    * from the cached sites' age_summary, so the sites must have been preloaded first.
+    */
+    async preloadSampleEcocodeVectors() {
+        let pgClient = await this.app.getDbConnection();
+        if(!pgClient) {
+            return false;
+        }
+
+        console.time("Preload of sample ecocode vectors complete");
+
+        let sampleSql = `SELECT
+        tbl_sample_groups.site_id,
+        tbl_analysis_entities.physical_sample_id,
+        SUM(tbl_abundances.abundance) AS individuals
+        FROM tbl_datasets
+        JOIN tbl_analysis_entities ON tbl_analysis_entities.dataset_id=tbl_datasets.dataset_id
+        JOIN tbl_physical_samples ON tbl_physical_samples.physical_sample_id=tbl_analysis_entities.physical_sample_id
+        JOIN tbl_sample_groups ON tbl_sample_groups.sample_group_id=tbl_physical_samples.sample_group_id
+        JOIN tbl_abundances ON tbl_abundances.analysis_entity_id=tbl_analysis_entities.analysis_entity_id
+        WHERE tbl_datasets.method_id=3
+        GROUP BY tbl_sample_groups.site_id, tbl_analysis_entities.physical_sample_id`;
+
+        let ecoCodeSql = `SELECT
+        tbl_analysis_entities.physical_sample_id,
+        tbl_ecocodes.ecocode_definition_id,
+        SUM(tbl_abundances.abundance) AS abundance
+        FROM tbl_datasets
+        JOIN tbl_analysis_entities ON tbl_analysis_entities.dataset_id=tbl_datasets.dataset_id
+        JOIN tbl_abundances ON tbl_abundances.analysis_entity_id=tbl_analysis_entities.analysis_entity_id
+        JOIN tbl_ecocodes ON tbl_ecocodes.taxon_id=tbl_abundances.taxon_id
+        JOIN tbl_ecocode_definitions ON tbl_ecocode_definitions.ecocode_definition_id=tbl_ecocodes.ecocode_definition_id
+        JOIN tbl_ecocode_groups ON tbl_ecocode_groups.ecocode_group_id=tbl_ecocode_definitions.ecocode_group_id
+        WHERE tbl_datasets.method_id=3 AND tbl_ecocode_groups.ecocode_system_id=2
+        GROUP BY tbl_analysis_entities.physical_sample_id, tbl_ecocodes.ecocode_definition_id`;
+
+        let sampleResult = null;
+        let ecoCodeResult = null;
+        try {
+            sampleResult = await pgClient.query(sampleSql);
+            ecoCodeResult = await pgClient.query(ecoCodeSql);
+        }
+        finally {
+            this.app.releaseDbConnection(pgClient);
+        }
+
+        let samples = new Map();
+        sampleResult.rows.forEach(row => {
+            samples.set(Number(row.physical_sample_id), {
+                site_id: Number(row.site_id),
+                physical_sample_id: Number(row.physical_sample_id),
+                individuals: Number(row.individuals) || 0,
+                older: null,
+                younger: null,
+                ecocodes: {}
+            });
+        });
+
+        ecoCodeResult.rows.forEach(row => {
+            let sample = samples.get(Number(row.physical_sample_id));
+            if(sample) {
+                sample.ecocodes[row.ecocode_definition_id] = Number(row.abundance) || 0;
+            }
+        });
+
+        let siteIds = [...new Set([...samples.values()].map(sample => sample.site_id))];
+        let sites = await this.app.mongo.collection('sites').find({ site_id: { $in: siteIds } }, { projection: { site_id: 1, age_summary: 1 } }).toArray();
+        sites.forEach(site => {
+            this.applySampleAges(samples, site.age_summary);
+        });
+
+        let apiSource = this.app.appName+"-"+this.app.appVersion;
+        let documents = [...samples.values()].map(sample => {
+            sample.api_source = apiSource;
+            return sample;
+        });
+
+        let collection = this.app.mongo.collection('sample_ecocode_vectors');
+        await collection.deleteMany({});
+        if(documents.length > 0) {
+            await collection.insertMany(documents);
+        }
+        await collection.createIndex({ site_id: 1 });
+
+        this.sampleVectorsBySite = null;
+        this.mapReference = null;
+
+        let datedCount = documents.filter(sample => sample.older !== null).length;
+        console.log("Stored ecocode vectors for "+documents.length+" samples ("+datedCount+" dated) from "+siteIds.length+" sites");
+        console.timeEnd("Preload of sample ecocode vectors complete");
+        return documents.length;
+    }
+
+    /*
+    * Function: applySampleAges
+    *
+    * Gives each sample the span of the ages in the site's age_summary that belong to it. An age with an open bound counts as the bound it has.
+    */
+    applySampleAges(samples, ageSummary) {
+        if(!ageSummary || !Array.isArray(ageSummary.datings)) {
+            return;
+        }
+
+        ageSummary.datings.forEach(dating => {
+            (dating.ages || []).forEach(age => {
+                let sample = samples.get(Number(age.physical_sample_id));
+                if(!sample) {
+                    return;
+                }
+
+                let older = age.older !== null && typeof age.older != "undefined" ? Number(age.older) : null;
+                let younger = age.younger !== null && typeof age.younger != "undefined" ? Number(age.younger) : null;
+                if(older === null) {
+                    older = younger;
+                }
+                if(younger === null) {
+                    younger = older;
+                }
+                if(older === null || Number.isNaN(older) || Number.isNaN(younger)) {
+                    return;
+                }
+
+                sample.older = sample.older === null ? older : Math.max(sample.older, older);
+                sample.younger = sample.younger === null ? younger : Math.min(sample.younger, younger);
+            });
+        });
+    }
+
+    /*
+    * Function: parseTimeWindow
+    *
+    * Returns the time window as { younger, older } in years BP, null if there is none, or false if it is malformed.
+    */
+    parseTimeWindow(timeWindow) {
+        if(timeWindow === null || typeof timeWindow == "undefined") {
+            return null;
+        }
+        if(!Array.isArray(timeWindow) || timeWindow.length != 2) {
+            return false;
+        }
+        let values = timeWindow.map(value => Number(value));
+        if(values.some(value => !Number.isFinite(value))) {
+            return false;
+        }
+        return {
+            younger: Math.min(values[0], values[1]),
+            older: Math.max(values[0], values[1])
+        };
+    }
+
+    async getSampleVectorsBySite() {
+        if(this.sampleVectorsBySite) {
+            return this.sampleVectorsBySite;
+        }
+        if(this.sampleVectorsLoading) {
+            return this.sampleVectorsLoading;
+        }
+
+        this.sampleVectorsLoading = (async () => {
+            let collection = this.app.mongo.collection('sample_ecocode_vectors');
+            let first = await collection.findOne({});
+            if(!first || !this.app.checkVersionMatch(first.api_source, this.app.appName+"-"+this.app.appVersion)) {
+                await this.preloadSampleEcocodeVectors();
+            }
+
+            let documents = await collection.find({}, { projection: { _id: 0, api_source: 0 } }).toArray();
+            this.sampleVectorsBySite = this.groupSampleVectorsBySite(documents);
+            return this.sampleVectorsBySite;
+        })();
+
+        try {
+            return await this.sampleVectorsLoading;
+        }
+        finally {
+            this.sampleVectorsLoading = null;
+        }
+    }
+
+    groupSampleVectorsBySite(samples) {
+        let samplesBySite = new Map();
+        samples.forEach(sample => {
+            if(!samplesBySite.has(sample.site_id)) {
+                samplesBySite.set(sample.site_id, []);
+            }
+            samplesBySite.get(sample.site_id).push(sample);
+        });
+        return samplesBySite;
+    }
+
+    async getEcoCodeMapData(siteIds, timeWindow = null) {
+        let samplesBySite = await this.getSampleVectorsBySite();
+        if(!this.mapReference) {
+            this.mapReference = this.compileMapReference(samplesBySite);
+        }
+
+        let mapData = this.aggregateSiteEcoCodes(samplesBySite, siteIds, timeWindow);
+        mapData.api_source = this.app.appName+"-"+this.app.appVersion;
+        mapData.reference = this.mapReference;
+        return mapData;
+    }
+
+    /*
+    * Function: aggregateSiteEcoCodes
+    *
+    * Sums the samples of each site into its ecocode values. With a time window, only the samples whose age overlaps it are counted.
+    */
+    aggregateSiteEcoCodes(samplesBySite, siteIds, timeWindow = null) {
+        let sampleCounts = {
+            included: 0,
+            undated: 0,
+            outside_time_window: 0
+        };
+        let sites = [];
+
+        siteIds.forEach(siteId => {
+            let samples = samplesBySite.get(siteId);
+            if(!samples) {
+                return;
+            }
+
+            let site = {
+                site_id: siteId,
+                samples: 0,
+                individuals: 0,
+                ecocodes: {}
+            };
+
+            samples.forEach(sample => {
+                if(timeWindow) {
+                    if(sample.older === null) {
+                        sampleCounts.undated++;
+                        return;
+                    }
+                    if(sample.older < timeWindow.younger || sample.younger > timeWindow.older) {
+                        sampleCounts.outside_time_window++;
+                        return;
+                    }
+                }
+
+                site.samples++;
+                site.individuals += sample.individuals;
+                for(let ecocodeId in sample.ecocodes) {
+                    site.ecocodes[ecocodeId] = (site.ecocodes[ecocodeId] || 0) + sample.ecocodes[ecocodeId];
+                }
+            });
+
+            if(site.samples > 0) {
+                sampleCounts.included += site.samples;
+                sites.push(site);
+            }
+        });
+
+        return {
+            time_window: timeWindow ? [timeWindow.younger, timeWindow.older] : null,
+            sample_counts: sampleCounts,
+            sites: sites
+        };
+    }
+
+    /*
+    * Function: compileMapReference
+    *
+    * What is typical for each ecocode across all sites, whatever their age: the mean and the 95th percentile of its share of the site's
+    * sumrep. The map uses these as fixed colour scales, so that a colour means the same whatever is filtered.
+    */
+    compileMapReference(samplesBySite) {
+        let siteIds = [...samplesBySite.keys()];
+        let siteData = this.aggregateSiteEcoCodes(samplesBySite, siteIds).sites;
+
+        let sharesByEcocode = {};
+        let siteCount = 0;
+        siteData.forEach(site => {
+            if(site.individuals < this.mapReferenceMinIndividuals) {
+                return;
+            }
+            let sumrep = Object.values(site.ecocodes).reduce((sum, value) => sum + value, 0);
+            if(sumrep <= 0) {
+                return;
+            }
+            siteCount++;
+            for(let ecocodeId in site.ecocodes) {
+                if(!sharesByEcocode[ecocodeId]) {
+                    sharesByEcocode[ecocodeId] = [];
+                }
+                sharesByEcocode[ecocodeId].push(site.ecocodes[ecocodeId] / sumrep);
+            }
+        });
+
+        let ecocodes = {};
+        for(let ecocodeId in sharesByEcocode) {
+            //Sites lacking the ecocode have a share of 0
+            let shares = sharesByEcocode[ecocodeId].concat(new Array(siteCount - sharesByEcocode[ecocodeId].length).fill(0));
+            shares.sort((a, b) => a - b);
+            ecocodes[ecocodeId] = {
+                mean: shares.reduce((sum, share) => sum + share, 0) / shares.length,
+                p95: shares[Math.min(shares.length - 1, Math.floor(shares.length * 0.95))]
+            };
+        }
+
+        return {
+            site_count: siteCount,
+            min_individuals: this.mapReferenceMinIndividuals,
+            ecocodes: ecocodes
+        };
     }
 
     async fetchEcoCodesForTaxon(taxonId) {
