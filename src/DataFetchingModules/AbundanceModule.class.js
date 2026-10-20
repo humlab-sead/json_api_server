@@ -238,6 +238,12 @@ class AbundanceModule {
                 }
             });
 
+            //Every site with abundances gets an abundance_elements lookup, even if
+            //none of them has an element, as the per-abundance lookup it replaces did.
+            if(typeof site.lookup_tables.abundance_elements == "undefined") {
+                site.lookup_tables.abundance_elements = [];
+            }
+
             const abundanceElementIds = [];
             abundances.forEach(abundance => {
                 if(abundance.abundance_element_id != null && !abundanceElementIds.includes(abundance.abundance_element_id)) {
