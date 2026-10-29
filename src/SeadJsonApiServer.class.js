@@ -31,6 +31,8 @@ import NeotomaSites from "./EndpointModules/NeotomaSites.class.js";
 import SeadDataFormat from "./EndpointModules/SeadDataFormat.class.js";
 import UserAdmin from "./EndpointModules/UserAdmin.class.js";
 import Gadm from "./EndpointModules/Gadm.class.js";
+import Sitemap from "./EndpointModules/Sitemap.class.js";
+import PageExists from "./EndpointModules/PageExists.class.js";
 import AuthenticationHandler from './AuthenticationHandler.class.js';
 import basicAuth from 'basic-auth';
 
@@ -131,6 +133,8 @@ class SeadJsonApiServer {
             this.seadDataFormat = new SeadDataFormat(this);
             this.userAdmin = new UserAdmin(this);
             this.gadm = new Gadm(this);
+            this.sitemap = new Sitemap(this);
+            this.pageExists = new PageExists(this);
 
             this.run();
         });
