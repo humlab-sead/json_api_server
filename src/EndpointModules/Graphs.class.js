@@ -231,7 +231,7 @@ class Graphs {
           res.end(JSON.stringify(data, null, 2));
       });
 
-        this.app.expressApp.post('/graphs/temporal_distributon', async (req, res) => {
+        this.app.expressApp.post('/graphs/temporal_distribution', async (req, res) => {
             let siteIds = req.body;
             if(!this.isValidSiteIdsInput(siteIds)) {
                 res.status(400);
@@ -707,37 +707,289 @@ class Graphs {
         return resultObject;
     }
 
-    async fetchTemporalDistributionSummaryForSites(siteIds) {
-        let cacheId = crypto.createHash('sha256');
-        siteIds.sort((a, b) => a - b);
-        cacheId = cacheId.update('analysismethods'+JSON.stringify(siteIds)).digest('hex');
-        let identifierObject = { cache_id: cacheId };
+    /*
+    * Function: getTemporalDistributionBins
+    *
+    * The bins of the temporal distribution, oldest first, in years BP. The axis has three segments, and every bin
+    * is drawn equally wide, so the segments are scaled differently: before the Holocene the bins are logarithmic
+    * (back to the oldest age, which can be millions of years), through the Holocene they are 125 years wide, and
+    * through the last millennium 25 years. The segment before the Holocene is left out if no age reaches it.
+    */
+    getTemporalDistributionBins(oldestAge, bpYear) {
+        const holoceneStart = 11700;
+        const lastMillenniumStart = bpYear - 1000;
+        //The axis ends at the last whole 25 years, e.g. AD 2025, and anything younger is counted in the last bin
+        const endYearAd = 1000 + 25 * Math.floor((new Date().getFullYear() - 1000) / 25);
+        const axisEnd = bpYear - endYearAd;
 
-        let cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
-        if(cachedData !== false) {
-            return cachedData;
+        const segments = [];
+        const bins = [];
+        const addSegment = (id, scale, edges) => {
+            segments.push({ id: id, scale: scale, older: edges[0], younger: edges[edges.length - 1], first_bin: bins.length, bin_count: edges.length - 1 });
+            for(let i = 0; i < edges.length - 1; i++) {
+                bins.push({ older: edges[i], younger: edges[i + 1], segment: id });
+            }
+        };
+        const linearEdges = (older, younger, width) => {
+            const edges = [];
+            for(let edge = older; edge > younger; edge -= width) {
+                edges.push(edge);
+            }
+            edges.push(younger);
+            return edges;
+        };
+
+        if(oldestAge > holoceneStart) {
+            const binCount = 16;
+            const logOldest = Math.log(oldestAge);
+            const logStep = (logOldest - Math.log(holoceneStart)) / binCount;
+            const edges = [];
+            for(let i = 0; i < binCount; i++) {
+                edges.push(Math.exp(logOldest - i * logStep));
+            }
+            edges[0] = oldestAge;
+            edges.push(holoceneStart);
+            addSegment("pleistocene", "log", edges);
+        }
+        addSegment("holocene", "linear", linearEdges(holoceneStart, lastMillenniumStart, 125));
+        addSegment("last_millennium", "linear", linearEdges(lastMillenniumStart, axisEnd, 25));
+
+        return { segments: segments, bins: bins };
+    }
+
+    /*
+    * Function: fetchMethodGroups
+    *
+    * The method group of every method, from tbl_methods and tbl_method_groups, fetched once.
+    */
+    async fetchMethodGroups() {
+        if(!this.methodGroupsPromise) {
+            this.methodGroupsPromise = (async () => {
+                const pgClient = await this.app.getDbConnection();
+                try {
+                    const res = await pgClient.query(`
+                        SELECT m.method_id, m.method_group_id, g.group_name
+                        FROM tbl_methods m
+                        JOIN tbl_method_groups g ON g.method_group_id = m.method_group_id
+                    `);
+                    const methodGroups = new Map();
+                    res.rows.forEach(row => {
+                        methodGroups.set(row.method_id, { method_group_id: row.method_group_id, group_name: row.group_name });
+                    });
+                    return methodGroups;
+                }
+                finally {
+                    this.app.releaseDbConnection(pgClient);
+                }
+            })();
+            //A failed fetch is tried again on the next request rather than kept
+            this.methodGroupsPromise.catch(() => {
+                this.methodGroupsPromise = null;
+            });
+        }
+        return this.methodGroupsPromise;
+    }
+
+    /*
+    * Function: fetchTemporalDistributionSummaryForSites
+    *
+    * When the dating evidence of the sites is from: the ages of site.age_summary, binned over time (see
+    * getTemporalDistributionBins), in a band per method group of tbl_method_groups, with dendrochronology in a
+    * band of its own.
+    *
+    * A bin of a band counts the sites with an age in that band which overlaps the bin - once, however many of its ages
+    * do. An age with an open bound is counted at the bound it has.
+    *
+    * Ages in radiocarbon years are not calibrated. radiocarbon_sites counts the sites whose ages in a bin are all in
+    * radiocarbon years, so they can be told from the rest. Ages of a composite chronology are left out for samples
+    * which another method dates, since the composite chronology is mostly built from those dates.
+    */
+    async fetchTemporalDistributionSummaryForSites(siteIds) {
+        const datingModule = this.app.getDataFetchingModuleByName("Dating");
+        const bpYear = datingModule.bpYear;
+        const dendroMethodId = datingModule.dendroMethodId;
+        const compositeChronologyMethodId = 174;
+        //The order of the bands, from the bottom of the stack up. Method groups not listed come after these.
+        const bandOrder = ["method_group_19", "method_group_20", "dendrochronology", "method_group_3", "method_group_22", "method_group_1", "method_group_21"];
+
+        const ids = siteIds.map(siteId => Number(siteId)).sort((a, b) => a - b);
+        const cacheId = crypto.createHash('sha256').update('temporal_distribution_v2:'+JSON.stringify(ids)).digest('hex');
+        const identifierObject = { cache_id: cacheId };
+        if(this.app.useGraphCaching) {
+            const cachedData = await this.app.getObjectFromCache("graph_cache", identifierObject);
+            if(cachedData !== false) {
+                return cachedData;
+            }
         }
 
+        const methodGroups = await this.fetchMethodGroups();
+        const sites = await this.app.mongo.collection('sites').find(
+            { site_id: { $in: ids } },
+            { projection: { site_id: 1, "age_summary.datings": 1 } }
+        ).toArray();
 
-        let datingMethods = [];
-
-        let query = { site_id : { $in : siteIds } };
-        let sites = await this.app.mongo.collection('sites').find(query).toArray();
+        //Each site's ages, per band
+        let excludedCompositeAgeCount = 0;
+        let oldestAge = -Infinity;
+        const siteBands = [];
+        const bandMeta = new Map();
         sites.forEach(site => {
-            site.datasets.forEach(dataset => {
-                //find out if this is a dataset with dating_values
-                if(datingMethods.includes(dataset.method_id)) {
-                    dataset.analysis_entities.forEach(ae => {
-                        ae.dating_values
-                    });
+            const datings = site.age_summary && Array.isArray(site.age_summary.datings) ? site.age_summary.datings : [];
+            const otherwiseDatedSamples = new Set();
+            datings.forEach(dating => {
+                if(dating.method_id != compositeChronologyMethodId) {
+                    dating.ages.forEach(age => otherwiseDatedSamples.add(age.physical_sample_id));
+                }
+            });
+
+            const bands = new Map();
+            datings.forEach(dating => {
+                let bandId, label, methodGroupId = null;
+                if(dating.method_id == dendroMethodId) {
+                    bandId = "dendrochronology";
+                    label = "Dendrochronology";
+                }
+                else {
+                    const methodGroup = methodGroups.get(dating.method_id);
+                    methodGroupId = methodGroup ? methodGroup.method_group_id : null;
+                    bandId = methodGroup ? "method_group_"+methodGroup.method_group_id : "method_group_unknown";
+                    label = methodGroup ? methodGroup.group_name : "Unknown method group";
                 }
 
+                dating.ages.forEach(age => {
+                    if(dating.method_id == compositeChronologyMethodId && otherwiseDatedSamples.has(age.physical_sample_id)) {
+                        excludedCompositeAgeCount++;
+                        return;
+                    }
+                    if(!Number.isFinite(age.older) || !Number.isFinite(age.younger)) {
+                        return;
+                    }
+                    if(!bandMeta.has(bandId)) {
+                        bandMeta.set(bandId, { id: bandId, label: label, method_group_id: methodGroupId, methods: new Map() });
+                    }
+                    bandMeta.get(bandId).methods.set(dating.method_id, dating.method_name);
+                    if(!bands.has(bandId)) {
+                        bands.set(bandId, []);
+                    }
+                    bands.get(bandId).push(age);
+                    oldestAge = Math.max(oldestAge, age.older);
+                });
             });
+            if(bands.size > 0) {
+                siteBands.push(bands);
+            }
         });
 
-        let resultObject = {
+        const { segments, bins } = this.getTemporalDistributionBins(oldestAge, bpYear);
+        const axisEnd = bins[bins.length - 1].younger;
+        const binCount = bins.length;
+
+        const bandData = new Map();
+        bandMeta.forEach((meta, bandId) => {
+            bandData.set(bandId, {
+                sites: new Array(binCount).fill(0),
+                radiocarbon_sites: new Array(binCount).fill(0),
+                site_count: 0,
+                age_count: 0,
+                radiocarbon_age_count: 0,
+                older: -Infinity,
+                younger: Infinity
+            });
+        });
+        const sitesPerBin = new Array(binCount).fill(0);
+
+        //The bin a single year falls in: older > year >= younger, with the oldest age in the first bin
+        const findBin = year => {
+            for(let i = 0; i < binCount; i++) {
+                if(year >= bins[i].younger) {
+                    return i;
+                }
+            }
+            return binCount - 1;
+        };
+
+        siteBands.forEach(bands => {
+            const siteBins = new Set();
+            bands.forEach((ages, bandId) => {
+                const data = bandData.get(bandId);
+                const bandBins = new Set();
+                const calendarBandBins = new Set();
+                data.site_count++;
+                ages.forEach(age => {
+                    data.age_count++;
+                    if(age.radiocarbon_years) {
+                        data.radiocarbon_age_count++;
+                    }
+                    data.older = Math.max(data.older, age.older);
+                    data.younger = Math.min(data.younger, age.younger);
+
+                    const addToBin = binIndex => {
+                        bandBins.add(binIndex);
+                        if(!age.radiocarbon_years) {
+                            calendarBandBins.add(binIndex);
+                        }
+                    };
+                    const older = Math.max(age.older, axisEnd);
+                    const younger = Math.max(age.younger, axisEnd);
+                    if(older <= younger) {
+                        addToBin(findBin(younger));
+                        return;
+                    }
+                    for(let i = findBin(older); i < binCount && bins[i].older > younger; i++) {
+                        if(Math.min(older, bins[i].older) > Math.max(younger, bins[i].younger)) {
+                            addToBin(i);
+                        }
+                    }
+                });
+                bandBins.forEach(i => {
+                    data.sites[i]++;
+                    if(!calendarBandBins.has(i)) {
+                        data.radiocarbon_sites[i]++;
+                    }
+                    siteBins.add(i);
+                });
+            });
+            siteBins.forEach(i => sitesPerBin[i]++);
+        });
+
+        const bandRank = bandId => {
+            const index = bandOrder.indexOf(bandId);
+            //Other method groups go in before the last of the listed ones, "Dating by other method"
+            return index == -1 ? bandOrder.length - 1.5 : index;
+        };
+        const bands = Array.from(bandMeta.values())
+            .sort((a, b) => bandRank(a.id) - bandRank(b.id) || String(a.id).localeCompare(String(b.id)))
+            .map(meta => {
+                const data = bandData.get(meta.id);
+                return {
+                    id: meta.id,
+                    label: meta.label,
+                    method_group_id: meta.method_group_id,
+                    methods: Array.from(meta.methods, ([methodId, methodName]) => ({ method_id: methodId, method_name: methodName })),
+                    site_count: data.site_count,
+                    age_count: data.age_count,
+                    radiocarbon_age_count: data.radiocarbon_age_count,
+                    older: data.older,
+                    younger: data.younger,
+                    sites: data.sites,
+                    radiocarbon_sites: data.radiocarbon_sites
+                };
+            });
+
+        const resultObject = {
             cache_id: cacheId,
-            datasets: []
+            bp_year: bpYear,
+            site_count: ids.length,
+            dated_site_count: siteBands.length,
+            excluded_composite_age_count: excludedCompositeAgeCount,
+            segments: segments,
+            bins: bins.map(bin => ({ older: Math.round(bin.older), younger: Math.round(bin.younger), segment: bin.segment })),
+            sites_per_bin: sitesPerBin,
+            bands: bands
+        };
+
+        if(this.app.useGraphCaching) {
+            this.app.saveObjectToCache("graph_cache", identifierObject, resultObject);
         }
         return resultObject;
     }
