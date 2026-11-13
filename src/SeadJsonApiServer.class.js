@@ -29,6 +29,7 @@ import Images from "./EndpointModules/Images.class.js";
 import IsoarchLocations from "./EndpointModules/IsoarchLocations.class.js";
 import NeotomaSites from "./EndpointModules/NeotomaSites.class.js";
 import SiteMainDomains from "./EndpointModules/SiteMainDomains.class.js";
+import SiteSummary from "./EndpointModules/SiteSummary.class.js";
 import SeadDataFormat from "./EndpointModules/SeadDataFormat.class.js";
 import UserAdmin from "./EndpointModules/UserAdmin.class.js";
 import Gadm from "./EndpointModules/Gadm.class.js";
@@ -130,6 +131,7 @@ class SeadJsonApiServer {
             this.isoarchLocations = new IsoarchLocations(this);
             this.neotomaSites = new NeotomaSites(this);
             this.siteMainDomains = new SiteMainDomains(this);
+            this.siteSummary = new SiteSummary(this);
             this.seadDataFormat = new SeadDataFormat(this);
             this.userAdmin = new UserAdmin(this);
             this.gadm = new Gadm(this);
