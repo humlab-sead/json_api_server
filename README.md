@@ -12,6 +12,14 @@ To find which site has the analysis_entity 131350:
 To find all sites which contain the species 'spelta dicoccum':
 `/search/lookup_tables.taxa.species/value/spelta%2Fdicoccum`
 
+## Sample Images API
+
+Images of physical samples (e.g. photomicrographs of thin sections), from `tbl_sample_images`, with the sample, sample group and site they belong to and, where there is any, the image metadata of `tbl_sample_image_metadata` (`metadata` is `null` otherwise).
+
+- `POST /sample-images/sites` with body `{"site_ids": [1, 2]}` returns the images of those sites, ordered by site name, then sample name (natural order). An empty or missing `site_ids` gives `[]`.
+- `GET /sample-images/site/:siteId` returns the same for one site.
+- `GET /sample-images/full/<image_location>` and `GET /sample-images/thumb/<image_location>` serve the image files from `${SAMPLE_IMAGES_DIR}/full/` and `${SAMPLE_IMAGES_DIR}/thumb/` (default `assets/images/sample_images`).
+
 ## Webclient Search API (New)
 
 The old combined endpoint has been replaced with category-specific endpoints:
