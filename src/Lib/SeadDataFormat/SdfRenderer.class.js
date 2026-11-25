@@ -1,6 +1,7 @@
+import { PassThrough } from "stream";
 import ExcelJS from "exceljs";
 import JSZip from "jszip";
-import { encodeCellText } from "./SdfCommon.js";
+import { encodeCellText, EXCEL_MAX_ROW } from "./SdfCommon.js";
 import { buildGuide } from "./SdfGuide.js";
 
 /**
@@ -9,6 +10,16 @@ import { buildGuide } from "./SdfGuide.js";
  * The renderer must not change a value, header, column order or sheet order.
  * Everything it adds - the README, header notes, colours, dropdowns,
  * highlighting - is the §11 legibility layer, which the importer ignores.
+ *
+ * The workbook is written with ExcelJS's streaming writer, row by row, so a
+ * large export never holds the whole workbook as cell objects: memory stays
+ * close to the size of the bundle. Two things keep that fast and the server
+ * responsive while it runs:
+ *   - every data cell in a column shares the column's style object. ExcelJS
+ *     caches a style's id per object, and otherwise gives each cell its own copy,
+ *     which made styling most of the work (and millions of objects to collect).
+ *   - every YIELD_EVERY_ROWS rows the renderer yields to the event loop, so other
+ *     requests (and progress polls) are served and the zip stream drains.
  */
 
 //The colour legend. SdfGuide section 4 describes these to the user.
@@ -23,13 +34,13 @@ export const COLOURS = {
     readmeTab: "FF2F75B5",
 };
 
-const EXCEL_MAX_ROW = 1048576;
 //Data validations cover the data rows plus this many spare rows for additions.
 //Not the whole column: ExcelJS, which the importer reads with, expands a
 //validation range into one entry per cell when reading, so a whole-column
 //range costs a million entries per column.
 const VALIDATION_SPARE_ROWS = 1000;
 const LISTS_SHEET = "_sdf_lists";
+const YIELD_EVERY_ROWS = 2000;
 
 export default class SdfRenderer {
 
@@ -37,32 +48,65 @@ export default class SdfRenderer {
         this.guideConfig = guideConfig;
     }
 
-    async render(bundle) {
+    /**
+     * The finished .xlsx as a Buffer. opts.onProgress(rowsWritten, rowsTotal) is
+     * called as rows are written, at most every YIELD_EVERY_ROWS rows.
+     */
+    async render(bundle, opts = {}) {
         const meta = new Map(bundle.meta);
-        const wb = new ExcelJS.Workbook();
+        const chunks = [];
+        const sink = new PassThrough();
+        sink.on("data", chunk => chunks.push(chunk));
+
+        const wb = new ExcelJS.stream.xlsx.WorkbookWriter({ stream: sink, useStyles: true, useSharedStrings: true });
         wb.creator = meta.get("exporter");
         wb.created = new Date(meta.get("exported_at"));
         wb.title = `SEAD site export ${meta.get("site_ids")}`;
 
-        this._renderReadme(wb, bundle);
+        const metaRows = [["key", "value"], ...bundle.meta];
+        const progress = {
+            done: 0,
+            total: bundle.sheets.reduce((n, s) => n + s.rows.length, 0)
+                + bundle.lists.reduce((n, l) => Math.max(n, l.values.length), 0)
+                + metaRows.length + bundle.machine.columns.length + bundle.machine.baseline.length,
+            sinceYield: 0,
+            onProgress: opts.onProgress || null,
+        };
+        this._progress = progress;
+        if (progress.onProgress) progress.onProgress(0, progress.total);
+
+        await this._renderReadme(wb, bundle);
 
         const listRanges = this._listRanges(bundle.lists);
         for (const sheet of bundle.sheets) {
-            this._renderDataSheet(wb, sheet, listRanges);
+            await this._renderDataSheet(wb, sheet, listRanges);
         }
 
-        this._renderLists(wb, bundle.lists);
-        this._renderMachineSheet(wb, "_sdf_meta", [["key", "value"], ...bundle.meta], [true, true]);
-        this._renderMachineSheet(wb, "_sdf_columns", bundle.machine.columns, bundle.machine.columns[0].map(() => true));
-        this._renderMachineSheet(wb, "_sdf_baseline", bundle.machine.baseline, [true, false, true, true]);
+        await this._renderLists(wb, bundle.lists);
+        await this._renderMachineSheet(wb, "_sdf_meta", metaRows, [true, true]);
+        await this._renderMachineSheet(wb, "_sdf_columns", bundle.machine.columns, bundle.machine.columns[0].map(() => true));
+        await this._renderMachineSheet(wb, "_sdf_baseline", bundle.machine.baseline, [true, false, true, true]);
 
-        const buffer = await wb.xlsx.writeBuffer();
-        return await addQuotePrefix(buffer);
+        await wb.commit();
+        if (progress.onProgress) progress.onProgress(progress.total, progress.total);
+        return await addQuotePrefix(Buffer.concat(chunks));
+    }
+
+    /** Counts written rows; now and then reports progress and yields to the event loop. */
+    async _rowsWritten(n = 1) {
+        const p = this._progress;
+        p.done += n;
+        p.sinceYield += n;
+        if (p.sinceYield >= YIELD_EVERY_ROWS) {
+            p.sinceYield = 0;
+            if (p.onProgress) p.onProgress(p.done, p.total);
+            await new Promise(resolve => setImmediate(resolve));
+        }
     }
 
     //------------------------------------------------------------ data sheets
 
-    _renderDataSheet(wb, sheet, listRanges) {
+    async _renderDataSheet(wb, sheet, listRanges) {
         const isReference = sheet.role !== "owned";
         const ws = wb.addWorksheet(sheet.name, {
             views: [{ state: "frozen", ySplit: 1 }],
@@ -87,8 +131,13 @@ export default class SdfRenderer {
         });
 
         const kinds = sheet.columns.map(c => c.valueKind);
-        for (const row of sheet.rows) {
-            ws.addRow(row.map((value, i) => cellValue(value, kinds[i])));
+        //one style object per column, shared by all of its data cells (see the class comment)
+        const styles = sheet.columns.map((c, i) => ws.getColumn(i + 1).style);
+        for (const values of sheet.rows) {
+            const row = ws.addRow(values.map((value, i) => cellValue(value, kinds[i])));
+            row.eachCell({ includeEmpty: true }, (cell, col) => { cell.style = styles[col - 1]; });
+            row.commit();
+            await this._rowsWritten();
         }
 
         const lastCol = ws.getColumn(sheet.columns.length).letter;
@@ -142,6 +191,7 @@ export default class SdfRenderer {
                 },
             ],
         });
+        ws.commit();
     }
 
     _category(column) {
@@ -218,21 +268,33 @@ export default class SdfRenderer {
         return ranges;
     }
 
-    _renderLists(wb, lists) {
+    async _renderLists(wb, lists) {
         const ws = wb.addWorksheet(LISTS_SHEET, { state: "veryHidden" });
         lists.forEach((list, i) => {
-            const col = ws.getColumn(i + 1);
-            col.numFmt = "@";
-            ws.getCell(1, i + 1).value = list.sheet;
-            list.values.forEach((value, r) => {
-                ws.getCell(r + 2, i + 1).value = value === null ? null : encodeCellText(value);
-            });
+            ws.getColumn(i + 1).numFmt = "@";
         });
+        //one list per column, written row by row so rows can be committed as they go
+        const header = ws.getRow(1);
+        lists.forEach((list, i) => { header.getCell(i + 1).value = list.sheet; });
+        header.commit();
+        const height = lists.reduce((n, l) => Math.max(n, l.values.length), 0);
+        for (let r = 0; r < height; r++) {
+            const row = ws.getRow(r + 2);
+            lists.forEach((list, i) => {
+                if (r < list.values.length) {
+                    const value = list.values[r];
+                    row.getCell(i + 1).value = value === null ? null : encodeCellText(value);
+                }
+            });
+            row.commit();
+            await this._rowsWritten();
+        }
+        ws.commit();
     }
 
     //---------------------------------------------------------- machine sheets
 
-    _renderMachineSheet(wb, name, rows, textColumns) {
+    async _renderMachineSheet(wb, name, rows, textColumns) {
         //veryHidden: not offered by Excel's Unhide, nor removed as "hidden worksheets"
         //by its Document Inspector
         const ws = wb.addWorksheet(name, { state: "veryHidden" });
@@ -241,18 +303,29 @@ export default class SdfRenderer {
         });
         //Booleans are written as the text true/false. The checksum (§9) reads them
         //that way regardless, and LibreOffice rewrites boolean cells as formulas.
-        for (const row of rows) {
-            ws.addRow(row.map(v => {
+        const styles = textColumns.map((isText, i) => ws.getColumn(i + 1).style);
+        let first = true;
+        for (const values of rows) {
+            const row = ws.addRow(values.map(v => {
                 if (typeof v === "boolean") return v ? "true" : "false";
                 return typeof v === "string" ? encodeCellText(v) : v ?? null;
             }));
+            if (first) {
+                row.font = { bold: true };
+                first = false;
+            }
+            else {
+                row.eachCell({ includeEmpty: true }, (cell, col) => { if (styles[col - 1]) cell.style = styles[col - 1]; });
+            }
+            row.commit();
+            await this._rowsWritten();
         }
-        ws.getRow(1).font = { bold: true };
+        ws.commit();
     }
 
     //----------------------------------------------------------------- README
 
-    _renderReadme(wb, bundle) {
+    async _renderReadme(wb, bundle) {
         const ws = wb.addWorksheet("README", { properties: { tabColor: { argb: COLOURS.readmeTab } } });
         ws.getColumn(1).width = 38;
         ws.getColumn(2).width = 100;
@@ -294,6 +367,7 @@ export default class SdfRenderer {
                 }
             }
         }
+        ws.commit();
     }
 }
 
