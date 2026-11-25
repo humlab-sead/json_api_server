@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import busboy from "busboy";
 import SdfExporter from "../Lib/SeadDataFormat/SdfExporter.class.js";
 import SdfValidator from "../Lib/SeadDataFormat/SdfValidator.class.js";
@@ -13,6 +14,10 @@ import { attributionOf } from "../Lib/Auth/AuthIdentity.js";
  *   GET  /sdf/version                        format version and what is implemented
  *   GET  /sdf/export/:siteId                 one site, as .xlsx
  *   POST /sdf/export   { siteIds: [..] }     several sites in one workbook, as .xlsx
+ *   POST /sdf/export/jobs { siteIds: [..] }  the same as a job, answered at once (202) with its id;
+ *   GET  /sdf/export/jobs/:id                its state and progress, for a progress bar
+ *   GET  /sdf/export/jobs/:id/file           the finished .xlsx, once; the job is then gone
+ *   DELETE /sdf/export/jobs/:id              cancels it, or discards an unfetched file
  *   POST /sdf/validate                       an edited workbook (multipart field "file", or the
  *                                            raw .xlsx as the body): import stages 1-4, a JSON report
  *   POST /sdf/change-request                 the same upload: stages 1-5, a .zip change-request bundle
@@ -33,13 +38,22 @@ import { attributionOf } from "../Lib/Auth/AuthIdentity.js";
  * whole workbooks in memory on the server that also
  * serves the public browser, so at most SDF_MAX_JOBS run at once, a few more
  * wait, and the rest are turned away with 503.
+ *
+ * An export takes any number of sites unless SDF_MAX_SITES is set. Many sites
+ * take minutes (about 40 s for 500 sites), which is what the export jobs are for:
+ * the client polls the job for a progress bar instead of holding one request
+ * open. A finished file waits EXPORT_JOB_TTL_MS for its download.
  */
 
 const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-const DEFAULT_MAX_SITES = 100;
 const DEFAULT_MAX_UPLOAD_MB = 64;
 const DEFAULT_MAX_JOBS = 2;
 const MAX_WAITING_JOBS = 8;
+//How long a finished export job keeps its file for the download
+const EXPORT_JOB_TTL_MS = 10 * 60 * 1000;
+//The share of an export job's progress bar given to reading the database; the
+//rest is writing the workbook, which takes about four times as long
+const GATHER_SHARE = 0.2;
 //Who may use the import endpoints, besides the protected-endpoint password
 const IMPORT_ROLE = "sysadmin";
 
@@ -51,21 +65,27 @@ class SeadDataFormat {
         this.changeRequest = new SdfChangeRequest(app);
         this.maxUploadBytes = (parseInt(process.env.SDF_MAX_UPLOAD_MB) || DEFAULT_MAX_UPLOAD_MB) * 1024 * 1024;
         this.renderer = new SdfRenderer(guideConfig());
-        this.maxSites = parseInt(process.env.SDF_MAX_SITES) || DEFAULT_MAX_SITES;
+        this.maxSites = parseInt(process.env.SDF_MAX_SITES) || null;
         this.maxJobs = parseInt(process.env.SDF_MAX_JOBS) || DEFAULT_MAX_JOBS;
         this.running = 0;
         this.waiting = [];
+        this.exportJobs = new Map();
         this.setupEndpoints();
     }
 
-    /** Runs an SDF job once a slot is free; refuses when too many are waiting. */
-    async _job(res, fn) {
+    /** True when no slot is free and no more may wait for one. */
+    _busy() {
+        return this.running >= this.maxJobs && this.waiting.length >= MAX_WAITING_JOBS;
+    }
+
+    _sendBusy(res) {
+        res.setHeader("Retry-After", "30");
+        res.status(503).json({ error: "The server is busy with other SDF exports or imports. Try again in a minute.", code: "busy" });
+    }
+
+    /** Runs fn once a slot is free. The caller has checked _busy(). */
+    async _inSlot(fn) {
         if (this.running >= this.maxJobs) {
-            if (this.waiting.length >= MAX_WAITING_JOBS) {
-                res.setHeader("Retry-After", "30");
-                res.status(503).json({ error: "The server is busy with other SDF exports or imports. Try again in a minute.", code: "busy" });
-                return undefined;
-            }
             await new Promise(resolve => this.waiting.push(resolve));
         }
         this.running++;
@@ -79,6 +99,15 @@ class SeadDataFormat {
         }
     }
 
+    /** Runs an SDF job once a slot is free; refuses when too many are waiting. */
+    async _job(res, fn) {
+        if (this._busy()) {
+            this._sendBusy(res);
+            return undefined;
+        }
+        return await this._inSlot(fn);
+    }
+
     sanitizeSiteIds(raw) {
         if (!Array.isArray(raw)) {
             return { valid: false, error: "'siteIds' must be an array of positive integers." };
@@ -90,7 +119,7 @@ class SeadDataFormat {
         if (ids.length === 0) {
             return { valid: false, error: "'siteIds' is empty." };
         }
-        if (ids.length > this.maxSites) {
+        if (this.maxSites && ids.length > this.maxSites) {
             return { valid: false, error: `At most ${this.maxSites} sites can be exported in one workbook.` };
         }
         return { valid: true, ids: [...new Set(ids)].sort((a, b) => a - b) };
@@ -124,6 +153,53 @@ class SeadDataFormat {
                 return res.status(400).json({ error: `Bad input - ${error}` });
             }
             await this._job(res, () => this._runExport(req, res, ids));
+        });
+
+        app.post("/sdf/export/jobs", (req, res) => {
+            const { valid, ids, error } = this.sanitizeSiteIds(req.body && req.body.siteIds);
+            if (!valid) {
+                return res.status(400).json({ error: `Bad input - ${error}` });
+            }
+            if (this._busy()) {
+                return this._sendBusy(res);
+            }
+            const job = this._startExportJob(ids, this._exportedBy(req));
+            res.status(202).json(this._jobStatus(job));
+        });
+
+        app.get("/sdf/export/jobs/:id", (req, res) => {
+            const job = this.exportJobs.get(req.params.id);
+            if (!job) {
+                return res.status(404).json({ error: "No such export job. It may have expired.", code: "job_not_found" });
+            }
+            res.status(200).json(this._jobStatus(job));
+        });
+
+        app.get("/sdf/export/jobs/:id/file", (req, res) => {
+            const job = this.exportJobs.get(req.params.id);
+            if (!job) {
+                return res.status(404).json({ error: "No such export job. It may have expired.", code: "job_not_found" });
+            }
+            if (job.state !== "done") {
+                return res.status(409).json({ error: `The export is ${job.state}, not done.`, code: "job_not_done" });
+            }
+            const buffer = job.file;
+            this._forgetJob(job);
+            res.status(200);
+            res.setHeader("Content-Type", XLSX_MIME);
+            res.setHeader("Content-Disposition", `attachment; filename="${job.filename}"`);
+            res.setHeader("Content-Length", buffer.length);
+            res.setHeader("Access-Control-Expose-Headers", "Content-Disposition, Content-Length");
+            res.send(buffer);
+        });
+
+        app.delete("/sdf/export/jobs/:id", (req, res) => {
+            const job = this.exportJobs.get(req.params.id);
+            if (job) {
+                job.cancelled = true;
+                if (job.state !== "queued" && job.state !== "running") this._forgetJob(job);
+            }
+            res.status(204).end();
         });
 
         app.post("/sdf/validate", importer, async (req, res) => {
@@ -208,6 +284,119 @@ class SeadDataFormat {
         res.status(500).json({ error: `Internal server error while ${doing}.` });
     }
 
+    //------------------------------------------------------------ export jobs
+
+    /** Creates an export job and runs it in the background. The caller has checked _busy(). */
+    _startExportJob(siteIds, exportedBy) {
+        const job = {
+            id: crypto.randomUUID(),
+            state: "queued", //queued, running, done, failed, cancelled
+            phase: "queued", //queued, gathering, writing, done
+            progress: 0,
+            siteCount: siteIds.length,
+            started: Date.now(),
+            cancelled: false,
+            file: null,
+            filename: null,
+            error: null,
+            expiry: null,
+        };
+        this.exportJobs.set(job.id, job);
+
+        const checkCancelled = () => {
+            if (job.cancelled) throw Object.assign(new Error("The export was cancelled."), { code: "cancelled" });
+        };
+
+        this._inSlot(async () => {
+            checkCancelled();
+            job.state = "running";
+            job.phase = "gathering";
+            const bundle = await this.exporter.export(siteIds, {
+                exportedBy,
+                onProgress: (done, total) => {
+                    checkCancelled();
+                    job.progress = GATHER_SHARE * done / total;
+                },
+            });
+            checkCancelled();
+            job.phase = "writing";
+            const buffer = await this.renderer.render(bundle, {
+                onProgress: (done, total) => {
+                    checkCancelled();
+                    job.progress = GATHER_SHARE + (1 - GATHER_SHARE) * done / total;
+                },
+            });
+            job.file = buffer;
+            job.filename = this._filename(siteIds, bundle);
+            job.state = "done";
+            job.phase = "done";
+            job.progress = 1;
+            this._logExport(siteIds, bundle, buffer, job.started, "job");
+        })
+            .catch(err => {
+                if (job.cancelled || (err && err.code === "cancelled")) {
+                    job.state = "cancelled";
+                    return;
+                }
+                job.state = "failed";
+                if (err && err.code && err.statusCode) {
+                    if (err.statusCode >= 500) console.error("SDF export job refused:", err.code, err.message, JSON.stringify(err.detail));
+                    job.error = { error: err.message, code: err.code, detail: err.detail };
+                }
+                else {
+                    console.error("Unhandled error in SDF export job:", err);
+                    job.error = { error: "Internal server error while building the SDF workbook." };
+                }
+            })
+            .finally(() => {
+                if (job.cancelled) {
+                    this._forgetJob(job);
+                    return;
+                }
+                //kept for its download (or its error), then dropped
+                job.expiry = setTimeout(() => this._forgetJob(job), EXPORT_JOB_TTL_MS);
+                job.expiry.unref();
+            });
+
+        return job;
+    }
+
+    _forgetJob(job) {
+        if (job.expiry) clearTimeout(job.expiry);
+        job.file = null;
+        this.exportJobs.delete(job.id);
+    }
+
+    _jobStatus(job) {
+        const status = {
+            id: job.id,
+            state: job.state,
+            phase: job.phase,
+            progress: Math.round(job.progress * 1000) / 1000,
+            siteCount: job.siteCount,
+            elapsedMs: Date.now() - job.started,
+        };
+        if (job.state === "queued") status.position = this.waiting.length;
+        if (job.state === "done") {
+            status.filename = job.filename;
+            status.bytes = job.file ? job.file.length : null;
+        }
+        if (job.error) status.error = job.error;
+        return status;
+    }
+
+    _filename(siteIds, bundle) {
+        const date = new Map(bundle.meta).get("exported_at").slice(0, 10).replace(/-/g, "");
+        return siteIds.length <= 5
+            ? `sead_site_${siteIds.join("_")}_${date}.xlsx`
+            : `sead_sites_${siteIds.length}_${date}.xlsx`;
+    }
+
+    _logExport(siteIds, bundle, buffer, started, how = "request") {
+        console.log(`SDF export (${how}) of ${siteIds.length} site(s) [${siteIds.slice(0, 10).join(",")}${siteIds.length > 10 ? ",…" : ""}]: ` +
+            `${bundle.sheets.length} sheets, ${buffer.length} bytes, ${Date.now() - started} ms`);
+    }
+
     async _runExport(req, res, siteIds) {
         const started = Date.now();
         try {
@@ -218,13 +407,8 @@ class SeadDataFormat {
             }
 
             const buffer = await this.renderer.render(bundle);
-            const date = new Map(bundle.meta).get("exported_at").slice(0, 10).replace(/-/g, "");
-            const name = siteIds.length <= 5
-                ? `sead_site_${siteIds.join("_")}_${date}.xlsx`
-                : `sead_sites_${siteIds.length}_${date}.xlsx`;
-
-            console.log(`SDF export of ${siteIds.length} site(s) [${siteIds.slice(0, 10).join(",")}${siteIds.length > 10 ? ",…" : ""}]: ` +
-                `${bundle.sheets.length} sheets, ${buffer.length} bytes, ${Date.now() - started} ms`);
+            const name = this._filename(siteIds, bundle);
+            this._logExport(siteIds, bundle, buffer, started);
 
             res.status(200);
             res.setHeader("Content-Type", XLSX_MIME);

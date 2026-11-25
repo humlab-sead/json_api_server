@@ -3,9 +3,11 @@ import JSZip from "jszip";
 import { SdfError, DEFAULT_MAX_CELLS } from "./SdfCommon.js";
 
 //An .xlsx is a zip, so a few MB can unpack to gigabytes. What an upload may unpack
-//to, and how many cells it may hold, is checked before anything is parsed. An
-//exported workbook holds its data cells (bounded by SDF_MAX_CELLS at export) plus
-//labels, lists and machine sheets, hence the margin.
+//to, and how many cells it may hold, is checked before anything is parsed. The
+//limit is SDF_MAX_CELLS data cells, plus a margin for the labels, lists and
+//machine sheets an exported workbook also holds. Exports themselves are not
+//limited (SdfExporter), so a workbook of many sites can be larger than an
+//import accepts: imports are meant for edits to a few sites at a time.
 const MAX_UNPACKED_BYTES = (parseInt(process.env.SDF_MAX_UNPACKED_MB) || 256) * 1024 * 1024;
 const MAX_CELLS = Math.round((parseInt(process.env.SDF_MAX_CELLS) || DEFAULT_MAX_CELLS) * 1.5);
 

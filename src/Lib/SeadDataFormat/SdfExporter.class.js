@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import SdfSchema from "./SdfSchema.class.js";
 import { fetchRows, arrayType } from "./SdfRows.js";
-import { SDF_VERSION, SdfError, DEFAULT_MAX_CELLS, quoteIdent, rowHash, machineChecksum } from "./SdfCommon.js";
+import { SDF_VERSION, SdfError, EXCEL_MAX_ROW, quoteIdent, rowHash, machineChecksum } from "./SdfCommon.js";
 
 /**
  * Builds the tabular structure of an SDF workbook (spec §2, the Exporter role).
@@ -28,13 +28,18 @@ export default class SdfExporter {
 
     constructor(app) {
         this.app = app;
-        this.maxCells = parseInt(process.env.SDF_MAX_CELLS) || DEFAULT_MAX_CELLS;
+        //No limit unless SDF_MAX_EXPORT_CELLS is set: the renderer streams, so a
+        //large export costs time and the bundle's memory, not the whole workbook's.
+        //Imports keep their own limit (SDF_MAX_CELLS, SdfWorkbookReader).
+        this.maxCells = parseInt(process.env.SDF_MAX_EXPORT_CELLS) || null;
     }
 
     /**
      * @param {number[]} siteIds
      * @param {object} opts
      * @param {string|null} opts.exportedBy authenticated user, if any
+     * @param {function} [opts.onProgress] called as (stepsDone, stepsTotal): one
+     *        step per table read, plus the audit, the labels and the sheets
      */
     async export(siteIds, opts = {}) {
         const client = await this.app.pgPool.connect();
@@ -44,16 +49,24 @@ export default class SdfExporter {
             const schema = await SdfSchema.load(client);
             const sites = await this._requireSites(client, siteIds);
 
-            const owned = await this._selectOwnedRows(client, schema, siteIds);
+            const total = schema.fetchOrder.length + 1 + schema.referencedOrder.length + 2;
+            let done = 0;
+            const step = opts.onProgress ? () => opts.onProgress(++done, total) : () => {};
+
+            const owned = await this._selectOwnedRows(client, schema, siteIds, step);
             await this._audit(client, schema, siteIds, owned);
-            const referenced = await this._selectReferencedRows(client, schema, owned);
+            step();
+            const referenced = await this._selectReferencedRows(client, schema, owned, step);
             const labels = await this._loadLabels(client, schema, owned, referenced);
+            step();
 
             const sheets = this._buildSheets(schema, owned, referenced, labels);
             this._requireSize(sheets, siteIds);
             const machine = this._buildMachineSheets(sheets);
+            this._requireExcelRows(sheets, machine, siteIds);
             const meta = await this._buildMeta(client, sites, opts.exportedBy || null);
             meta.push(["checksum", machineChecksum([["key", "value"], ...meta], machine.columns, machine.baseline)]);
+            step();
 
             await client.query("commit");
 
@@ -79,11 +92,33 @@ export default class SdfExporter {
     }
 
     _requireSize(sheets, siteIds) {
+        if (!this.maxCells) return;
         const cells = sheets.reduce((n, s) => n + s.rows.length * s.columns.length, 0);
         if (cells > this.maxCells) {
             throw new SdfError("export_too_large",
                 `${siteIds.length === 1 ? "This site makes" : `These ${siteIds.length} sites make`} a workbook of ${cells.toLocaleString("en")} cells, more than the ${this.maxCells.toLocaleString("en")} allowed in one export. Export fewer sites at a time.`,
                 { cells, maxCells: this.maxCells }, 413);
+        }
+    }
+
+    /**
+     * Excel's hard limit, the one limit an export cannot be configured past: a sheet
+     * with more rows than Excel allows makes a workbook Excel refuses, or "repairs"
+     * by dropping rows. The baseline sheet, one row per data row, is the first to go.
+     */
+    _requireExcelRows(sheets, machine, siteIds) {
+        const tallest = [
+            ...sheets.map(s => ({ name: s.name, rows: s.rows.length + 1 })),
+            { name: "_sdf_baseline", rows: machine.baseline.length },
+            { name: "_sdf_columns", rows: machine.columns.length },
+        ].reduce((a, b) => (b.rows > a.rows ? b : a));
+        if (tallest.rows > EXCEL_MAX_ROW) {
+            const dataRows = sheets.reduce((n, s) => n + s.rows.length, 0);
+            throw new SdfError("export_too_large",
+                `These ${siteIds.length} sites make ${dataRows.toLocaleString("en")} rows in all, more than one Excel workbook can hold ` +
+                `(${(EXCEL_MAX_ROW - 1).toLocaleString("en")}). Export them in smaller selections, for example ` +
+                `${Math.max(1, Math.floor(siteIds.length * (EXCEL_MAX_ROW - 1) / dataRows * 0.9)).toLocaleString("en")} sites at a time, or choose CSV or JSON.`,
+                { sheet: tallest.name, rows: tallest.rows, maxRows: EXCEL_MAX_ROW, dataRows }, 413);
         }
     }
 
@@ -110,7 +145,7 @@ export default class SdfExporter {
      * reachable from a site outside the bundle; only the reverse-reached tables
      * can make that happen, and it propagates to what hangs off them.
      */
-    async _selectOwnedRows(client, schema, siteIds) {
+    async _selectOwnedRows(client, schema, siteIds, step = () => {}) {
         const selected = new Map();
         const valuesOf = (tableName, column) => {
             const entry = selected.get(tableName);
@@ -133,6 +168,7 @@ export default class SdfExporter {
         };
 
         for (const name of schema.fetchOrder) {
+            step();
             const entry = schema.owned.get(name);
             const table = entry.table;
             if (entry.deprecated === "excluded") continue;
@@ -233,9 +269,10 @@ export default class SdfExporter {
      * §6: referenced rows. Full tables are shipped whole; used-only tables ship
      * the rows some exported row points at.
      */
-    async _selectReferencedRows(client, schema, owned) {
+    async _selectReferencedRows(client, schema, owned, step = () => {}) {
         const referenced = new Map();
         for (const name of schema.referencedOrder) {
+            step();
             const { table, mode } = schema.referenced.get(name);
             let rows;
             if (mode === "full") {
